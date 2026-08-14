@@ -1,0 +1,25 @@
+# Ignore virtual environment directories and Python cache files
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Ignore environment variables file
+.env
+
+# Ignore Ruff cache and egg-info
+.ruff_cache/
+*.egg-info/
+
+# Ignore build artifacts
+dist/
+build/
+
+# Ignore coverage reports
+.coverage
+htmlcov/
+
+# Ignore IDE and editor directories
+idea/
+.vscode/
