@@ -1,0 +1,71 @@
+services:
+  api:
+    build: ../Synthoria LLM
+    ports:
+      - "8000:8000"
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-llama3.2}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      CHROMA_PERSIST_DIRECTORY: /data/chroma
+    depends_on:
+      ollama:
+        condition: service_healthy
+      chroma:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - app-net
+    volumes:
+      - chroma-data:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-llama3.2}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    command: >
+      /bin/bash -lc "ollama serve &
+      sleep 5 &&
+      ollama pull ${OLLAMA_DEFAULT_MODEL:-llama3.2} &&
+      ollama pull ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text} &&
+      wait"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - app-net
+    # Décommenter pour GPU NVIDIA :
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #         count: all
+    #         capabilities: [gpu]
+
+  chroma:
+    image: ghcr.io/chroma-core/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    restart: unless-stopped
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge
+
+volumes:
+  ollama-data:
+  chroma-data:
