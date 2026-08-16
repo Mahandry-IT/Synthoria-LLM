@@ -1,6 +1,6 @@
 # Synthoria LLM
 
-API FastAPI dédiée à l’ingestion et à la recherche de documents PDF via une pipeline RAG locale : extraction de texte, tableaux, images, chunking, embeddings Ollama et stockage vectoriel Chroma.
+API FastAPI dédiée à l’ingestion et à la recherche de documents PDF via une pipeline RAG locale : extraction de texte, tableaux, images, chunking, embeddings Ollama et stockage vectoriel local.
 
 ## Stack
 
@@ -9,7 +9,7 @@ API FastAPI dédiée à l’ingestion et à la recherche de documents PDF via un
 - **camelot-py** pour les tableaux
 - **Gemini Vision** pour les images clés (optionnel si `GEMINI_API_KEY` est fourni)
 - **Ollama** pour les embeddings locaux (`nomic-embed-text`) et le modèle de génération
-- **ChromaDB** pour le stockage vectoriel local
+- **Stockage vectoriel local léger** (JSON + embeddings NumPy, sans dépendance native C++)
 - **Rate limiting** et **CORS** configurables
 - Tests **pytest**
 
@@ -22,7 +22,7 @@ PDF
   ├─ images clés: Gemini Vision (si clé configurée)
   └─ chunking: 300-500 tokens, overlap 50
       └─ embeddings locaux: Ollama / nomic-embed-text
-          └─ ChromaDB (stockage local)
+          └─ stockage vectoriel local (persist directory JSON)
 ```
 
 ## Démarrage rapide
@@ -35,7 +35,7 @@ docker compose up -d --build
 Le docker compose démarre :
 - l’API FastAPI sur `http://localhost:8000`
 - Ollama sur `http://localhost:11434`
-- Chroma sur `http://localhost:8001`
+- un conteneur d’initialisation qui télécharge les modèles nécessaires
 
 Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama :
 - `llama3.2`
@@ -47,7 +47,7 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | ------- | ----- | ----------- |
 | GET | `/health` | Vérifie l’état de l’API et la disponibilité Ollama |
 | POST | `/generate` | Génère une réponse à partir d’un prompt classique |
-| POST | `/pdf/ingest` | Envoie un fichier PDF, extrait ses blocs, les découpe et les indexe dans Chroma |
+| POST | `/pdf/ingest` | Envoie un fichier PDF, extrait ses blocs, les découpe et les indexe dans le stockage local |
 | POST | `/pdf/search` | Recherche sémantique dans les documents déjà indexés |
 
 ### Exemple 1 : génération simple
@@ -88,7 +88,7 @@ PDF_CHUNK_OVERLAP_TOKENS=50
 GEMINI_API_KEY=
 ```
 
-> `GEMINI_API_KEY` est optionnel. Sans clé, l’extraction des images clés est simplement ignorée.
+> `GEMINI_API_KEY` est optionnel. Sans clé, l’extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n’est pas informative.
 
 ## Développement local (sans Docker)
 
@@ -110,7 +110,10 @@ pytest -v
 app/
 ├── api/          # routes + schémas FastAPI
 ├── core/         # configuration, exceptions, rate limiting
-├── services/     # Ollama, chunking, extraction PDF, vector store
+├── services/     # Ollama, chunking, extraction PDF, vector store, Gemini Vision
 ├── main.py       # bootstrap FastAPI
-└── __init__.py
+├── __init__.py
+instruction/
+├── vision_instructions.md  # instructions système Gemini pour séparer images utiles / non utiles
+└── ...
 ```
