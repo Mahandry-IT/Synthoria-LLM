@@ -9,7 +9,7 @@ from app.core.exceptions import (
     OllamaUnavailableError,
 )
 
-logger = logging.getLogger("Synthoria LLM")
+logger = logging.getLogger(__name__)
 
 
 class OllamaClient:

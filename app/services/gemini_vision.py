@@ -6,7 +6,7 @@ from pathlib import Path
 import fitz
 from google.generativeai import types
 
-logger = logging.getLogger("Synthoria LLM")
+logger = logging.getLogger(__name__)
 
 try:
     import google.generativeai as genai

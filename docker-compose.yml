@@ -4,6 +4,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      PYTHONUNBUFFERED: 1
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-llama3.2}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}

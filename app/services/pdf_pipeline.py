@@ -2,13 +2,16 @@ import io
 import re
 from typing import Any
 
-import camelot
 import fitz
 
 from app.core.config import Settings
 from app.services.chunker import chunk_text
 from app.services.gemini_vision import extract_key_image_descriptions
 
+try:
+    import camelot
+except Exception:  # pragma: no cover - dépendance optionnelle, tolérante
+    camelot = None
 
 def _clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
@@ -28,6 +31,9 @@ def _extract_text_from_pdf(pdf_bytes: bytes) -> list[str]:
 
 
 def _extract_tables_from_pdf(pdf_bytes: bytes) -> list[str]:
+    if camelot is None:
+        return []
+
     tables: list[str] = []
     try:
         pdf_stream = io.BytesIO(pdf_bytes)
