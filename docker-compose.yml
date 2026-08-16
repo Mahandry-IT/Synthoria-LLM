@@ -61,6 +61,8 @@ services:
       OLLAMA_HOST: http://ollama:11434
     networks:
       - app-net
+    volumes:
+      - ollama-data:/root/.ollama
 
   chroma:
     image: ghcr.io/chroma-core/chroma:latest
