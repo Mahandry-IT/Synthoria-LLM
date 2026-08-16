@@ -26,16 +26,11 @@ services:
     environment:
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-llama3.2}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-    command: >
-      /bin/bash -lc "ollama serve &
-      sleep 5 &&
-      ollama pull ${OLLAMA_DEFAULT_MODEL:-llama3.2} &&
-      ollama pull ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text} &&
-      wait"
+    command: ["serve"]
     volumes:
       - ollama-data:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -51,6 +46,21 @@ services:
     #         - driver: nvidia
     #         count: all
     #         capabilities: [gpu]
+    
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        ollama pull ${OLLAMA_DEFAULT_MODEL:-llama3.2} &&
+        ollama pull ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    networks:
+      - app-net
 
   chroma:
     image: ghcr.io/chroma-core/chroma:latest

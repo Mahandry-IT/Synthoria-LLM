@@ -12,11 +12,23 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/home/appuser/.local/bin:$PATH
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libxcb1 \
+    libx11-6 \
+    libxext6 \
+    libsm6 \
+    libxrender1 \
+    libglib2.0-0 \
+    libgl1 \
+    libgomp1 \
+    ghostscript \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 1000 appuser
 COPY --from=builder /root/.local /home/appuser/.local
 COPY app ./app
 
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /data/chroma && chown -R appuser:appuser /data /app
 USER appuser
 
 EXPOSE 8000
