@@ -65,10 +65,11 @@ class NumpyVectorStore:
 
         scored.sort(key=lambda item: item[0], reverse=True)
         results: list[dict[str, Any]] = []
-        for _, record in scored[:top_k]:
+        for score, record in scored[:top_k]:
+            similarity = max(min(score, 1.0), -1.0)
             results.append({
                 "content": record["content"],
                 "metadata": record["metadata"],
-                "distance": 1.0 - max(min(record["embedding"][0] if record["embedding"] else 0.0, 1.0), 0.0),
+                "distance": 1.0 - similarity,
             })
         return results
