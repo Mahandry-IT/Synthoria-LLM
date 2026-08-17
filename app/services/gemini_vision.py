@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import fitz
-from google.generativeai import types
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ def extract_key_image_descriptions(pdf_bytes: bytes, api_key: str | None) -> lis
     descriptions: list[str] = []
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=instructions)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
         for page_index in range(min(len(doc), 5)):
@@ -57,15 +56,20 @@ def extract_key_image_descriptions(pdf_bytes: bytes, api_key: str | None) -> lis
             if not images:
                 continue
 
-            for img_index, _ in enumerate(images[:2]):
-                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                encoded = base64.b64encode(pix.tobytes("png"))
-                image_part = {"mime_type": "image/png", "data": encoded.decode("utf-8")}
+            for img_index, img_info in enumerate(images[:2]):
+                xref = img_info[0]
+                try:
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    image_ext = base_image.get("ext", "png")
+                except Exception as exc:
+                    logger.warning("image_extraction_failed page=%s img=%s error=%s", page_index + 1, img_index + 1, exc)
+                    continue
 
-                description_config = types.GenerateContentConfig(
-                    system_instruction=instructions
-                )
-                response = model.generate_content([image_part], generation_config=description_config)
+                encoded = base64.b64encode(image_bytes)
+                image_part = {"mime_type": f"image/{image_ext}", "data": encoded.decode("utf-8")}
+
+                response = model.generate_content([image_part])
                 text = getattr(response, "text", "")
                 if text and text.strip():
                     descriptions.append(f"Image page {page_index + 1} ({img_index + 1}): {text.strip()}")
