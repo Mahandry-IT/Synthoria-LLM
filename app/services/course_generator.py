@@ -80,7 +80,7 @@ async def generate_course_from_question(
     Paramètres:
         question: question de l'utilisateur.
         vector_store: store vectoriel local (retrieval top-k).
-        gemini_client: client Gemini (2 appels).
+        gemini_client: client Gemini.
         settings: configuration applicative.
         mode: "file_question" (Mode 2) ou "question_only" (Mode 3, préparé mais non branché).
         top_k: nombre de chunks à récupérer (défaut settings.course_top_k_default).
@@ -90,8 +90,8 @@ async def generate_course_from_question(
 
     Fonctionnement:
         1. Retrieval des chunks pertinents dans le vector store local (sauf mode question_only).
-        2. Appel 1 Gemini (Flash + google_search) : réponse groundée (contexte fichier + web).
-        3. Appel 2 Gemini (Flash-Lite + response_schema) : mise en forme JSON stricte.
+        2. Si gemini_use_search_grounding=True : 2 appels (search_grounded + format_structured).
+           Sinon : 1 seul appel (format_structured direct avec contexte RAG).
 
     Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
     """
@@ -106,6 +106,27 @@ async def generate_course_from_question(
     file_sources = _file_sources_from_chunks(chunks)
     system_instruction = _get_teacher_instructions()
 
+    # --- Mode 1 appel (pas de recherche web, quota minima) ---
+    if not settings.gemini_use_search_grounding:
+        prompt = (
+            f'mode="{mode}"\n'
+            f"Question de l'utilisateur : {question}\n\n"
+            f"Contexte extrait des documents fournis :\n{context_block}\n\n"
+            f"Sources fichier disponibles : {file_sources}\n"
+            f"Sources web disponibles : []\n\n"
+            f"Génère directement le JSON structuré selon le schéma fourni."
+        )
+        structured = await gemini_client.format_structured(
+            raw_answer=prompt,
+            response_schema=CourseGenerationResponse,
+            system_instruction=system_instruction,
+        )
+        try:
+            return CourseGenerationResponse.model_validate(structured)
+        except Exception as exc:
+            raise GeminiInvalidResponseError(f"JSON structuré invalide: {exc}") from exc
+
+    # --- Mode 2 appels (search grounding + reformatage) ---
     prompt = (
         f"Question de l'utilisateur : {question}\n\n"
         f"Contexte extrait des documents fournis (à compléter par une recherche web si nécessaire) :\n"
