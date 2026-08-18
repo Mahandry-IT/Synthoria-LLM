@@ -97,6 +97,13 @@ CHROMA_COLLECTION_NAME=synthoria_documents
 PDF_CHUNK_TARGET_TOKENS=400
 PDF_CHUNK_OVERLAP_TOKENS=50
 GEMINI_API_KEY=
+GEMINI_MODEL_FLASH=gemini-2.0-flash
+GEMINI_MODEL_FLASH_LITE=gemini-2.0-flash-lite
+GEMINI_MAX_RETRIES=3
+GEMINI_TIMEOUT_SECONDS=30
+# Course generation (Mode 2) configuration
+COURSE_TOP_K_DEFAULT=6
+COURSE_QUESTION_MAX_LENGTH=2000
 ```
 
 > `GEMINI_API_KEY` est optionnel. Sans clé, l’extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n’est pas informative.
