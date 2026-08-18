@@ -49,6 +49,7 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | POST | `/generate` | Génère une réponse à partir d’un prompt classique |
 | POST | `/pdf/ingest` | Envoie un fichier PDF, extrait ses blocs, les découpe et les indexe dans le stockage local |
 | POST | `/pdf/search` | Recherche sémantique dans les documents déjà indexés |
+| POST | `/courses/generate` | Mode 2 : génère un cours structuré (JSON) à partir d'une question, groundé sur les documents indexés + recherche web (Gemini) |
 
 ### Exemple 1 : génération simple
 
@@ -72,6 +73,16 @@ curl -X POST http://localhost:8000/pdf/search \
   -H "Content-Type: application/json" \
   -d '{"query": "Quel est le point clé du document ?", "top_k": 5}'
 ```
+
+### Exemple 4 : génération de cours (Mode 2 : fichier + question)
+
+```bash
+curl -X POST http://localhost:8000/courses/generate \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Explique le principe de fonctionnement", "top_k": 6}'
+```
+
+> Nécessite `GEMINI_API_KEY`. Le pipeline enchaîne deux appels Gemini : (1) Flash + `google_search` pour une réponse groundée sur le contexte fichier et le web, (2) Flash-Lite + `response_schema` pour structurer le résultat en JSON (voir `app/api/schemas.py::CourseGenerationResponse`).
 
 ## Variables d’environnement
 
