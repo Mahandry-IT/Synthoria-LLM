@@ -30,7 +30,12 @@ VALID_STRUCTURED_ANSWER = {
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(gemini_api_key="fake-key")
+    return Settings(gemini_api_key="fake-key", gemini_use_search_grounding=True)
+
+
+@pytest.fixture
+def settings_no_grounding() -> Settings:
+    return Settings(gemini_api_key="fake-key", gemini_use_search_grounding=False)
 
 
 @pytest.fixture
@@ -102,6 +107,21 @@ async def test_generate_course_question_only_skips_retrieval(settings, gemini_cl
     )
 
     vector_store.search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_course_single_call_no_grounding(settings_no_grounding, vector_store, gemini_client):
+    """Mode sans search grounding : 1 seul appel (format_structured), pas de search_grounded."""
+    result = await generate_course_from_question(
+        question="Question simple",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings_no_grounding,
+    )
+
+    assert result.mode == "file_question"
+    gemini_client.search_grounded.assert_not_awaited()
+    gemini_client.format_structured.assert_awaited_once()
 
 
 @pytest.mark.asyncio
