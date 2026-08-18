@@ -47,6 +47,28 @@ def _extract_retry_delay(exc: Exception) -> float | None:
     return None
 
 
+def _strip_additional_properties(schema: dict) -> dict:
+    """Nettoie récursivement le JSON schema pour compatibilité Gemini API.
+
+    Gemini rejette `additionalProperties` dans le payload. Pydantic v2 l'ajoute
+    par défaut sur les dict et les modèles. Cette fonction le supprime partout.
+    """
+    cleaned: dict = {}
+    for key, value in schema.items():
+        if key == "additionalProperties":
+            continue
+        if isinstance(value, dict):
+            cleaned[key] = _strip_additional_properties(value)
+        elif isinstance(value, list):
+            cleaned[key] = [
+                _strip_additional_properties(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
 class GeminiClient:
     """Encapsule les appels Gemini pour la génération de cours (retry + timeout inclus).
 
@@ -120,8 +142,9 @@ class GeminiClient:
                 else:
                     await asyncio.sleep(min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS))
 
+        detail = str(last_error) if last_error else "unknown error"
         raise GeminiUnavailableError(
-            f"Gemini injoignable après {self._settings.gemini_max_retries} tentatives"
+            f"Gemini injoignable après {self._settings.gemini_max_retries} tentatives: {detail}"
         ) from last_error
 
     async def search_grounded(self, prompt: str, system_instruction: str) -> tuple[str, list[dict]]:
@@ -178,31 +201,39 @@ class GeminiClient:
         self, raw_answer: str, response_schema: Any, system_instruction: str
     ) -> dict:
         """
-        Appel 2 : reformate une réponse brute en JSON structuré strict (sans google_search).
+        Reformate une réponse brute en JSON structuré strict (sans google_search).
 
-        Paramètres:
-            raw_answer: texte à structurer (réponse brute de `search_grounded` + contexte sources).
-            response_schema: modèle Pydantic (ou schéma JSON) décrivant la structure attendue.
-            system_instruction: prompt système de formatage.
-
-        Retour: dict JSON validé syntaxiquement (validation métier faite en aval par Pydantic).
-
-        Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
+        Stratégie : tente d'abord avec le modèle lite, fallback sur le modèle flash
+        si le schema est trop complexe (400 InvalidArgument).
         """
         self._ensure_configured()
+        clean_schema = _strip_additional_properties(
+            response_schema.model_json_schema() if hasattr(response_schema, "model_json_schema") else response_schema
+        )
 
-        def _run() -> Any:
+        def _run(model: str) -> Any:
             return self._client.models.generate_content(
-                model=self._settings.gemini_model_flash_lite,
+                model=model,
                 contents=raw_answer,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     response_mime_type="application/json",
-                    response_schema=response_schema,
+                    response_schema=clean_schema,
                 ),
             )
 
-        response = await self._call_with_retry(_run)
+        # Essai avec le modèle lite (moins cher)
+        try:
+            response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
+        except GeminiUnavailableError as exc:
+            # Si le lite échoue avec un 400 (schema trop complexe), retry avec flash
+            error_msg = str(exc).lower()
+            if "400" in error_msg or "invalid" in error_msg or "bad request" in error_msg:
+                logger.info("gemini_lite_schema_fallback_to_flash")
+                response = await self._call_with_retry(_run, self._settings.gemini_model_flash)
+            else:
+                raise
+
         text = getattr(response, "text", "") or ""
         try:
             return json.loads(text)
