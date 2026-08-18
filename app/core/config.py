@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: float = 30.0
     course_top_k_default: int = 6
     course_question_max_length: int = 2000
+    gemini_use_search_grounding: bool = True
 
 
 @lru_cache
