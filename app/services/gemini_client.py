@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 from typing import Any
 
 from google import genai
@@ -14,6 +15,36 @@ from app.core.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Backoff exponentiel : base de 2s, max 60s, avec jitter ±25%
+_BACKOFF_BASE_SECONDS = 2.0
+_BACKOFF_MAX_SECONDS = 60.0
+_BACKOFF_JITTER = 0.25
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    """Détermine si l'erreur est un rate-limit 429 (retryable) vs une erreur fatale."""
+    message = str(exc).lower()
+    return "429" in message or "resource_exhausted" in message or "rate limit" in message
+
+
+def _extract_retry_delay(exc: Exception) -> float | None:
+    """Extrait le retryDelay de la réponse d'erreur Google API, si disponible."""
+    try:
+        error_body = getattr(exc, "response", None)
+        if error_body is None:
+            return None
+        body = getattr(error_body, "json", lambda: None)()
+        if body is None:
+            return None
+        for detail in body.get("error", {}).get("details", []):
+            if detail.get("@type", "").endswith("RetryInfo"):
+                delay_str = detail.get("retryDelay", "")
+                if delay_str.endswith("s"):
+                    return float(delay_str[:-1])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 class GeminiClient:
@@ -37,7 +68,15 @@ class GeminiClient:
             raise GeminiUnavailableError("GEMINI_API_KEY non configurée")
 
     async def _call_with_retry(self, func: Any, *args: Any, **kwargs: Any) -> Any:
+        """Retry avec backoff exponentiel + jitter. Les 429 sont retryables.
+
+        Stratégie :
+          - Timeout / erreurs réseau → retry avec backoff
+          - 429 rate-limited → retry avec backoff (extrait retryDelay si dispo)
+          - Autres erreurs (clé invalide, etc.) → pas de retry
+        """
         last_error: Exception | None = None
+        rate_limit_delay: float | None = None
 
         for attempt in range(self._settings.gemini_max_retries):
             try:
@@ -49,16 +88,37 @@ class GeminiClient:
                 last_error = exc
                 logger.warning("gemini_call_timeout", extra={"attempt": attempt + 1})
             except Exception as exc:  # noqa: BLE001 - le SDK ne type pas finement ses erreurs
-                message = str(exc).lower()
-                if "quota" in message or "rate limit" in message or "429" in message:
-                    raise GeminiQuotaExceededError(f"Quota Gemini dépassé: {exc}") from exc
-                last_error = exc
-                logger.warning(
-                    "gemini_call_failed", extra={"attempt": attempt + 1, "error": str(exc)}
-                )
+                if _is_rate_limited(exc):
+                    last_error = exc
+                    rate_limit_delay = _extract_retry_delay(exc)
+                    backoff = (
+                        min(rate_limit_delay, _BACKOFF_MAX_SECONDS)
+                        if rate_limit_delay
+                        else min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS)
+                    )
+                    jitter = backoff * _BACKOFF_JITTER * (2 * random.random() - 1)
+                    delay = max(0.1, backoff + jitter)
+                    logger.warning(
+                        "gemini_rate_limited",
+                        extra={"attempt": attempt + 1, "delay": round(delay, 2), "retry_after": rate_limit_delay},
+                    )
+                else:
+                    last_error = exc
+                    logger.warning(
+                        "gemini_call_failed", extra={"attempt": attempt + 1, "error": str(exc)}
+                    )
 
             if attempt < self._settings.gemini_max_retries - 1:
-                await asyncio.sleep(min(2**attempt, 10))
+                if last_error and _is_rate_limited(last_error):
+                    backoff = (
+                        min(rate_limit_delay, _BACKOFF_MAX_SECONDS)
+                        if rate_limit_delay
+                        else min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS)
+                    )
+                    jitter = backoff * _BACKOFF_JITTER * (2 * random.random() - 1)
+                    await asyncio.sleep(max(0.1, backoff + jitter))
+                else:
+                    await asyncio.sleep(min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS))
 
         raise GeminiUnavailableError(
             f"Gemini injoignable après {self._settings.gemini_max_retries} tentatives"

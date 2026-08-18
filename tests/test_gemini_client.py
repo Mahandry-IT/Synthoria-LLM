@@ -6,7 +6,6 @@ import pytest
 from app.core.config import Settings
 from app.core.exceptions import (
     GeminiInvalidResponseError,
-    GeminiQuotaExceededError,
     GeminiUnavailableError,
 )
 from app.services.gemini_client import GeminiClient
@@ -82,12 +81,14 @@ async def test_format_structured_invalid_json_raises():
 
 
 @pytest.mark.asyncio
-async def test_quota_error_raises_immediately():
-    fake_client = _fake_genai_client(generate_content_side_effect=Exception("429 quota exceeded"))
+async def test_rate_limit_retries_then_raises_unavailable():
+    fake_client = _fake_genai_client(generate_content_side_effect=Exception("429 RESOURCE_EXHAUSTED"))
     client = GeminiClient(_settings(), client=fake_client)
 
-    with pytest.raises(GeminiQuotaExceededError):
+    with pytest.raises(GeminiUnavailableError):
         await client.search_grounded("question", "system")
+
+    assert fake_client.models.generate_content.call_count == 2  # gemini_max_retries=2
 
 
 @pytest.mark.asyncio
