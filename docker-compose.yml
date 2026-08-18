@@ -9,6 +9,7 @@ services:
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-llama3.2}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       CHROMA_PERSIST_DIRECTORY: /data/chroma
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     depends_on:
       ollama:
         condition: service_healthy
