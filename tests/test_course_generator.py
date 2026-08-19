@@ -10,21 +10,27 @@ VALID_STRUCTURED_ANSWER = {
     "mode": "file_question",
     "format": "focused_answer",
     "meta": {
-        "title": "Titre",
-        "subject": "Sujet",
+        "title": "Transformateur",
+        "subject": "Electrotechnique",
         "language": "fr",
-        "generated_at": "2026-08-18T10:00:00Z",
+        "generated_at": "2026-08-19T10:00:00Z",
     },
-    "sources": [{"type": "file", "label": "doc.pdf", "reference": "page 2"}],
-    "answer": {
-        "quoi": "définition",
-        "pourquoi": "raison",
-        "comment": "mécanisme",
-        "worked_example": {"statement": "énoncé", "steps": ["étape 1"], "result": "résultat"},
-        "key_points": ["point 1"],
-    },
-    "summary": "résumé",
-    "next_steps": ["étape suivante"],
+    "sources": [{"type": "file_chunk", "label": "doc.pdf", "reference": "doc_1_chunk_0"}],
+    "sections": [
+        {
+            "type": "development",
+            "title": "Le transformateur",
+            "blocks": [],
+            "subsections": [
+                {"title": "Quoi", "blocks": [{"type": "text", "text": "définition"}]},
+                {"title": "Pourquoi", "blocks": [{"type": "text", "text": "raison"}]},
+                {"title": "Comment", "blocks": [{"type": "text", "text": "mécanisme"}]},
+            ],
+        },
+    ],
+    "quiz": [],
+    "confidence": "high",
+    "unconfirmed_points": [],
 }
 
 
@@ -51,7 +57,7 @@ def vector_store():
 def gemini_client():
     client = AsyncMock()
     client.search_grounded.return_value = ("réponse brute", [{"type": "web", "label": "W", "reference": "https://w"}])
-    client.format_structured.return_value = VALID_STRUCTURED_ANSWER
+    client.format_structured.return_value = VALID_STRUCTURED_ANSWER.copy()
     return client
 
 
@@ -67,7 +73,9 @@ async def test_generate_course_file_question_happy_path(settings, vector_store, 
 
     assert result.mode == "file_question"
     assert result.format == "focused_answer"
-    assert result.answer is not None
+    assert result.sources[0].type == "file"
+    assert result.sections is not None
+    assert len(result.sections) > 0
     vector_store.search.assert_awaited_once()
     gemini_client.search_grounded.assert_awaited_once()
     gemini_client.format_structured.assert_awaited_once()

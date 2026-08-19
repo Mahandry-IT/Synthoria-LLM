@@ -198,18 +198,24 @@ class GeminiClient:
         return web_sources
 
     async def format_structured(
-        self, raw_answer: str, response_schema: Any, system_instruction: str
+        self, raw_answer: str, system_instruction: str, *, response_schema: Any | None = None
     ) -> dict:
         """
         Reformate une réponse brute en JSON structuré strict (sans google_search).
+
+        Si response_schema est une classe Pydantic, extrait le JSON schema via
+        model_json_schema(). Utilise response_json_schema (bypass validation SDK).
 
         Stratégie : tente d'abord avec le modèle lite, fallback sur le modèle flash
         si le schema est trop complexe (400 InvalidArgument).
         """
         self._ensure_configured()
-        clean_schema = _strip_additional_properties(
-            response_schema.model_json_schema() if hasattr(response_schema, "model_json_schema") else response_schema
-        )
+        if response_schema is not None:
+            clean_schema = _strip_additional_properties(
+                response_schema.model_json_schema() if hasattr(response_schema, "model_json_schema") else response_schema
+            )
+        else:
+            raise GeminiUnavailableError("Aucun response_schema fourni à format_structured")
 
         def _run(model: str) -> Any:
             return self._client.models.generate_content(
@@ -218,7 +224,7 @@ class GeminiClient:
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     response_mime_type="application/json",
-                    response_schema=clean_schema,
+                    response_json_schema=clean_schema,
                 ),
             )
 

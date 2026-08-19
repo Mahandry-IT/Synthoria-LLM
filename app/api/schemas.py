@@ -30,7 +30,7 @@ class HealthResponse(BaseModel):
 
 class DocumentQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Question ou requête sur le PDF")
-    top_k: int = Field(5, ge=1, le=10, description="Nombre de résultats vectoriels à renvoyer")
+    top_k: int = Field(5, ge=1, le=20, description="Nombre de résultats vectoriels à renvoyer")
 
 
 class PDFIngestResponse(BaseModel):
@@ -51,9 +51,14 @@ class DocumentQueryResponse(BaseModel):
 # front-end. `format` détermine la richesse du contenu attendu.
 
 
+class Step(BaseModel):
+    id: str = Field(..., description="Identifiant stable de l'étape, ex. 'step-1' (utile comme clé React côté front)")
+    content: str = Field(..., description="Contenu de l'étape")
+
+
 class WorkedExample(BaseModel):
     statement: str = Field(..., description="Énoncé de l'exemple travaillé")
-    steps: list[str] = Field(..., description="Étapes de résolution détaillées")
+    steps: list[Step] = Field(..., description="Étapes de résolution détaillées")
     result: str = Field(..., description="Résultat final commenté")
 
 
@@ -103,7 +108,7 @@ class CourseAnswer(BaseModel):
 
 class CourseGenerationRequest(BaseModel):
     question: str = Field(..., min_length=1, description="Question de l'utilisateur")
-    top_k: int = Field(6, ge=1, le=10, description="Nombre de chunks à récupérer pour le contexte")
+    top_k: int = Field(6, ge=1, le=20, description="Nombre de chunks à récupérer pour le contexte")
     filename: str | None = Field(None, description="Filtre optionnel sur un document déjà ingéré")
 
     @field_validator("question")
