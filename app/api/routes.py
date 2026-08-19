@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
 from app.api.schemas import (
+    COURSE_DEFAULT_QUESTION,
+    CourseGenerationRequest,
+    CourseGenerationResponse,
     DocumentQueryRequest,
     DocumentQueryResponse,
     GenerateRequest,
@@ -9,7 +12,15 @@ from app.api.schemas import (
     PDFIngestResponse,
 )
 from app.core.config import Settings, get_settings
-from app.core.exceptions import OllamaModelNotFoundError, OllamaUnavailableError
+from app.core.exceptions import (
+    GeminiInvalidResponseError,
+    GeminiQuotaExceededError,
+    GeminiUnavailableError,
+    OllamaModelNotFoundError,
+    OllamaUnavailableError,
+)
+from app.services.course_generator import generate_course_from_question
+from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
 
@@ -18,6 +29,10 @@ router = APIRouter()
 
 def get_ollama_client(request: Request) -> OllamaClient:
     return request.app.state.ollama_client
+
+
+def get_gemini_client(request: Request) -> GeminiClient:
+    return request.app.state.gemini_client
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -89,3 +104,38 @@ async def search_pdf(
     vector_store = request.app.state.vector_store
     results = await vector_store.search(body.query, top_k=body.top_k)
     return DocumentQueryResponse(query=body.query, results=results)
+
+
+@router.post("/courses/generate", response_model=CourseGenerationResponse)
+async def generate_course(
+    request: Request,
+    body: CourseGenerationRequest,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
+) -> CourseGenerationResponse:
+    """Mode 2 (fichier + question) : retrieval local puis génération Gemini (2 appels)."""
+    question = (body.question or "").strip() or COURSE_DEFAULT_QUESTION
+    if len(question) > settings.course_question_max_length:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"question trop longue (max {settings.course_question_max_length} caractères)",
+        )
+
+    vector_store = request.app.state.vector_store
+
+    try:
+        return await generate_course_from_question(
+            question=question,
+            vector_store=vector_store,
+            gemini_client=gemini_client,
+            settings=settings,
+            mode="file_question",
+            top_k=body.top_k,
+            filename=body.filename,
+        )
+    except GeminiUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except GeminiQuotaExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    except GeminiInvalidResponseError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

@@ -3,12 +3,15 @@ services:
     build: ../Synthoria LLM
     ports:
       - "8000:8000"
+    env_file:
+    - .env
     environment:
       PYTHONUNBUFFERED: 1
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-llama3.2}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       CHROMA_PERSIST_DIRECTORY: /data/chroma
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     depends_on:
       ollama:
         condition: service_healthy

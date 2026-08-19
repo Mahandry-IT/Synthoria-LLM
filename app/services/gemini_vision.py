@@ -1,4 +1,3 @@
-import base64
 import json
 import logging
 from pathlib import Path
@@ -8,9 +7,11 @@ import fitz
 logger = logging.getLogger(__name__)
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types as genai_types
 except Exception:  # pragma: no cover - dépendance optionnelle
     genai = None
+    genai_types = None
 
 def _load_vision_instructions() -> str:
     candidates = [
@@ -46,8 +47,7 @@ def extract_key_image_descriptions(pdf_bytes: bytes, api_key: str | None) -> lis
     instructions = _load_vision_instructions()
     descriptions: list[str] = []
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=instructions)
+        client = genai.Client(api_key=api_key)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
         for page_index in range(min(len(doc), 5)):
@@ -66,10 +66,13 @@ def extract_key_image_descriptions(pdf_bytes: bytes, api_key: str | None) -> lis
                     logger.warning("image_extraction_failed page=%s img=%s error=%s", page_index + 1, img_index + 1, exc)
                     continue
 
-                encoded = base64.b64encode(image_bytes)
-                image_part = {"mime_type": f"image/{image_ext}", "data": encoded.decode("utf-8")}
+                image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=f"image/{image_ext}")
 
-                response = model.generate_content([image_part])
+                response = client.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=[image_part],
+                    config=genai_types.GenerateContentConfig(system_instruction=instructions),
+                )
                 text = getattr(response, "text", "")
                 if text and text.strip():
                     descriptions.append(f"Image page {page_index + 1} ({img_index + 1}): {text.strip()}")

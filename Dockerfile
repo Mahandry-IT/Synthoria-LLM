@@ -26,9 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN useradd --create-home --uid 1000 appuser
 COPY --from=builder /root/.local /home/appuser/.local
+COPY instruction ./instruction
 COPY app ./app
 
-RUN mkdir -p /data/chroma && chown -R appuser:appuser /data /app
+RUN mkdir -p /data/chroma && chown -R appuser:appuser /data /app /home/appuser/.local
 USER appuser
 
 EXPOSE 8000

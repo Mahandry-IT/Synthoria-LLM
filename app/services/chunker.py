@@ -1,5 +1,4 @@
 import re
-from typing import Iterable
 
 
 def normalize_whitespace(text: str) -> str:
@@ -17,19 +16,32 @@ def chunk_text(text: str, target_tokens: int = 400, overlap_tokens: int = 50) ->
 
     size = max(1, target_tokens)
     overlap = max(0, min(overlap_tokens, size // 2))
-    step = size - overlap
+    step = max(1, size - overlap)
 
-    if step <= 0:
+    # Le texte entier tient dans un seul morceau.
+    if len(words) <= size:
         return [" ".join(words)]
 
+    min_size = max(1, size - overlap)
     chunks: list[str] = []
-    for start in range(0, len(words), step):
+    last_start = 0
+    start = 0
+
+    while start < len(words):
         end = min(start + size, len(words))
-        chunk = " ".join(words[start:end])
-        if chunk:
-            chunks.append(chunk)
+
+        # Dernier morceau trop court : on l'étend dans le morceau précédent.
+        if chunks and len(words) - start < min_size:
+            chunks[-1] = " ".join(words[last_start:])
+            break
+
+        chunks.append(" ".join(words[start:end]))
+        last_start = start
+
         if end == len(words):
             break
+
+        start += step
 
     cleaned: list[str] = []
     for chunk in chunks:

@@ -23,3 +23,5 @@ htmlcov/
 # Ignore IDE and editor directories
 .idea/
 .vscode/
+.agents/
+.freebuff/
