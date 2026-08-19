@@ -98,7 +98,15 @@ class ContentBlock(BaseModel):
 
     type: BlockType = Field(description="Kind of content this block carries; determines which field below is set.")
 
-    text: str | None = Field(default=None, description="Set for TEXT, DEFINITION, CALLOUT.")
+    text: str | None = Field(
+        default=None,
+        description=(
+            "Set for TEXT, DEFINITION, CALLOUT. A standalone equation belongs in "
+            "its own FORMULA block, never inline here — but a short inline math "
+            "fragment inside a sentence (e.g. x^n, a_b) must be wrapped in single "
+            "$...$ so the frontend can render it."
+        ),
+    )
     callout_variant: CalloutVariant | None = Field(default=None, description="Set for CALLOUT only.")
     list_items: list[str] | None = Field(default=None, description="Set for LIST.")
     list_ordered: bool | None = Field(default=None, description="Set for LIST — numbered vs bullet.")
@@ -118,7 +126,8 @@ class Subsection(BaseModel):
             "Subsection heading. Under a DEVELOPMENT section, use exactly "
             "'Quoi', 'Pourquoi', 'Comment' — all three are mandatory, never "
             "omit one — so downstream mapping stays reliable. Other section "
-            "types may use free-form titles."
+            "types may use free-form titles. Each DEVELOPMENT section covers "
+            "one focused sub-topic, not the entire course."
         )
     )
     blocks: list[ContentBlock] = Field(description="Ordered content blocks for this subsection.")
@@ -136,6 +145,13 @@ class QuizQuestion(BaseModel):
     choices: list[str] = Field(description="Answer options, 2-5 items.")
     correct_index: int = Field(description="0-based index into `choices`.")
     explanation: str = Field(description="Why the correct answer is correct.")
+    requires_calculation: bool = Field(
+        description=(
+            "True if answering requires performing a calculation, not just "
+            "recalling a definition. Drives the timer downstream (80s vs 45s) — "
+            "don't compute the timer value yourself, just flag this."
+        )
+    )
 
 
 class Meta(BaseModel):
@@ -160,13 +176,21 @@ class CourseGenerationSchema(BaseModel):
 
     sections: list[Section] = Field(
         description=(
-            "For focused_answer: typically one DEVELOPMENT section with "
-            "Quoi/Pourquoi/Comment subsections, optionally a SUMMARY section. "
-            "For full_course: INTRODUCTION, DEVELOPMENT (one subsection per topic), "
-            "COMMON_PITFALLS, SUMMARY, NEXT_STEPS."
+            "Break the content into MULTIPLE DEVELOPMENT sections — one per "
+            "logical topic or sub-concept. Each DEVELOPMENT section must have "
+            "Quoi/Pourquoi/Comment subsections. Example for a course on "
+            "regression: Section 'Introduction', Section 'Le modèle', "
+            "Section 'Estimateur', Section 'Métriques d'évaluation'. "
+            "Optionally add INTRODUCTION, COMMON_PITFALLS, SUMMARY, NEXT_STEPS."
         )
     )
-    quiz: list[QuizQuestion] = Field(default_factory=list, description="Empty when not relevant to the current mode.")
+    quiz: list[QuizQuestion] = Field(
+        default_factory=list,
+        description=(
+            "Empty when not relevant to the current mode. Question count is "
+            "driven by how much content was actually covered — no fixed number."
+        ),
+    )
 
     confidence: ConfidenceLevel
     unconfirmed_points: list[str] = Field(
