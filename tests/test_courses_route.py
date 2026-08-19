@@ -19,7 +19,7 @@ VALID_RESPONSE = {
         "quoi": "quoi",
         "pourquoi": "pourquoi",
         "comment": "comment",
-        "worked_example": {"statement": "s", "steps": ["e1"], "result": "r"},
+        "worked_example": {"statement": "s", "steps": [{"id": "1", "content": "e1"}], "result": "r"},
         "key_points": [],
     },
     "summary": "résumé",

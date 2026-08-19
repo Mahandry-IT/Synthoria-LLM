@@ -80,7 +80,8 @@ def _block_to_text(block: Any) -> str:
         rows = "; ".join(" | ".join(row) for row in block.table.rows)
         return f"{' | '.join(block.table.headers)} — {rows}"
     if block.formula:
-        return f"{block.formula.latex}" + (f" ({block.formula.description})" if block.formula.description else "")
+        rendered = f"$${block.formula.latex}$$"
+        return rendered + (f" ({block.formula.description})" if block.formula.description else "")
     if block.list_items:
         return " ; ".join(block.list_items)
     if block.code:
@@ -159,7 +160,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
                 if b.worked_example:
                     worked_ex = WorkedExample(
                         statement=b.worked_example.statement,
-                        steps=[Step(id=f"step-{idx + 1}", content=s) for idx, s in enumerate(b.worked_example.steps)],
+                        steps=[Step(id=str(idx + 1), content=s) for idx, s in enumerate(b.worked_example.steps)],
                         result=b.worked_example.result,
                     )
 
@@ -220,6 +221,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
                 "options": q.choices,
                 "correct_option_index": q.correct_index,
                 "explanation": q.explanation,
+                "time_limit_seconds": 80 if q.requires_calculation else 45,
             }
             for q in schema.quiz
         ] or None,

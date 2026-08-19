@@ -52,7 +52,7 @@ class DocumentQueryResponse(BaseModel):
 
 
 class Step(BaseModel):
-    id: str = Field(..., description="Identifiant stable de l'étape, ex. 'step-1' (utile comme clé React côté front)")
+    id: str = Field(..., description="Identifiant de l'étape, numérique sous forme de chaîne, ex. '1', '2' (clé React côté front)")
     content: str = Field(..., description="Contenu de l'étape")
 
 
@@ -89,6 +89,7 @@ class QuizQuestion(BaseModel):
     options: list[str] = Field(..., min_length=2)
     correct_option_index: int = Field(..., ge=0)
     explanation: str
+    time_limit_seconds: int = Field(..., description="45 par défaut, 80 si la question implique un calcul")
 
 
 class CourseMeta(BaseModel):
