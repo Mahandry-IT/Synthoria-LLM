@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
 from app.api.schemas import (
+    COURSE_DEFAULT_QUESTION,
     CourseGenerationRequest,
     CourseGenerationResponse,
     DocumentQueryRequest,
@@ -113,7 +114,8 @@ async def generate_course(
     settings: Settings = Depends(get_settings),
 ) -> CourseGenerationResponse:
     """Mode 2 (fichier + question) : retrieval local puis génération Gemini (2 appels)."""
-    if len(body.question) > settings.course_question_max_length:
+    question = (body.question or "").strip() or COURSE_DEFAULT_QUESTION
+    if len(question) > settings.course_question_max_length:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"question trop longue (max {settings.course_question_max_length} caractères)",
@@ -123,7 +125,7 @@ async def generate_course(
 
     try:
         return await generate_course_from_question(
-            question=body.question,
+            question=question,
             vector_store=vector_store,
             gemini_client=gemini_client,
             settings=settings,

@@ -107,18 +107,13 @@ class CourseAnswer(BaseModel):
     key_points: list[str] = Field(default_factory=list)
 
 
+COURSE_DEFAULT_QUESTION = "Explique moi le cours en complet"
+
+
 class CourseGenerationRequest(BaseModel):
-    question: str = Field(..., min_length=1, description="Question de l'utilisateur")
+    question: str | None = Field(None, description="Question de l'utilisateur")
     top_k: int = Field(6, ge=1, le=20, description="Nombre de chunks à récupérer pour le contexte")
     filename: str | None = Field(None, description="Filtre optionnel sur un document déjà ingéré")
-
-    @field_validator("question")
-    @classmethod
-    def strip_question(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("question ne peut pas être vide")
-        return v
 
 
 class CourseGenerationResponse(BaseModel):

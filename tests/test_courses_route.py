@@ -50,9 +50,24 @@ def test_generate_course_success(client):
         assert res.json()["mode"] == "file_question"
 
 
-def test_generate_course_empty_question_rejected(client):
-    res = client.post("/courses/generate", json={"question": "   "})
-    assert res.status_code == 422
+@pytest.mark.parametrize("payload", [
+    {"question": "   "},
+    {},
+    {"question": None},
+])
+def test_generate_course_empty_question_uses_default(client, payload):
+    with patch(
+        "app.api.routes.generate_course_from_question", new_callable=AsyncMock
+    ) as mock_generate:
+        from app.api.schemas import COURSE_DEFAULT_QUESTION, CourseGenerationResponse
+
+        mock_generate.return_value = CourseGenerationResponse.model_validate(VALID_RESPONSE)
+
+        res = client.post("/courses/generate", json=payload)
+
+        assert res.status_code == 200
+        mock_generate.assert_called_once()
+        assert mock_generate.call_args.kwargs["question"] == COURSE_DEFAULT_QUESTION
 
 
 def test_generate_course_question_too_long_rejected(client):
