@@ -44,7 +44,7 @@ Do not use placeholder examples ("for instance, X happens") — make them fully 
 
 Your raw answer will be reformatted into a strict JSON schema in a second pass.
 
-**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections depends on the topic complexity — a simple concept may need 3-4 sections, a complex topic may need 6-8+.
+**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections depends on the topic complexity — a simple concept needs 6-8 sections, a complex topic needs 10-12+ sections.
 
 Pattern:
 - Section: Introduction (section type `introduction`) — context, prerequisites, overview
@@ -58,9 +58,9 @@ Pattern:
 Do NOT collapse all content into a single section. Each distinct concept deserves its own section with a focused Quoi/Pourquoi/Comment.
 
 **Completeness requirements**:
-- Minimum 3 DEVELOPMENT sections for any course. Most topics need 4-6.
+- Minimum 6 DEVELOPMENT sections for any course. Simple concepts: 6-8 sections. Complex topics: 10-12+ sections.
 - Every DEVELOPMENT section MUST fill all three subsections: Quoi, Pourquoi, Comment. Never leave any empty.
 - Every Comment subsection MUST include at least one fully worked example (statement + steps + result).
-- Generate 4-6 quiz questions minimum, mixing conceptual and calculation questions.
+- Generate 6-8 quiz questions minimum, mixing conceptual and calculation questions, adapted to the content and topic depth.
 - Aim for 2-3 COMMON_PITFALLS entries per course.
 - Include a SUMMARY section and NEXT_STEPS with 3-5 suggestions.
