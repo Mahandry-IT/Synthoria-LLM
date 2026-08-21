@@ -281,7 +281,7 @@ async def generate_course_from_question(
         vector_store: store vectoriel local (retrieval top-k).
         gemini_client: client Gemini.
         settings: configuration applicative.
-        mode: "file_question" (Mode 2) ou "question_only" (Mode 3, préparé mais non branché).
+        mode: "file_question" (Mode 2, retrieval RAG) ou "question_only" (Mode 3, recherche web).
         top_k: nombre de chunks à récupérer (défaut settings.course_top_k_default).
         filename: filtre optionnel sur un document déjà ingéré.
 
@@ -305,16 +305,27 @@ async def generate_course_from_question(
     file_sources = _file_sources_from_chunks(chunks)
     system_instruction = _get_teacher_instructions()
 
+    is_question_only = mode == "question_only"
+
     # --- Mode 1 appel (pas de recherche web, quota minima) ---
     if not settings.gemini_use_search_grounding:
-        prompt = (
-            f'mode="{mode}"\n'
-            f"Question de l'utilisateur : {question}\n\n"
-            f"Contexte extrait des documents fournis :\n{context_block}\n\n"
-            f"Sources fichier disponibles : {file_sources}\n"
-            f"Sources web disponibles : []\n\n"
-            f"Génère directement le JSON structuré selon le schéma fourni."
-        )
+        if is_question_only:
+            prompt = (
+                f'mode="{mode}"\n'
+                f"Question de l'utilisateur : {question}\n\n"
+                f"Sources fichier disponibles : []\n"
+                f"Sources web disponibles : []\n\n"
+                f"Génère directement le JSON structuré selon le schéma fourni."
+            )
+        else:
+            prompt = (
+                f'mode="{mode}"\n'
+                f"Question de l'utilisateur : {question}\n\n"
+                f"Contexte extrait des documents fournis :\n{context_block}\n\n"
+                f"Sources fichier disponibles : {file_sources}\n"
+                f"Sources web disponibles : []\n\n"
+                f"Génère directement le JSON structuré selon le schéma fourni."
+            )
         structured = await gemini_client.format_structured(
             raw_answer=prompt,
             system_instruction=system_instruction,
@@ -323,11 +334,14 @@ async def generate_course_from_question(
         return _validate_and_map(structured, mode)
 
     # --- Mode 2 appels (search grounding + reformatage) ---
-    prompt = (
-        f"Question de l'utilisateur : {question}\n\n"
-        f"Contexte extrait des documents fournis (à compléter par une recherche web si nécessaire) :\n"
-        f"{context_block}"
-    )
+    if is_question_only:
+        prompt = f"Question de l'utilisateur : {question}"
+    else:
+        prompt = (
+            f"Question de l'utilisateur : {question}\n\n"
+            f"Contexte extrait des documents fournis (à compléter par une recherche web si nécessaire) :\n"
+            f"{context_block}"
+        )
 
     raw_answer, web_sources = await gemini_client.search_grounded(
         prompt=prompt,

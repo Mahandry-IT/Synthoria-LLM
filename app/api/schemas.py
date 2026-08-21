@@ -112,6 +112,13 @@ COURSE_DEFAULT_QUESTION = "Explique moi le cours en complet"
 
 class CourseGenerationRequest(BaseModel):
     question: str | None = Field(None, description="Question de l'utilisateur")
+    mode: Literal["file_question", "question_only"] | None = Field(
+        None,
+        description=(
+            "Mode de génération. Si non fourni, auto-détecté : "
+            "file_question si filename est présent, question_only sinon."
+        ),
+    )
     top_k: int = Field(6, ge=1, le=20, description="Nombre de chunks à récupérer pour le contexte")
     filename: str | None = Field(None, description="Filtre optionnel sur un document déjà ingéré")
 

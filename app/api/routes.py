@@ -113,13 +113,21 @@ async def generate_course(
     gemini_client: GeminiClient = Depends(get_gemini_client),
     settings: Settings = Depends(get_settings),
 ) -> CourseGenerationResponse:
-    """Mode 2 (fichier + question) : retrieval local puis génération Gemini (2 appels)."""
+    """Mode 2 (fichier + question) ou Mode 3 (question seule + recherche web)."""
     question = (body.question or "").strip() or COURSE_DEFAULT_QUESTION
     if len(question) > settings.course_question_max_length:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"question trop longue (max {settings.course_question_max_length} caractères)",
         )
+
+    # Auto-détection du mode : explicite > filename → file_question > question_only
+    if body.mode:
+        resolved_mode = body.mode
+    elif body.filename:
+        resolved_mode = "file_question"
+    else:
+        resolved_mode = "question_only"
 
     vector_store = request.app.state.vector_store
 
@@ -129,7 +137,7 @@ async def generate_course(
             vector_store=vector_store,
             gemini_client=gemini_client,
             settings=settings,
-            mode="file_question",
+            mode=resolved_mode,
             top_k=body.top_k,
             filename=body.filename,
         )

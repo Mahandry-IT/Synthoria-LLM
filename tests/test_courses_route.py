@@ -100,3 +100,91 @@ def test_generate_course_gemini_invalid_response(client):
         mock_generate.side_effect = GeminiInvalidResponseError("bad json")
         res = client.post("/courses/generate", json={"question": "question"})
         assert res.status_code == 502
+
+
+# --- Mode 3 : question_only (question seule + recherche web) ---
+
+
+VALID_QUESTION_ONLY_RESPONSE = {
+    **VALID_RESPONSE,
+    "mode": "question_only",
+    "sources": [{"type": "web", "label": "W", "reference": "https://w"}],
+}
+
+
+def test_generate_course_question_only_auto_detect(client):
+    """Sans filename ni mode explicite → auto-détection en question_only."""
+    with patch(
+        "app.api.routes.generate_course_from_question", new_callable=AsyncMock
+    ) as mock_generate:
+        from app.api.schemas import CourseGenerationResponse
+
+        mock_generate.return_value = CourseGenerationResponse.model_validate(
+            VALID_QUESTION_ONLY_RESPONSE
+        )
+
+        res = client.post("/courses/generate", json={"question": "Qu'est-ce que l'IA ?"})
+
+        assert res.status_code == 200
+        assert res.json()["mode"] == "question_only"
+        mock_generate.assert_called_once()
+        assert mock_generate.call_args.kwargs["mode"] == "question_only"
+
+
+def test_generate_course_question_only_explicit_mode(client):
+    """Mode question_only forcé explicitement."""
+    with patch(
+        "app.api.routes.generate_course_from_question", new_callable=AsyncMock
+    ) as mock_generate:
+        from app.api.schemas import CourseGenerationResponse
+
+        mock_generate.return_value = CourseGenerationResponse.model_validate(
+            VALID_QUESTION_ONLY_RESPONSE
+        )
+
+        res = client.post(
+            "/courses/generate",
+            json={"question": "Explique la régression", "mode": "question_only"},
+        )
+
+        assert res.status_code == 200
+        assert mock_generate.call_args.kwargs["mode"] == "question_only"
+
+
+def test_generate_course_file_question_explicit_mode(client):
+    """Mode file_question forcé explicitement avec filename."""
+    with patch(
+        "app.api.routes.generate_course_from_question", new_callable=AsyncMock
+    ) as mock_generate:
+        from app.api.schemas import CourseGenerationResponse
+
+        mock_generate.return_value = CourseGenerationResponse.model_validate(VALID_RESPONSE)
+
+        res = client.post(
+            "/courses/generate",
+            json={"question": "question", "filename": "doc.pdf", "mode": "file_question"},
+        )
+
+        assert res.status_code == 200
+        assert mock_generate.call_args.kwargs["mode"] == "file_question"
+        assert mock_generate.call_args.kwargs["filename"] == "doc.pdf"
+
+
+def test_generate_course_mode_overrides_filename_detection(client):
+    """mode explicite prime sur l'auto-détection par filename."""
+    with patch(
+        "app.api.routes.generate_course_from_question", new_callable=AsyncMock
+    ) as mock_generate:
+        from app.api.schemas import CourseGenerationResponse
+
+        mock_generate.return_value = CourseGenerationResponse.model_validate(
+            VALID_QUESTION_ONLY_RESPONSE
+        )
+
+        res = client.post(
+            "/courses/generate",
+            json={"question": "question", "filename": "doc.pdf", "mode": "question_only"},
+        )
+
+        assert res.status_code == 200
+        assert mock_generate.call_args.kwargs["mode"] == "question_only"
