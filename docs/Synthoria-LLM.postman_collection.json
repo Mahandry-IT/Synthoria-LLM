@@ -45,7 +45,7 @@
               "mode": "raw",
               "raw": "{\n  \"prompt\": \"Explique Docker en une phrase\",\n  \"model\": \"llama3.2\",\n  \"stream\": false\n}"
             },
-            "description": "Génère une réponse à partir d'un prompt classique via Ollama. Le champ `model` est optionnel (défaut: llama3.2). Le champ `stream` est false par défaut. Retourne 200, 400 si prompt vide, 404 si modèle introuvable, 413 si prompt trop long, 503 si Ollama indisponible."
+            "description": "Génère une réponse à partir d'un prompt classique via Ollama. Le champ `model` est optionnel (défaut: llama3.2). Le champ `stream` est false par défaut.\n\nCodes de retour:\n- 200 : succès\n- 400 : prompt vide\n- 404 : modèle introuvable\n- 413 : prompt trop long\n- 503 : Ollama indisponible"
           },
           "response": []
         }
@@ -74,7 +74,7 @@
                 }
               ]
             },
-            "description": "Envoie un seul fichier PDF. Retourne PDFIngestResponse { status, filename, chunks_added, documents_added }. 400 si pas un PDF ou contenu vide."
+            "description": "Envoie un seul fichier PDF. Retourne PDFIngestResponse { status, filename, chunks_added, documents_added }.\n\nCodes de retour:\n- 200 : succès\n- 400 : pas un PDF ou contenu vide\n- 422 : fichier non exploitable"
           },
           "response": []
         },
@@ -103,7 +103,7 @@
                 }
               ]
             },
-            "description": "Envoie plusieurs fichiers PDF en une seule requête. Retourne PDFIngestMultiResponse { status, files: [...], total_chunks, total_documents }. Chaque fichier est ingéré individuellement avec son propre statut."
+            "description": "Envoie plusieurs fichiers PDF en une seule requête. Retourne PDFIngestMultiResponse { status, files: [...], total_chunks, total_documents }.\n\nChaque fichier est ingéré individuellement avec son propre statut (ok ou error). Les erreurs d'un fichier n'empêchent pas l'ingestion des autres.\n\nCodes de retour:\n- 200 : succès (avec ou sans erreurs partielles)\n- 400 : aucun fichier fourni"
           },
           "response": []
         },
@@ -188,7 +188,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Explique le principe de fonctionnement\",\n  \"filename\": \"presentation_descente_gradient_marp.pdf\",\n  \"top_k\": 6\n}"
             },
-            "description": "Mode 2 : un seul fichier + question. Retrieval RAG sur le document puis génération Gemini."
+            "description": "Mode 2 : un seul fichier + question. Retrieval RAG sur le document puis génération Gemini.\n\nCodes de retour:\n- 200 : succès (CourseGenerationResponse)\n- 413 : question trop longue\n- 429 : quota Gemini dépassé (réponse structurée : { error, gemini_code, gemini_status, message })\n- 500/502/503 : erreur Gemini (réponse structurée : { error, gemini_code, message })"
           },
           "response": []
         },
@@ -208,7 +208,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Compare les concepts des deux cours\",\n  \"filename\": [\"presentation_descente_gradient_marp.pdf\", \"cours_regression.pdf\"],\n  \"top_k\": 20\n}"
             },
-            "description": "Mode 2 : plusieurs fichiers. Recherche séparée par fichier pour assurer une représentation équilibrée de chaque document."
+            "description": "Mode 2 : plusieurs fichiers. Recherche séparée par fichier pour assurer une représentation équilibrée de chaque document.\n\nCodes de retour:\n- 200 : succès (CourseGenerationResponse)\n- 429 : quota Gemini dépassé\n- 500/502/503 : erreur Gemini"
           },
           "response": []
         },
@@ -228,7 +228,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Explique le principe de fonctionnement\",\n  \"filename\": \"presentation_descente_gradient_marp.pdf\",\n  \"top_k\": 20,\n  \"mode\": \"file_question\"\n}"
             },
-            "description": "Mode 2 forcé explicitement. Le champ `mode` prime sur l'auto-détection."
+            "description": "Mode 2 forcé explicitement. Le champ `mode` prime sur l'auto-détection.\n\nCodes de retour identiques aux autres modes."
           },
           "response": []
         },
@@ -248,7 +248,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Qu'est-ce que la régression linéaire ?\"\n}"
             },
-            "description": "Mode 3 : pas de `filename` → auto-détecté en question_only. Gemini utilise la recherche web pour trouver l'information."
+            "description": "Mode 3 : pas de `filename` → auto-détecté en question_only. Gemini utilise la recherche web pour trouver l'information.\n\nCodes de retour:\n- 200 : succès\n- 429 : quota Gemini dépassé\n- 500/502/503 : erreur Gemini"
           },
           "response": []
         }
