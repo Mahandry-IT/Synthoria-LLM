@@ -197,6 +197,48 @@ class GeminiClient:
             logger.warning("gemini_grounding_metadata_parse_failed: %s", exc)
         return web_sources
 
+    async def reformulate_query(self, query: str, filename: str | None = None) -> str:
+        """Reformule une question vague en une requête précise pour la recherche vectorielle.
+
+        Stratégie : un seul appel au modèle lite, réponse JSON simple.
+        En cas d'échec, retourne la query originale (pas de blocage).
+        """
+        self._ensure_configured()
+
+        context_hint = f" Le document s'intitule: {filename}." if filename else ""
+        prompt = (
+            f"Reformule cette question en une requête de recherche précise et technique "
+            f"pour trouver le contenu pertinent dans un cours. "
+            f"Réponds UNIQUEMENT avec le JSON: {{\"query\": \"...\"}}. "
+            f"Pas d'explication, pas de texte hors JSON."
+            f"{context_hint}\n\n"
+            f"Question: {query}"
+        )
+
+        try:
+            response = await self._call_with_retry(
+                lambda: self._client.models.generate_content(
+                    model=self._settings.gemini_model_flash_lite,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                    ),
+                )
+            )
+            text = getattr(response, "text", "") or ""
+            data = json.loads(text)
+            reformulated = data.get("query", "")
+            if reformulated and len(reformulated) > 5:
+                logger.info(
+                    "query_reformulated",
+                    extra={"original": query[:80], "reformulated": reformulated[:80]},
+                )
+                return reformulated
+        except Exception as exc:  # noqa: BLE001 - fallback silencieux
+            logger.warning("query_reformulation_failed", extra={"error": str(exc)})
+
+        return query
+
     async def format_structured(
         self, raw_answer: str, system_instruction: str, *, response_schema: Any | None = None
     ) -> dict:

@@ -295,9 +295,12 @@ async def generate_course_from_question(
     """
     resolved_top_k = top_k or settings.course_top_k_default
 
+    # Reformulation de la query pour améliorer le matching sémantique
+    search_query = await gemini_client.reformulate_query(question, filename)
+
     chunks: list[dict[str, Any]] = []
     if mode != "question_only":
-        raw_chunks = await vector_store.search(question, top_k=resolved_top_k)
+        raw_chunks = await vector_store.search(search_query, top_k=resolved_top_k)
         chunks = _filter_by_filename(raw_chunks, filename)
 
     context_block = _build_context_block(chunks)
