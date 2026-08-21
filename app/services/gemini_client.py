@@ -22,8 +22,32 @@ _BACKOFF_MAX_SECONDS = 60.0
 _BACKOFF_JITTER = 0.25
 
 
+def _parse_gemini_error(exc: Exception) -> tuple[int | None, str | None, str | None]:
+    """Extrait le code HTTP, le message d'erreur et le status depuis une exception Gemini.
+
+    Retour: (error_code, error_status, error_message)
+    """
+    try:
+        body = getattr(exc, "response", None)
+        if body is None:
+            return None, None, None
+        data = getattr(body, "json", lambda: None)()
+        if data is None:
+            return None, None, None
+        err = data.get("error", {})
+        return err.get("code"), err.get("status"), err.get("message")
+    except Exception:  # noqa: BLE001
+        return None, None, None
+
+
 def _is_rate_limited(exc: Exception) -> bool:
     """Détermine si l'erreur est un rate-limit 429 (retryable) vs une erreur fatale."""
+    code, status, _ = _parse_gemini_error(exc)
+    if code == 429:
+        return True
+    if status and "RESOURCE_EXHAUSTED" in status.upper():
+        return True
+    # Fallback string matching pour les erreurs non structurées
     message = str(exc).lower()
     return "429" in message or "resource_exhausted" in message or "rate limit" in message
 
@@ -142,9 +166,21 @@ class GeminiClient:
                 else:
                     await asyncio.sleep(min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS))
 
-        detail = str(last_error) if last_error else "unknown error"
+        # Extraire les infos structurées de la dernière erreur
+        error_code, error_status, error_message = _parse_gemini_error(last_error) if last_error else (None, None, None)
+        detail = error_message or str(last_error) if last_error else "unknown error"
+
+        if error_code == 429 or (error_status and "RESOURCE_EXHAUSTED" in error_status.upper()):
+            raise GeminiQuotaExceededError(
+                f"Quota Gemini dépassé: {detail}",
+                error_code=error_code,
+                error_message=detail,
+            ) from last_error
+
         raise GeminiUnavailableError(
-            f"Gemini injoignable après {self._settings.gemini_max_retries} tentatives: {detail}"
+            f"Gemini injoignable après {self._settings.gemini_max_retries} tentatives: {detail}",
+            error_code=error_code,
+            error_message=detail,
         ) from last_error
 
     async def search_grounded(self, prompt: str, system_instruction: str) -> tuple[str, list[dict]]:
