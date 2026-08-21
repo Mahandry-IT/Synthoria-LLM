@@ -31,6 +31,10 @@ class HealthResponse(BaseModel):
 class DocumentQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Question ou requête sur le PDF")
     top_k: int = Field(5, ge=1, le=20, description="Nombre de résultats vectoriels à renvoyer")
+    filename: str | list[str] | None = Field(
+        None,
+        description="Filtre optionnel sur un ou plusieurs noms de fichier ingérés.",
+    )
 
 
 class PDFIngestResponse(BaseModel):
@@ -38,6 +42,14 @@ class PDFIngestResponse(BaseModel):
     filename: str
     chunks_added: int
     documents_added: int
+
+
+class PDFIngestMultiResponse(BaseModel):
+    """Réponse agrégée pour l'ingestion multi-fichiers."""
+    status: str
+    files: list[PDFIngestResponse]
+    total_chunks: int
+    total_documents: int
 
 
 class DocumentQueryResponse(BaseModel):

@@ -9,6 +9,7 @@ from app.api.schemas import (
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
+    PDFIngestMultiResponse,
     PDFIngestResponse,
 )
 from app.core.config import Settings, get_settings
@@ -71,29 +72,79 @@ async def generate(
     )
 
 
-@router.post("/pdf/ingest", response_model=PDFIngestResponse)
+async def _ingest_single_pdf(
+    request: Request,
+    file: UploadFile,
+    settings: Settings,
+) -> PDFIngestResponse:
+    """Ingestion d'un seul fichier PDF — logique partagée single/multi."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        return PDFIngestResponse(
+            status="error",
+            filename=file.filename or "unknown",
+            chunks_added=0,
+            documents_added=0,
+        )
+
+    try:
+        content = await file.read()
+        chunks = extract_pdf_chunks(content, file.filename, settings)
+        if not chunks:
+            return PDFIngestResponse(
+                status="error",
+                filename=file.filename,
+                chunks_added=0,
+                documents_added=0,
+            )
+
+        added = await request.app.state.vector_store.add_chunks(chunks)
+        return PDFIngestResponse(
+            status="ok",
+            filename=file.filename,
+            chunks_added=added,
+            documents_added=len(chunks),
+        )
+    except Exception as exc:
+        return PDFIngestResponse(
+            status="error",
+            filename=file.filename or "unknown",
+            chunks_added=0,
+            documents_added=0,
+        )
+
+
+@router.post("/pdf/ingest")
 async def ingest_pdf(
     request: Request,
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     settings: Settings = Depends(get_settings),
-) -> PDFIngestResponse:
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Un fichier PDF est requis")
+) -> dict:
+    """Ingestion de un ou plusieurs fichiers PDF dans le vector store.
 
-    content = await file.read()
-    chunks = extract_pdf_chunks(content, file.filename, settings)
-    if not chunks:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aucun contenu exploitable trouvé dans le PDF")
+    Retourne toujours PDFIngestMultiResponse (compatible 1 ou N fichiers).
+    """
+    results: list[PDFIngestResponse] = []
+    for file in files:
+        results.append(await _ingest_single_pdf(request, file, settings))
 
-    vector_store = request.app.state.vector_store
-    added = await vector_store.add_chunks(chunks)
+    if not results:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Aucun fichier PDF fourni",
+        )
 
-    return PDFIngestResponse(
+    # Rétrocompatibilité : si un seul fichier envoyé et succès, format simple
+    if len(files) == 1 and results[0].status == "ok":
+        return results[0].model_dump()
+
+    total_chunks = sum(r.chunks_added for r in results)
+    total_docs = sum(r.documents_added for r in results)
+    return PDFIngestMultiResponse(
         status="ok",
-        filename=file.filename,
-        chunks_added=added,
-        documents_added=len(chunks),
-    )
+        files=results,
+        total_chunks=total_chunks,
+        total_documents=total_docs,
+    ).model_dump()
 
 
 @router.post("/pdf/search", response_model=DocumentQueryResponse)
@@ -101,8 +152,22 @@ async def search_pdf(
     request: Request,
     body: DocumentQueryRequest,
 ) -> DocumentQueryResponse:
+    """Recherche vectorielle avec filtre optionnel sur un ou plusieurs fichiers."""
     vector_store = request.app.state.vector_store
-    results = await vector_store.search(body.query, top_k=body.top_k)
+    # Si un filtre filename est fourni, on sur-recherche pour compenser
+    # le post-filtrage qui peut éliminer des résultats
+    search_k = body.top_k * 3 if body.filename else body.top_k
+    raw_results = await vector_store.search(body.query, top_k=search_k)
+
+    if body.filename:
+        allowed = {body.filename} if isinstance(body.filename, str) else set(body.filename)
+        results = [
+            r for r in raw_results
+            if r.get("metadata", {}).get("filename") in allowed
+        ][:body.top_k]
+    else:
+        results = raw_results[:body.top_k]
+
     return DocumentQueryResponse(query=body.query, results=results)
 
 
