@@ -132,7 +132,13 @@ class CourseGenerationRequest(BaseModel):
         ),
     )
     top_k: int = Field(6, ge=1, le=20, description="Nombre de chunks à récupérer pour le contexte")
-    filename: str | None = Field(None, description="Filtre optionnel sur un document déjà ingéré")
+    filename: str | list[str] | None = Field(
+        None,
+        description=(
+            "Filtre optionnel sur un ou plusieurs documents déjà ingérés. "
+            "Accepte un seul nom de fichier (string) ou une liste de noms."
+        ),
+    )
 
 
 class CourseGenerationResponse(BaseModel):

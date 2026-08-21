@@ -38,11 +38,18 @@ def _get_teacher_instructions() -> str:
     return _teacher_instructions_cache
 
 
-def _filter_by_filename(chunks: list[dict[str, Any]], filename: str | None) -> list[dict[str, Any]]:
-    """Filtre les chunks retrouvés sur un nom de fichier (post-filtrage, le store n'a pas d'index natif)."""
+def _filter_by_filename(
+    chunks: list[dict[str, Any]],
+    filename: str | list[str] | None,
+) -> list[dict[str, Any]]:
+    """Filtre les chunks sur un ou plusieurs noms de fichier (post-filtrage).
+
+    Accepte un seul nom (str) ou une liste de noms. Si None, aucun filtre.
+    """
     if not filename:
         return chunks
-    return [c for c in chunks if c.get("metadata", {}).get("filename") == filename]
+    allowed = {filename} if isinstance(filename, str) else set(filename)
+    return [c for c in chunks if c.get("metadata", {}).get("filename") in allowed]
 
 
 def _build_context_block(chunks: list[dict[str, Any]]) -> str:
@@ -270,7 +277,7 @@ async def generate_course_from_question(
     settings: Settings,
     mode: str = "file_question",
     top_k: int | None = None,
-    filename: str | None = None,
+    filename: str | list[str] | None = None,
 ) -> CourseGenerationResponse:
     """
     Orchestration RAG + génération de cours structuré.
@@ -282,12 +289,14 @@ async def generate_course_from_question(
         settings: configuration applicative.
         mode: "file_question" (Mode 2, retrieval RAG) ou "question_only" (Mode 3, recherche web).
         top_k: nombre de chunks à récupérer (défaut settings.course_top_k_default).
-        filename: filtre optionnel sur un document déjà ingéré.
+        filename: filtre optionnel — un nom (str), une liste de noms, ou None.
 
     Retour: CourseGenerationResponse validé.
 
     Fonctionnement:
         1. Retrieval des chunks pertinents dans le vector store local (sauf mode question_only).
+           - Si filename est une liste : recherche séparée par fichier + fusion équilibrée.
+           - Si filename est un str ou None : recherche unique.
         2. Si gemini_use_search_grounding=True : 2 appels (search_grounded + format_structured).
            Sinon : 1 seul appel (format_structured direct avec contexte RAG).
 
@@ -300,8 +309,29 @@ async def generate_course_from_question(
 
     chunks: list[dict[str, Any]] = []
     if mode != "question_only":
-        raw_chunks = await vector_store.search(search_query, top_k=resolved_top_k)
-        chunks = _filter_by_filename(raw_chunks, filename)
+        # Si plusieurs fichiers : recherche séparée par fichier pour assurer
+        # une représentation équilibrée de chaque document.
+        if isinstance(filename, list) and len(filename) > 1:
+            per_file_k = max(resolved_top_k // len(filename), 5)
+            all_chunks: list[dict[str, Any]] = []
+            for fname in filename:
+                file_chunks = await vector_store.search(search_query, top_k=per_file_k)
+                file_chunks = _filter_by_filename(file_chunks, fname)
+                all_chunks.extend(file_chunks)
+            # Dé-duplication (un chunk peut matcher dans plusieurs recherches)
+            seen: set[str] = set()
+            chunks = []
+            for c in all_chunks:
+                # Les chunks n'ont pas de champ 'id' dans les résultats de search
+                cid = c.get("content", "")[:200]
+                if cid not in seen:
+                    seen.add(cid)
+                    chunks.append(c)
+            # Limiter au top_k global
+            chunks = chunks[:resolved_top_k]
+        else:
+            raw_chunks = await vector_store.search(search_query, top_k=resolved_top_k)
+            chunks = _filter_by_filename(raw_chunks, filename)
 
     context_block = _build_context_block(chunks)
     file_sources = _file_sources_from_chunks(chunks)

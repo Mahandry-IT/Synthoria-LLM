@@ -248,3 +248,35 @@ async def test_generate_course_question_only_prompt_no_rag_context(
     prompt_used = gemini_client_question_only.search_grounded.call_args.kwargs["prompt"]
     assert "Contexte extrait des documents" not in prompt_used
     assert "Regression" in prompt_used or "regression" in prompt_used.lower()
+
+
+# --- Multi-file search ---
+
+
+@pytest.mark.asyncio
+async def test_generate_course_multi_file_separate_searches(settings):
+    """Avec filename=list, vector_store.search est appele une fois par fichier."""
+    vector_store = AsyncMock()
+    # Chaque appel retourne des chunks differents par fichier
+    vector_store.search.side_effect = [
+        [{"content": "chunk gradient", "metadata": {"filename": "gradient.pdf", "page": 1}, "distance": 0.1}],
+        [{"content": "chunk regression", "metadata": {"filename": "regression.pdf", "page": 1}, "distance": 0.15}],
+    ]
+    gemini_client = AsyncMock()
+    gemini_client.search_grounded.return_value = ("reponse", [])
+    gemini_client.format_structured.return_value = VALID_STRUCTURED_ANSWER_FILE.copy()
+
+    await generate_course_from_question(
+        question="Compare les deux cours",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename=["gradient.pdf", "regression.pdf"],
+    )
+
+    # 2 appels search (un par fichier)
+    assert vector_store.search.await_count == 2
+    # Les deux chunks sont dans le contexte
+    prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
+    assert "chunk gradient" in prompt_used
+    assert "chunk regression" in prompt_used

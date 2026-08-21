@@ -197,7 +197,7 @@ class GeminiClient:
             logger.warning("gemini_grounding_metadata_parse_failed: %s", exc)
         return web_sources
 
-    async def reformulate_query(self, query: str, filename: str | None = None) -> str:
+    async def reformulate_query(self, query: str, filename: str | list[str] | None = None) -> str:
         """Reformule une question vague en une requête précise pour la recherche vectorielle.
 
         Stratégie : un seul appel au modèle lite, réponse JSON simple.
@@ -205,7 +205,13 @@ class GeminiClient:
         """
         self._ensure_configured()
 
-        context_hint = f" Le document s'intitule: {filename}." if filename else ""
+        if filename is None:
+            context_hint = ""
+        elif isinstance(filename, list):
+            context_hint = f" Les documents s'intitulent: {', '.join(filename)}."
+        else:
+            context_hint = f" Le document s'intitule: {filename}."
+
         prompt = (
             f"Reformule cette question en une requête de recherche précise et technique "
             f"pour trouver le contenu pertinent dans un cours. "
