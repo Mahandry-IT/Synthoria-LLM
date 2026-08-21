@@ -315,8 +315,7 @@ async def generate_course_from_question(
             per_file_k = max(resolved_top_k // len(filename), 5)
             all_chunks: list[dict[str, Any]] = []
             for fname in filename:
-                file_chunks = await vector_store.search(search_query, top_k=per_file_k)
-                file_chunks = _filter_by_filename(file_chunks, fname)
+                file_chunks = await vector_store.search(search_query, top_k=per_file_k, filename=fname)
                 all_chunks.extend(file_chunks)
             # Dé-duplication (un chunk peut matcher dans plusieurs recherches)
             seen: set[str] = set()
@@ -330,7 +329,8 @@ async def generate_course_from_question(
             # Limiter au top_k global
             chunks = chunks[:resolved_top_k]
         else:
-            raw_chunks = await vector_store.search(search_query, top_k=resolved_top_k)
+            fname = filename if isinstance(filename, str) else None
+            raw_chunks = await vector_store.search(search_query, top_k=resolved_top_k, filename=fname)
             chunks = _filter_by_filename(raw_chunks, filename)
 
     context_block = _build_context_block(chunks)

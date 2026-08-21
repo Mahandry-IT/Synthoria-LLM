@@ -52,7 +52,12 @@ class NumpyVectorStore:
         self._save()
         return len(chunks)
 
-    async def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        filename: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self._documents:
             return []
 
@@ -60,6 +65,8 @@ class NumpyVectorStore:
         scored: list[tuple[float, dict[str, Any]]] = []
 
         for record in self._documents:
+            if filename and record.get("metadata", {}).get("filename") != filename:
+                continue
             score = self._cosine_similarity(query_embedding, record["embedding"])
             scored.append((score, record))
 
