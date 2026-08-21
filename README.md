@@ -1,11 +1,11 @@
 # Synthoria LLM
 
-API FastAPI dédiée à l’ingestion et à la recherche de documents PDF via une pipeline RAG locale : extraction de texte, tableaux, images, chunking, embeddings Ollama et stockage vectoriel local.
+API FastAPI dédiée à l'ingestion et à la recherche de documents PDF via une pipeline RAG locale : extraction de texte, tableaux, images, chunking, embeddings Ollama et stockage vectoriel local.
 
 ## Stack
 
 - **FastAPI**
-- **PyMuPDF** pour l’extraction de texte PDF
+- **PyMuPDF** pour l'extraction de texte PDF
 - **camelot-py** pour les tableaux
 - **Gemini Vision** pour les images clés (optionnel si `GEMINI_API_KEY` est fourni)
 - **Ollama** pour les embeddings locaux (`nomic-embed-text`) et le modèle de génération
@@ -33,9 +33,9 @@ docker compose up -d --build
 ```
 
 Le docker compose démarre :
-- l’API FastAPI sur `http://localhost:8000`
+- l'API FastAPI sur `http://localhost:8000`
 - Ollama sur `http://localhost:11434`
-- un conteneur d’initialisation qui télécharge les modèles nécessaires
+- un conteneur d'initialisation qui télécharge les modèles nécessaires
 
 Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama :
 - `llama3.2`
@@ -45,56 +45,19 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 
 | Méthode | Route | Description |
 | ------- | ----- | ----------- |
-| GET | `/health` | Vérifie l’état de l’API et la disponibilité Ollama |
-| POST | `/generate` | Génère une réponse à partir d’un prompt classique |
+| GET | `/health` | Vérifie l'état de l'API et la disponibilité Ollama |
+| POST | `/generate` | Génère une réponse à partir d'un prompt classique |
 | POST | `/pdf/ingest` | Envoie un fichier PDF, extrait ses blocs, les découpe et les indexe dans le stockage local |
 | POST | `/pdf/search` | Recherche sémantique dans les documents déjà indexés |
 | POST | `/courses/generate` | Génère un cours structuré (JSON). **Mode 2** (fichier + question) si `filename` fourni, **Mode 3** (question seule + recherche web) sinon. Le mode peut être forcé avec `"mode": "file_question"` ou `"mode": "question_only"`. |
 
-### Exemple 1 : génération simple
+### Tester l'API
 
-```bash
-curl -X POST http://localhost:8000/generate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Explique Docker en une phrase"}'
-```
+Une collection Postman pré-configurée est disponible dans [`docs/Synthoria-LLM.postman_collection.json`](docs/Synthoria-LLM.postman_collection.json). Importez-la dans Postman (Import → fichier) pour tester tous les endpoints avec des exemples de body réalistes.
 
-### Exemple 2 : ingestion d’un PDF
+> **Mode 3 (question seule)** : ne pas fournir de `filename` → Gemini utilise la recherche web. **Mode 2 (fichier + question)** : fournir `filename` → retrieval RAG sur le document indexé.
 
-```bash
-curl -X POST http://localhost:8000/pdf/ingest \
-  -F "file=@document.pdf"
-```
-
-### Exemple 3 : recherche vectorielle
-
-```bash
-curl -X POST http://localhost:8000/pdf/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Quel est le point clé du document ?", "top_k": 5}'
-```
-
-### Exemple 4a : génération de cours — Mode 3 (question seule + recherche web)
-
-```bash
-curl -X POST http://localhost:8000/courses/generate \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Qu'est-ce que la régression linéaire ?"}'
-```
-
-> Pas de `filename` → auto-détecté en Mode 3. Gemini utilise `google_search` pour trouver l'information, puis la structure en JSON.
-
-### Exemple 4b : génération de cours — Mode 2 (fichier + question)
-
-```bash
-curl -X POST http://localhost:8000/courses/generate \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Explique le principe de fonctionnement", "filename": "cours.pdf", "top_k": 6}'
-```
-
-> Nécessite `GEMINI_API_KEY`. Le pipeline enchaîne deux appels Gemini : (1) Flash + `google_search` pour une réponse groundée sur le contexte fichier et le web, (2) Flash-Lite + `response_schema` pour structurer le résultat en JSON (voir `app/api/schemas.py::CourseGenerationResponse`).
-
-## Variables d’environnement
+## Variables d'environnement
 
 Voir `.env.example`.
 
@@ -115,7 +78,7 @@ COURSE_TOP_K_DEFAULT=6
 COURSE_QUESTION_MAX_LENGTH=2000
 ```
 
-> `GEMINI_API_KEY` est optionnel. Sans clé, l’extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n’est pas informative.
+> `GEMINI_API_KEY` est optionnel. Sans clé, l'extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative.
 
 ## Développement local (sans Docker)
 
@@ -140,6 +103,8 @@ app/
 ├── services/     # Ollama, chunking, extraction PDF, vector store, Gemini Vision
 ├── main.py       # bootstrap FastAPI
 ├── __init__.py
+docs/
+├── Synthoria-LLM.postman_collection.json  # collection Postman
 instruction/
 ├── vision_instructions.md  # instructions système Gemini pour séparer images utiles / non utiles
 └── ...
