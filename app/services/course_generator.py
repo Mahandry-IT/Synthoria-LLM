@@ -237,15 +237,14 @@ _MODE_TO_FORMAT: dict[str, str] = {
 
 
 def _coerce_known_format(structured: dict[str, Any], mode: str) -> dict[str, Any]:
-    """`format` est entièrement dérivé de `mode` — full_course n'existe pour
-    l'instant que pour un futur mode fichier-seul non branché sur Gemini.
+    """Corrige les champs `mode` et `format` qui sont entièrement dérivés du
+    mode réel passé en paramètre — Gemini a tendance à les halluciner.
 
-    Gemini a tendance à halluciner 'full_course' quand la question ressemble
-    à 'explique le cours en complet', alors que le mode réel (file_question/
-    question_only) impose focused_answer. On écrase donc la valeur côté code
-    plutôt que de dépendre du modèle : ça élimine la classe d'erreur au lieu
-    de la détecter, et évite de perdre un appel Gemini sur une regénération.
+    On écrase ces valeurs côté code plutôt que de dépendre du modèle :
+    ça élimine la classe d'erreur au lieu de la détecter, et évite de
+    perdre un appel Gemini sur une regénération.
     """
+    structured["mode"] = mode
     expected = _MODE_TO_FORMAT.get(mode)
     if expected is not None:
         structured["format"] = expected
