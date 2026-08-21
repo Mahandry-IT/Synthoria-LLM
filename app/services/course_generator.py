@@ -38,20 +38,6 @@ def _get_teacher_instructions() -> str:
     return _teacher_instructions_cache
 
 
-def _filter_by_filename(
-    chunks: list[dict[str, Any]],
-    filename: str | list[str] | None,
-) -> list[dict[str, Any]]:
-    """Filtre les chunks sur un ou plusieurs noms de fichier (post-filtrage).
-
-    Accepte un seul nom (str) ou une liste de noms. Si None, aucun filtre.
-    """
-    if not filename:
-        return chunks
-    allowed = {filename} if isinstance(filename, str) else set(filename)
-    return [c for c in chunks if c.get("metadata", {}).get("filename") in allowed]
-
-
 def _build_context_block(chunks: list[dict[str, Any]]) -> str:
     if not chunks:
         return "Aucun extrait de fichier pertinent trouvé pour cette question."
@@ -315,7 +301,13 @@ async def generate_course_from_question(
             per_file_k = max(resolved_top_k // len(filename), 5)
             all_chunks: list[dict[str, Any]] = []
             for fname in filename:
-                file_chunks = await vector_store.search(search_query, top_k=per_file_k, filename=fname)
+                # Le filtre filename_filter restreint les candidats AVANT le
+                # classement top_k : chaque fichier obtient ses propres chunks
+                # les plus pertinents, au lieu de puiser dans un même top_k
+                # global (ce qui écrasait les fichiers non dominants).
+                file_chunks = await vector_store.search(
+                    search_query, top_k=per_file_k, filename_filter=fname
+                )
                 all_chunks.extend(file_chunks)
             # Dé-duplication (un chunk peut matcher dans plusieurs recherches)
             seen: set[str] = set()
@@ -329,9 +321,9 @@ async def generate_course_from_question(
             # Limiter au top_k global
             chunks = chunks[:resolved_top_k]
         else:
-            fname = filename if isinstance(filename, str) else None
-            raw_chunks = await vector_store.search(search_query, top_k=resolved_top_k, filename=fname)
-            chunks = _filter_by_filename(raw_chunks, filename)
+            chunks = await vector_store.search(
+                search_query, top_k=resolved_top_k, filename_filter=filename
+            )
 
     context_block = _build_context_block(chunks)
     file_sources = _file_sources_from_chunks(chunks)

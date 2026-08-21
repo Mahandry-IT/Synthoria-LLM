@@ -110,10 +110,11 @@ async def test_generate_course_file_question_happy_path(settings, vector_store, 
 
 @pytest.mark.asyncio
 async def test_generate_course_filters_by_filename(settings, gemini_client):
+    """Le filtre filename doit être transmis à vector_store.search (pré-filtrage
+    côté store), et non ré-appliqué après coup par l'orchestrateur."""
     vector_store = AsyncMock()
     vector_store.search.return_value = [
         {"content": "a", "metadata": {"filename": "doc1.pdf", "page": 1}, "distance": 0.1},
-        {"content": "b", "metadata": {"filename": "doc2.pdf", "page": 1}, "distance": 0.2},
     ]
 
     await generate_course_from_question(
@@ -124,9 +125,12 @@ async def test_generate_course_filters_by_filename(settings, gemini_client):
         filename="doc1.pdf",
     )
 
+    vector_store.search.assert_awaited_once()
+    search_kwargs = vector_store.search.call_args.kwargs
+    assert search_kwargs["filename_filter"] == "doc1.pdf"
+    assert search_kwargs["top_k"] == settings.course_top_k_default
     prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
     assert "doc1.pdf" in prompt_used
-    assert "doc2.pdf" not in prompt_used
 
 
 @pytest.mark.asyncio
@@ -276,7 +280,71 @@ async def test_generate_course_multi_file_separate_searches(settings):
 
     # 2 appels search (un par fichier)
     assert vector_store.search.await_count == 2
+    # Chaque appel doit filtrer sur SON fichier (pas de recherche globale
+    # partagée qui écraserait les fichiers non dominants) : régression du
+    # bug où seul le premier fichier finissait dans le contexte.
+    called_filters = [c.kwargs["filename_filter"] for c in vector_store.search.await_args_list]
+    assert set(called_filters) == {"gradient.pdf", "regression.pdf"}
     # Les deux chunks sont dans le contexte
     prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
     assert "chunk gradient" in prompt_used
     assert "chunk regression" in prompt_used
+
+
+@pytest.mark.asyncio
+async def test_generate_course_multi_file_real_store_both_files_represented(settings, gemini_client):
+    """Régression bout-en-bout : avec un vrai NumpyVectorStore (pas de mock),
+    deux fichiers ingérés doivent tous les deux apparaître dans le contexte,
+    même si l'un des deux est globalement plus proche de la question pour
+    TOUS ses chunks (cas qui reproduit le bug rapporté)."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from app.services.vector_store import NumpyVectorStore
+
+    gemini_client.reformulate_query.return_value = "requete de recherche"
+
+    ollama_client = _AsyncMock()
+    # La requête reformulée s'aligne parfaitement avec les chunks de
+    # "dominant.pdf" ; "minoritaire.pdf" a une similarité plus faible mais
+    # doit quand même être représenté dans le contexte grâce au filtrage
+    # par fichier AVANT le classement top_k (le bug reproduit ici serait
+    # de ne récupérer que dominant.pdf).
+    ollama_client.embed.side_effect = lambda text: (
+        [1.0, 0.0] if text == "requete de recherche" else [0.0, 1.0]
+    )
+
+    store = NumpyVectorStore(settings=settings, ollama_client=ollama_client)
+    store._documents = [
+        {
+            "id": "1",
+            "content": "extrait dominant 1",
+            "metadata": {"filename": "dominant.pdf", "page": 1},
+            "embedding": [1.0, 0.0],
+        },
+        {
+            "id": "2",
+            "content": "extrait dominant 2",
+            "metadata": {"filename": "dominant.pdf", "page": 2},
+            "embedding": [0.99, 0.05],
+        },
+        {
+            "id": "3",
+            "content": "extrait minoritaire",
+            "metadata": {"filename": "minoritaire.pdf", "page": 1},
+            "embedding": [0.0, 1.0],
+        },
+    ]
+
+    from app.services.course_generator import generate_course_from_question
+
+    await generate_course_from_question(
+        question="Donne moi le cours complet",
+        vector_store=store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename=["dominant.pdf", "minoritaire.pdf"],
+    )
+
+    prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
+    assert "extrait minoritaire" in prompt_used
+    assert "dominant" in prompt_used

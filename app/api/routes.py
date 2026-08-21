@@ -16,7 +16,6 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import (
     GeminiInvalidResponseError,
     GeminiQuotaExceededError,
-    GeminiServiceError,
     GeminiUnavailableError,
     OllamaModelNotFoundError,
     OllamaUnavailableError,
@@ -155,19 +154,12 @@ async def search_pdf(
 ) -> DocumentQueryResponse:
     """Recherche vectorielle avec filtre optionnel sur un ou plusieurs fichiers."""
     vector_store = request.app.state.vector_store
-    # Si un filtre filename est fourni, on sur-recherche pour compenser
-    # le post-filtrage qui peut éliminer des résultats
-    search_k = body.top_k * 3 if body.filename else body.top_k
-    raw_results = await vector_store.search(body.query, top_k=search_k)
-
-    if body.filename:
-        allowed = {body.filename} if isinstance(body.filename, str) else set(body.filename)
-        results = [
-            r for r in raw_results
-            if r.get("metadata", {}).get("filename") in allowed
-        ][:body.top_k]
-    else:
-        results = raw_results[:body.top_k]
+    # Le filtre filename est appliqué côté vector_store, avant le classement
+    # top_k : garantit que chaque fichier ciblé est effectivement représenté,
+    # au lieu de dépendre d'un sur-échantillonnage suivi d'un post-filtrage.
+    results = await vector_store.search(
+        body.query, top_k=body.top_k, filename_filter=body.filename
+    )
 
     return DocumentQueryResponse(query=body.query, results=results)
 
@@ -207,40 +199,9 @@ async def generate_course(
             top_k=body.top_k,
             filename=body.filename,
         )
-    except GeminiQuotaExceededError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={
-                "error": "quota_exceeded",
-                "gemini_code": exc.error_code,
-                "gemini_status": "RESOURCE_EXHAUSTED",
-                "message": exc.error_message or str(exc),
-            },
-        ) from exc
     except GeminiUnavailableError as exc:
-        # Mapper les codes Gemini vers les HTTP status appropriés
-        gemini_code = exc.error_code
-        if gemini_code == 400:
-            http_status = status.HTTP_400_BAD_REQUEST
-        elif gemini_code == 401 or gemini_code == 403:
-            http_status = status.HTTP_502_BAD_GATEWAY
-        elif gemini_code == 404:
-            http_status = status.HTTP_502_BAD_GATEWAY
-        else:
-            http_status = status.HTTP_503_SERVICE_UNAVAILABLE
-        raise HTTPException(
-            status_code=http_status,
-            detail={
-                "error": "gemini_unavailable",
-                "gemini_code": gemini_code,
-                "message": exc.error_message or str(exc),
-            },
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except GeminiQuotaExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except GeminiInvalidResponseError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "error": "invalid_response",
-                "message": str(exc),
-            },
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
