@@ -131,12 +131,14 @@ class CourseGenerationResponse(BaseModel):
 
     # Uniquement pour format == "full_course"
     introduction: dict[str, str] | None = None
-    sections: list[CourseSection] | None = None
-    common_pitfalls: list[CoursePitfall] | None = None
-    quiz: list[QuizQuestion] | None = None
 
     # Uniquement pour format == "focused_answer"
     answer: CourseAnswer | None = None
+
+    # Uniquement pour format == "full_course"
+    sections: list[CourseSection] | None = None
+    common_pitfalls: list[CoursePitfall] | None = None
+    quiz: list[QuizQuestion] | None = None
 
     summary: str
     next_steps: list[str] = Field(default_factory=list)
