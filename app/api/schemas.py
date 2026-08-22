@@ -42,6 +42,7 @@ class PDFIngestResponse(BaseModel):
     filename: str
     chunks_added: int
     documents_added: int
+    message: str | None = Field(None, description="Message d'information (ex: doublon détecté).")
 
 
 class PDFIngestMultiResponse(BaseModel):
@@ -50,6 +51,19 @@ class PDFIngestMultiResponse(BaseModel):
     files: list[PDFIngestResponse]
     total_chunks: int
     total_documents: int
+
+
+class FileInfo(BaseModel):
+    """Informations sur un fichier stocké dans le vector store."""
+    id: int = Field(..., description="Identifiant séquentiel du fichier (1, 2, 3...)")
+    filename: str = Field(..., description="Nom du fichier PDF")
+
+
+class FileListResponse(BaseModel):
+    """Réponse de l'endpoint GET /pdf/files."""
+    status: str = "ok"
+    files: list[FileInfo]
+
 
 
 class DocumentQueryResponse(BaseModel):
