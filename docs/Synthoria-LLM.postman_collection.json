@@ -5,7 +5,10 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8000" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    }
   ],
   "item": [
     {
@@ -17,8 +20,12 @@
             "method": "GET",
             "url": {
               "raw": "{{baseUrl}}/health",
-              "host": ["{{baseUrl}}"],
-              "path": ["health"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
             },
             "description": "Vérifie l'état de l'API et la disponibilité d'Ollama. Retourne 200 avec { status, ollama_reachable }."
           },
@@ -34,12 +41,19 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/generate",
-              "host": ["{{baseUrl}}"],
-              "path": ["generate"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "generate"
+              ]
             },
             "body": {
               "mode": "raw",
@@ -61,8 +75,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/pdf/ingest",
-              "host": ["{{baseUrl}}"],
-              "path": ["pdf", "ingest"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "ingest"
+              ]
             },
             "body": {
               "mode": "formdata",
@@ -74,7 +93,7 @@
                 }
               ]
             },
-            "description": "Envoie un seul fichier PDF. Retourne PDFIngestResponse { status, filename, chunks_added, documents_added }.\n\nCodes de retour:\n- 200 : succès\n- 400 : pas un PDF ou contenu vide\n- 422 : fichier non exploitable"
+            "description": "Envoie un seul fichier PDF. Retourne PDFIngestResponse { status, filename, chunks_added, documents_added, message }.\n\nLa détection de doublons est activée : si le fichier existe déjà dans le vector store,\nle statut est 'failed' avec le message 'File already uploaded' (pas d'erreur HTTP globale).\n\nCodes de retour:\n- 200 : succès (ou doublon détecté avec status='failed')\n- 400 : pas un PDF ou contenu vide\n- 422 : fichier non exploitable"
           },
           "response": []
         },
@@ -85,8 +104,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/pdf/ingest",
-              "host": ["{{baseUrl}}"],
-              "path": ["pdf", "ingest"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "ingest"
+              ]
             },
             "body": {
               "mode": "formdata",
@@ -103,7 +127,7 @@
                 }
               ]
             },
-            "description": "Envoie plusieurs fichiers PDF en une seule requête. Retourne PDFIngestMultiResponse { status, files: [...], total_chunks, total_documents }.\n\nChaque fichier est ingéré individuellement avec son propre statut (ok ou error). Les erreurs d'un fichier n'empêchent pas l'ingestion des autres.\n\nCodes de retour:\n- 200 : succès (avec ou sans erreurs partielles)\n- 400 : aucun fichier fourni"
+            "description": "Envoie plusieurs fichiers PDF en une seule requête. Retourne PDFIngestMultiResponse { status, files: [...], total_chunks, total_documents }.\n\nChaque fichier est ingéré individuellement avec son propre statut (ok, error, ou failed pour doublon).\nLes erreurs d'un fichier n'empêchent pas l'ingestion des autres.\n\nExemple de réponse avec doublon :\n{\"status\": \"ok\", \"files\": [{\"status\": \"failed\", \"filename\": \"doc.pdf\", \"message\": \"File already uploaded\"}, {\"status\": \"ok\", \"filename\": \"new.pdf\", \"chunks_added\": 56}], \"total_chunks\": 56, \"total_documents\": 56}\n\nCodes de retour:\n- 200 : succès (avec ou sans erreurs/partiels doublons)\n- 400 : aucun fichier fourni"
           },
           "response": []
         },
@@ -112,12 +136,20 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/pdf/search",
-              "host": ["{{baseUrl}}"],
-              "path": ["pdf", "search"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "search"
+              ]
             },
             "body": {
               "mode": "raw",
@@ -132,12 +164,20 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/pdf/search",
-              "host": ["{{baseUrl}}"],
-              "path": ["pdf", "search"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "search"
+              ]
             },
             "body": {
               "mode": "raw",
@@ -152,18 +192,45 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/pdf/search",
-              "host": ["{{baseUrl}}"],
-              "path": ["pdf", "search"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "search"
+              ]
             },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"query\": \"Quels sont les concepts communs ?\",\n  \"top_k\": 15,\n  \"filename\": [\"presentation_descente_gradient_marp.pdf\", \"cours_regression.pdf\"]\n}"
             },
             "description": "Recherche vectorielle filtrée sur plusieurs fichiers. Les résultats proviennent uniquement des fichiers listés dans `filename`."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /pdf/files",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pdf/files",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "files"
+              ]
+            },
+            "description": "Liste les fichiers PDF stockés dans le vector store. Retourne FileListResponse { status, files: [{ id, filename }] }.\n\nChaque fichier reçoit un ID séquentiel (1, 2, 3...) basé sur l'ordre d'insertion.\n\nCodes de retour:\n- 200 : succès"
           },
           "response": []
         }
@@ -177,12 +244,20 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/courses/generate",
-              "host": ["{{baseUrl}}"],
-              "path": ["courses", "generate"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "generate"
+              ]
             },
             "body": {
               "mode": "raw",
@@ -197,12 +272,20 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/courses/generate",
-              "host": ["{{baseUrl}}"],
-              "path": ["courses", "generate"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "generate"
+              ]
             },
             "body": {
               "mode": "raw",
@@ -217,12 +300,20 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/courses/generate",
-              "host": ["{{baseUrl}}"],
-              "path": ["courses", "generate"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "generate"
+              ]
             },
             "body": {
               "mode": "raw",
@@ -237,12 +328,20 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "url": {
               "raw": "{{baseUrl}}/courses/generate",
-              "host": ["{{baseUrl}}"],
-              "path": ["courses", "generate"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "generate"
+              ]
             },
             "body": {
               "mode": "raw",
