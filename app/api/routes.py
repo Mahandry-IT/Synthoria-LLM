@@ -6,6 +6,8 @@ from app.api.schemas import (
     CourseGenerationResponse,
     DocumentQueryRequest,
     DocumentQueryResponse,
+    FileInfo,
+    FileListResponse,
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
@@ -86,6 +88,17 @@ async def _ingest_single_pdf(
             documents_added=0,
         )
 
+    # Détection de doublon : vérifier si le fichier existe déjà dans le store
+    vector_store = request.app.state.vector_store
+    if vector_store.has_file(file.filename):
+        return PDFIngestResponse(
+            status="failed",
+            filename=file.filename,
+            chunks_added=0,
+            documents_added=0,
+            message="File already uploaded",
+        )
+
     try:
         content = await file.read()
         chunks = extract_pdf_chunks(content, file.filename, settings)
@@ -97,7 +110,7 @@ async def _ingest_single_pdf(
                 documents_added=0,
             )
 
-        added = await request.app.state.vector_store.add_chunks(chunks)
+        added = await vector_store.add_chunks(chunks)
         return PDFIngestResponse(
             status="ok",
             filename=file.filename,
@@ -162,6 +175,14 @@ async def search_pdf(
     )
 
     return DocumentQueryResponse(query=body.query, results=results)
+
+
+@router.get("/pdf/files", response_model=FileListResponse)
+async def list_files(request: Request) -> FileListResponse:
+    """Liste les fichiers PDF stockés dans le vector store."""
+    vector_store = request.app.state.vector_store
+    files = vector_store.list_files()
+    return FileListResponse(files=files)
 
 
 @router.post("/courses/generate", response_model=CourseGenerationResponse)
