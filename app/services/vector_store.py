@@ -95,3 +95,26 @@ class NumpyVectorStore:
                 "distance": 1.0 - similarity,
             })
         return results
+
+    def list_files(self) -> list[dict[str, Any]]:
+        """Retourne la liste des fichiers uniques dans le store avec un ID séquentiel.
+
+        L'ID est basé sur l'ordre d'apparition dans les documents (premier fichier = id 1).
+        """
+        seen: dict[str, int] = {}
+        files: list[dict[str, Any]] = []
+        next_id = 1
+        for doc in self._documents:
+            filename = doc.get('metadata', {}).get('filename')
+            if filename and filename not in seen:
+                seen[filename] = next_id
+                files.append({'id': next_id, 'filename': filename})
+                next_id += 1
+        return files
+
+    def has_file(self, filename: str) -> bool:
+        """Vérifie si un fichier avec le nom donné existe dans le store."""
+        return any(
+            doc.get('metadata', {}).get('filename') == filename
+            for doc in self._documents
+        )
