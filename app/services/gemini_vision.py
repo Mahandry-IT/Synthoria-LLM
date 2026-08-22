@@ -69,7 +69,7 @@ def extract_key_image_descriptions(pdf_bytes: bytes, api_key: str | None) -> lis
                 image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=f"image/{image_ext}")
 
                 response = client.models.generate_content(
-                    model="gemini-3.5-flash",
+                    model="gemini-2.0-flash",
                     contents=[image_part],
                     config=genai_types.GenerateContentConfig(system_instruction=instructions),
                 )

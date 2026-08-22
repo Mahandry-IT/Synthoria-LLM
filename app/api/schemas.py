@@ -31,6 +31,10 @@ class HealthResponse(BaseModel):
 class DocumentQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Question ou requête sur le PDF")
     top_k: int = Field(5, ge=1, le=20, description="Nombre de résultats vectoriels à renvoyer")
+    filename: str | list[str] | None = Field(
+        None,
+        description="Filtre optionnel sur un ou plusieurs noms de fichier ingérés.",
+    )
 
 
 class PDFIngestResponse(BaseModel):
@@ -38,6 +42,14 @@ class PDFIngestResponse(BaseModel):
     filename: str
     chunks_added: int
     documents_added: int
+
+
+class PDFIngestMultiResponse(BaseModel):
+    """Réponse agrégée pour l'ingestion multi-fichiers."""
+    status: str
+    files: list[PDFIngestResponse]
+    total_chunks: int
+    total_documents: int
 
 
 class DocumentQueryResponse(BaseModel):
@@ -112,8 +124,21 @@ COURSE_DEFAULT_QUESTION = "Explique moi le cours en complet"
 
 class CourseGenerationRequest(BaseModel):
     question: str | None = Field(None, description="Question de l'utilisateur")
+    mode: Literal["file_question", "question_only"] | None = Field(
+        None,
+        description=(
+            "Mode de génération. Si non fourni, auto-détecté : "
+            "file_question si filename est présent, question_only sinon."
+        ),
+    )
     top_k: int = Field(6, ge=1, le=20, description="Nombre de chunks à récupérer pour le contexte")
-    filename: str | None = Field(None, description="Filtre optionnel sur un document déjà ingéré")
+    filename: str | list[str] | None = Field(
+        None,
+        description=(
+            "Filtre optionnel sur un ou plusieurs documents déjà ingérés. "
+            "Accepte un seul nom de fichier (string) ou une liste de noms."
+        ),
+    )
 
 
 class CourseGenerationResponse(BaseModel):
@@ -124,12 +149,14 @@ class CourseGenerationResponse(BaseModel):
 
     # Uniquement pour format == "full_course"
     introduction: dict[str, str] | None = None
-    sections: list[CourseSection] | None = None
-    common_pitfalls: list[CoursePitfall] | None = None
-    quiz: list[QuizQuestion] | None = None
 
     # Uniquement pour format == "focused_answer"
     answer: CourseAnswer | None = None
+
+    # Uniquement pour format == "full_course"
+    sections: list[CourseSection] | None = None
+    common_pitfalls: list[CoursePitfall] | None = None
+    quiz: list[QuizQuestion] | None = None
 
     summary: str
     next_steps: list[str] = Field(default_factory=list)

@@ -6,8 +6,35 @@ from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError
 from app.services.course_generator import generate_course_from_question
 
-VALID_STRUCTURED_ANSWER = {
+VALID_STRUCTURED_ANSWER_FILE = {
     "mode": "file_question",
+    "format": "focused_answer",
+    "meta": {
+        "title": "Transformateur",
+        "subject": "Electrotechnique",
+        "language": "fr",
+        "generated_at": "2026-08-19T10:00:00Z",
+    },
+    "sources": [{"type": "file_chunk", "label": "doc.pdf", "reference": "doc_1_chunk_0"}],
+    "sections": [
+        {
+            "type": "development",
+            "title": "Le transformateur",
+            "blocks": [],
+            "subsections": [
+                {"title": "Quoi", "blocks": [{"type": "text", "text": "definition"}]},
+                {"title": "Pourquoi", "blocks": [{"type": "text", "text": "raison"}]},
+                {"title": "Comment", "blocks": [{"type": "text", "text": "mecanisme"}]},
+            ],
+        },
+    ],
+    "quiz": [],
+    "confidence": "high",
+    "unconfirmed_points": [],
+}
+
+VALID_STRUCTURED_ANSWER_QUESTION_ONLY = {
+    "mode": "question_only",
     "format": "focused_answer",
     "meta": {
         "title": "Transformateur",
@@ -57,7 +84,7 @@ def vector_store():
 def gemini_client():
     client = AsyncMock()
     client.search_grounded.return_value = ("réponse brute", [{"type": "web", "label": "W", "reference": "https://w"}])
-    client.format_structured.return_value = VALID_STRUCTURED_ANSWER.copy()
+    client.format_structured.return_value = VALID_STRUCTURED_ANSWER_FILE.copy()
     return client
 
 
@@ -83,10 +110,11 @@ async def test_generate_course_file_question_happy_path(settings, vector_store, 
 
 @pytest.mark.asyncio
 async def test_generate_course_filters_by_filename(settings, gemini_client):
+    """Le filtre filename doit être transmis à vector_store.search (pré-filtrage
+    côté store), et non ré-appliqué après coup par l'orchestrateur."""
     vector_store = AsyncMock()
     vector_store.search.return_value = [
         {"content": "a", "metadata": {"filename": "doc1.pdf", "page": 1}, "distance": 0.1},
-        {"content": "b", "metadata": {"filename": "doc2.pdf", "page": 1}, "distance": 0.2},
     ]
 
     await generate_course_from_question(
@@ -97,9 +125,12 @@ async def test_generate_course_filters_by_filename(settings, gemini_client):
         filename="doc1.pdf",
     )
 
+    vector_store.search.assert_awaited_once()
+    search_kwargs = vector_store.search.call_args.kwargs
+    assert search_kwargs["filename_filter"] == "doc1.pdf"
+    assert search_kwargs["top_k"] == settings.course_top_k_default
     prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
     assert "doc1.pdf" in prompt_used
-    assert "doc2.pdf" not in prompt_used
 
 
 @pytest.mark.asyncio
@@ -145,3 +176,175 @@ async def test_generate_course_invalid_structured_response_raises(settings, vect
             gemini_client=gemini_client,
             settings=settings,
         )
+
+
+# --- Mode 3 : question_only (recherche web, pas de RAG) ---
+
+
+@pytest.fixture
+def gemini_client_question_only():
+    client = AsyncMock()
+    client.search_grounded.return_value = (
+        "reponse brute web",
+        [{"type": "web", "label": "W", "reference": "https://w"}],
+    )
+    client.format_structured.return_value = VALID_STRUCTURED_ANSWER_QUESTION_ONLY.copy()
+    return client
+
+
+@pytest.mark.asyncio
+async def test_generate_course_question_only_with_grounding(
+    settings, gemini_client_question_only
+):
+    """question_only + search grounding : search_grounded appele, vector_store non."""
+    vector_store = AsyncMock()
+
+    result = await generate_course_from_question(
+        question="Qu'est-ce que l'IA ?",
+        vector_store=vector_store,
+        gemini_client=gemini_client_question_only,
+        settings=settings,
+        mode="question_only",
+    )
+
+    assert result.mode == "question_only"
+    vector_store.search.assert_not_awaited()
+    gemini_client_question_only.search_grounded.assert_awaited_once()
+    gemini_client_question_only.format_structured.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_course_question_only_no_grounding(
+    settings_no_grounding, gemini_client_question_only
+):
+    """question_only sans search grounding : 1 seul appel format_structured."""
+    vector_store = AsyncMock()
+
+    result = await generate_course_from_question(
+        question="Question simple",
+        vector_store=vector_store,
+        gemini_client=gemini_client_question_only,
+        settings=settings_no_grounding,
+        mode="question_only",
+    )
+
+    assert result.mode == "question_only"
+    vector_store.search.assert_not_awaited()
+    gemini_client_question_only.search_grounded.assert_not_awaited()
+    gemini_client_question_only.format_structured.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_course_question_only_prompt_no_rag_context(
+    settings, gemini_client_question_only
+):
+    """Le prompt ne doit pas mentionner de contexte RAG pour question_only."""
+    vector_store = AsyncMock()
+
+    await generate_course_from_question(
+        question="Explique la regression",
+        vector_store=vector_store,
+        gemini_client=gemini_client_question_only,
+        settings=settings,
+        mode="question_only",
+    )
+
+    prompt_used = gemini_client_question_only.search_grounded.call_args.kwargs["prompt"]
+    assert "Contexte extrait des documents" not in prompt_used
+    assert "Regression" in prompt_used or "regression" in prompt_used.lower()
+
+
+# --- Multi-file search ---
+
+
+@pytest.mark.asyncio
+async def test_generate_course_multi_file_separate_searches(settings):
+    """Avec filename=list, vector_store.search est appele une fois par fichier."""
+    vector_store = AsyncMock()
+    # Chaque appel retourne des chunks differents par fichier
+    vector_store.search.side_effect = [
+        [{"content": "chunk gradient", "metadata": {"filename": "gradient.pdf", "page": 1}, "distance": 0.1}],
+        [{"content": "chunk regression", "metadata": {"filename": "regression.pdf", "page": 1}, "distance": 0.15}],
+    ]
+    gemini_client = AsyncMock()
+    gemini_client.search_grounded.return_value = ("reponse", [])
+    gemini_client.format_structured.return_value = VALID_STRUCTURED_ANSWER_FILE.copy()
+
+    await generate_course_from_question(
+        question="Compare les deux cours",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename=["gradient.pdf", "regression.pdf"],
+    )
+
+    # 2 appels search (un par fichier)
+    assert vector_store.search.await_count == 2
+    # Chaque appel doit filtrer sur SON fichier (pas de recherche globale
+    # partagée qui écraserait les fichiers non dominants) : régression du
+    # bug où seul le premier fichier finissait dans le contexte.
+    called_filters = [c.kwargs["filename_filter"] for c in vector_store.search.await_args_list]
+    assert set(called_filters) == {"gradient.pdf", "regression.pdf"}
+    # Les deux chunks sont dans le contexte
+    prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
+    assert "chunk gradient" in prompt_used
+    assert "chunk regression" in prompt_used
+
+
+@pytest.mark.asyncio
+async def test_generate_course_multi_file_real_store_both_files_represented(settings, gemini_client):
+    """Régression bout-en-bout : avec un vrai NumpyVectorStore (pas de mock),
+    deux fichiers ingérés doivent tous les deux apparaître dans le contexte,
+    même si l'un des deux est globalement plus proche de la question pour
+    TOUS ses chunks (cas qui reproduit le bug rapporté)."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from app.services.vector_store import NumpyVectorStore
+
+    gemini_client.reformulate_query.return_value = "requete de recherche"
+
+    ollama_client = _AsyncMock()
+    # La requête reformulée s'aligne parfaitement avec les chunks de
+    # "dominant.pdf" ; "minoritaire.pdf" a une similarité plus faible mais
+    # doit quand même être représenté dans le contexte grâce au filtrage
+    # par fichier AVANT le classement top_k (le bug reproduit ici serait
+    # de ne récupérer que dominant.pdf).
+    ollama_client.embed.side_effect = lambda text: (
+        [1.0, 0.0] if text == "requete de recherche" else [0.0, 1.0]
+    )
+
+    store = NumpyVectorStore(settings=settings, ollama_client=ollama_client)
+    store._documents = [
+        {
+            "id": "1",
+            "content": "extrait dominant 1",
+            "metadata": {"filename": "dominant.pdf", "page": 1},
+            "embedding": [1.0, 0.0],
+        },
+        {
+            "id": "2",
+            "content": "extrait dominant 2",
+            "metadata": {"filename": "dominant.pdf", "page": 2},
+            "embedding": [0.99, 0.05],
+        },
+        {
+            "id": "3",
+            "content": "extrait minoritaire",
+            "metadata": {"filename": "minoritaire.pdf", "page": 1},
+            "embedding": [0.0, 1.0],
+        },
+    ]
+
+    from app.services.course_generator import generate_course_from_question
+
+    await generate_course_from_question(
+        question="Donne moi le cours complet",
+        vector_store=store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename=["dominant.pdf", "minoritaire.pdf"],
+    )
+
+    prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
+    assert "extrait minoritaire" in prompt_used
+    assert "dominant" in prompt_used

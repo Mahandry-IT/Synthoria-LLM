@@ -9,6 +9,7 @@ from app.api.schemas import (
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
+    PDFIngestMultiResponse,
     PDFIngestResponse,
 )
 from app.core.config import Settings, get_settings
@@ -71,29 +72,79 @@ async def generate(
     )
 
 
-@router.post("/pdf/ingest", response_model=PDFIngestResponse)
+async def _ingest_single_pdf(
+    request: Request,
+    file: UploadFile,
+    settings: Settings,
+) -> PDFIngestResponse:
+    """Ingestion d'un seul fichier PDF — logique partagée single/multi."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        return PDFIngestResponse(
+            status="error",
+            filename=file.filename or "unknown",
+            chunks_added=0,
+            documents_added=0,
+        )
+
+    try:
+        content = await file.read()
+        chunks = extract_pdf_chunks(content, file.filename, settings)
+        if not chunks:
+            return PDFIngestResponse(
+                status="error",
+                filename=file.filename,
+                chunks_added=0,
+                documents_added=0,
+            )
+
+        added = await request.app.state.vector_store.add_chunks(chunks)
+        return PDFIngestResponse(
+            status="ok",
+            filename=file.filename,
+            chunks_added=added,
+            documents_added=len(chunks),
+        )
+    except Exception as exc:
+        return PDFIngestResponse(
+            status="error",
+            filename=file.filename or "unknown",
+            chunks_added=0,
+            documents_added=0,
+        )
+
+
+@router.post("/pdf/ingest")
 async def ingest_pdf(
     request: Request,
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     settings: Settings = Depends(get_settings),
-) -> PDFIngestResponse:
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Un fichier PDF est requis")
+) -> dict:
+    """Ingestion de un ou plusieurs fichiers PDF dans le vector store.
 
-    content = await file.read()
-    chunks = extract_pdf_chunks(content, file.filename, settings)
-    if not chunks:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Aucun contenu exploitable trouvé dans le PDF")
+    Retourne toujours PDFIngestMultiResponse (compatible 1 ou N fichiers).
+    """
+    results: list[PDFIngestResponse] = []
+    for file in files:
+        results.append(await _ingest_single_pdf(request, file, settings))
 
-    vector_store = request.app.state.vector_store
-    added = await vector_store.add_chunks(chunks)
+    if not results:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Aucun fichier PDF fourni",
+        )
 
-    return PDFIngestResponse(
+    # Rétrocompatibilité : si un seul fichier envoyé et succès, format simple
+    if len(files) == 1 and results[0].status == "ok":
+        return results[0].model_dump()
+
+    total_chunks = sum(r.chunks_added for r in results)
+    total_docs = sum(r.documents_added for r in results)
+    return PDFIngestMultiResponse(
         status="ok",
-        filename=file.filename,
-        chunks_added=added,
-        documents_added=len(chunks),
-    )
+        files=results,
+        total_chunks=total_chunks,
+        total_documents=total_docs,
+    ).model_dump()
 
 
 @router.post("/pdf/search", response_model=DocumentQueryResponse)
@@ -101,8 +152,15 @@ async def search_pdf(
     request: Request,
     body: DocumentQueryRequest,
 ) -> DocumentQueryResponse:
+    """Recherche vectorielle avec filtre optionnel sur un ou plusieurs fichiers."""
     vector_store = request.app.state.vector_store
-    results = await vector_store.search(body.query, top_k=body.top_k)
+    # Le filtre filename est appliqué côté vector_store, avant le classement
+    # top_k : garantit que chaque fichier ciblé est effectivement représenté,
+    # au lieu de dépendre d'un sur-échantillonnage suivi d'un post-filtrage.
+    results = await vector_store.search(
+        body.query, top_k=body.top_k, filename_filter=body.filename
+    )
+
     return DocumentQueryResponse(query=body.query, results=results)
 
 
@@ -113,13 +171,21 @@ async def generate_course(
     gemini_client: GeminiClient = Depends(get_gemini_client),
     settings: Settings = Depends(get_settings),
 ) -> CourseGenerationResponse:
-    """Mode 2 (fichier + question) : retrieval local puis génération Gemini (2 appels)."""
+    """Mode 2 (fichier + question) ou Mode 3 (question seule + recherche web)."""
     question = (body.question or "").strip() or COURSE_DEFAULT_QUESTION
     if len(question) > settings.course_question_max_length:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"question trop longue (max {settings.course_question_max_length} caractères)",
         )
+
+    # Auto-détection du mode : explicite > filename → file_question > question_only
+    if body.mode:
+        resolved_mode = body.mode
+    elif body.filename:
+        resolved_mode = "file_question"
+    else:
+        resolved_mode = "question_only"
 
     vector_store = request.app.state.vector_store
 
@@ -129,7 +195,7 @@ async def generate_course(
             vector_store=vector_store,
             gemini_client=gemini_client,
             settings=settings,
-            mode="file_question",
+            mode=resolved_mode,
             top_k=body.top_k,
             filename=body.filename,
         )

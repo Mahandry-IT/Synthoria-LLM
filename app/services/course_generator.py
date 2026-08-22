@@ -38,13 +38,6 @@ def _get_teacher_instructions() -> str:
     return _teacher_instructions_cache
 
 
-def _filter_by_filename(chunks: list[dict[str, Any]], filename: str | None) -> list[dict[str, Any]]:
-    """Filtre les chunks retrouvés sur un nom de fichier (post-filtrage, le store n'a pas d'index natif)."""
-    if not filename:
-        return chunks
-    return [c for c in chunks if c.get("metadata", {}).get("filename") == filename]
-
-
 def _build_context_block(chunks: list[dict[str, Any]]) -> str:
     if not chunks:
         return "Aucun extrait de fichier pertinent trouvé pour cette question."
@@ -237,15 +230,14 @@ _MODE_TO_FORMAT: dict[str, str] = {
 
 
 def _coerce_known_format(structured: dict[str, Any], mode: str) -> dict[str, Any]:
-    """`format` est entièrement dérivé de `mode` — full_course n'existe pour
-    l'instant que pour un futur mode fichier-seul non branché sur Gemini.
+    """Corrige les champs `mode` et `format` qui sont entièrement dérivés du
+    mode réel passé en paramètre — Gemini a tendance à les halluciner.
 
-    Gemini a tendance à halluciner 'full_course' quand la question ressemble
-    à 'explique le cours en complet', alors que le mode réel (file_question/
-    question_only) impose focused_answer. On écrase donc la valeur côté code
-    plutôt que de dépendre du modèle : ça élimine la classe d'erreur au lieu
-    de la détecter, et évite de perdre un appel Gemini sur une regénération.
+    On écrase ces valeurs côté code plutôt que de dépendre du modèle :
+    ça élimine la classe d'erreur au lieu de la détecter, et évite de
+    perdre un appel Gemini sur une regénération.
     """
+    structured["mode"] = mode
     expected = _MODE_TO_FORMAT.get(mode)
     if expected is not None:
         structured["format"] = expected
@@ -271,7 +263,7 @@ async def generate_course_from_question(
     settings: Settings,
     mode: str = "file_question",
     top_k: int | None = None,
-    filename: str | None = None,
+    filename: str | list[str] | None = None,
 ) -> CourseGenerationResponse:
     """
     Orchestration RAG + génération de cours structuré.
@@ -281,14 +273,16 @@ async def generate_course_from_question(
         vector_store: store vectoriel local (retrieval top-k).
         gemini_client: client Gemini.
         settings: configuration applicative.
-        mode: "file_question" (Mode 2) ou "question_only" (Mode 3, préparé mais non branché).
+        mode: "file_question" (Mode 2, retrieval RAG) ou "question_only" (Mode 3, recherche web).
         top_k: nombre de chunks à récupérer (défaut settings.course_top_k_default).
-        filename: filtre optionnel sur un document déjà ingéré.
+        filename: filtre optionnel — un nom (str), une liste de noms, ou None.
 
     Retour: CourseGenerationResponse validé.
 
     Fonctionnement:
         1. Retrieval des chunks pertinents dans le vector store local (sauf mode question_only).
+           - Si filename est une liste : recherche séparée par fichier + fusion équilibrée.
+           - Si filename est un str ou None : recherche unique.
         2. Si gemini_use_search_grounding=True : 2 appels (search_grounded + format_structured).
            Sinon : 1 seul appel (format_structured direct avec contexte RAG).
 
@@ -296,25 +290,66 @@ async def generate_course_from_question(
     """
     resolved_top_k = top_k or settings.course_top_k_default
 
+    # Reformulation de la query pour améliorer le matching sémantique
+    search_query = await gemini_client.reformulate_query(question, filename)
+
     chunks: list[dict[str, Any]] = []
     if mode != "question_only":
-        raw_chunks = await vector_store.search(question, top_k=resolved_top_k)
-        chunks = _filter_by_filename(raw_chunks, filename)
+        # Si plusieurs fichiers : recherche séparée par fichier pour assurer
+        # une représentation équilibrée de chaque document.
+        if isinstance(filename, list) and len(filename) > 1:
+            per_file_k = max(resolved_top_k // len(filename), 5)
+            all_chunks: list[dict[str, Any]] = []
+            for fname in filename:
+                # Le filtre filename_filter restreint les candidats AVANT le
+                # classement top_k : chaque fichier obtient ses propres chunks
+                # les plus pertinents, au lieu de puiser dans un même top_k
+                # global (ce qui écrasait les fichiers non dominants).
+                file_chunks = await vector_store.search(
+                    search_query, top_k=per_file_k, filename_filter=fname
+                )
+                all_chunks.extend(file_chunks)
+            # Dé-duplication (un chunk peut matcher dans plusieurs recherches)
+            seen: set[str] = set()
+            chunks = []
+            for c in all_chunks:
+                # Les chunks n'ont pas de champ 'id' dans les résultats de search
+                cid = c.get("content", "")[:200]
+                if cid not in seen:
+                    seen.add(cid)
+                    chunks.append(c)
+            # Limiter au top_k global
+            chunks = chunks[:resolved_top_k]
+        else:
+            chunks = await vector_store.search(
+                search_query, top_k=resolved_top_k, filename_filter=filename
+            )
 
     context_block = _build_context_block(chunks)
     file_sources = _file_sources_from_chunks(chunks)
     system_instruction = _get_teacher_instructions()
 
+    is_question_only = mode == "question_only"
+
     # --- Mode 1 appel (pas de recherche web, quota minima) ---
     if not settings.gemini_use_search_grounding:
-        prompt = (
-            f'mode="{mode}"\n'
-            f"Question de l'utilisateur : {question}\n\n"
-            f"Contexte extrait des documents fournis :\n{context_block}\n\n"
-            f"Sources fichier disponibles : {file_sources}\n"
-            f"Sources web disponibles : []\n\n"
-            f"Génère directement le JSON structuré selon le schéma fourni."
-        )
+        if is_question_only:
+            prompt = (
+                f'mode="{mode}"\n'
+                f"Question de l'utilisateur : {question}\n\n"
+                f"Sources fichier disponibles : []\n"
+                f"Sources web disponibles : []\n\n"
+                f"Génère directement le JSON structuré selon le schéma fourni."
+            )
+        else:
+            prompt = (
+                f'mode="{mode}"\n'
+                f"Question de l'utilisateur : {question}\n\n"
+                f"Contexte extrait des documents fournis :\n{context_block}\n\n"
+                f"Sources fichier disponibles : {file_sources}\n"
+                f"Sources web disponibles : []\n\n"
+                f"Génère directement le JSON structuré selon le schéma fourni."
+            )
         structured = await gemini_client.format_structured(
             raw_answer=prompt,
             system_instruction=system_instruction,
@@ -323,11 +358,14 @@ async def generate_course_from_question(
         return _validate_and_map(structured, mode)
 
     # --- Mode 2 appels (search grounding + reformatage) ---
-    prompt = (
-        f"Question de l'utilisateur : {question}\n\n"
-        f"Contexte extrait des documents fournis (à compléter par une recherche web si nécessaire) :\n"
-        f"{context_block}"
-    )
+    if is_question_only:
+        prompt = f"Question de l'utilisateur : {question}"
+    else:
+        prompt = (
+            f"Question de l'utilisateur : {question}\n\n"
+            f"Contexte extrait des documents fournis (à compléter par une recherche web si nécessaire) :\n"
+            f"{context_block}"
+        )
 
     raw_answer, web_sources = await gemini_client.search_grounded(
         prompt=prompt,

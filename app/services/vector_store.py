@@ -52,14 +52,36 @@ class NumpyVectorStore:
         self._save()
         return len(chunks)
 
-    async def search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        filename_filter: str | list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Recherche par similarité cosinus, avec filtre optionnel sur filename.
+
+        Le filtre est appliqué AVANT le classement/troncature top_k (pré-filtrage),
+        et non après : filtrer après troncature ferait perdre des chunks pertinents
+        d'un fichier si un autre fichier domine le classement global.
+        """
         if not self._documents:
             return []
+
+        candidates = self._documents
+        if filename_filter:
+            allowed = (
+                {filename_filter} if isinstance(filename_filter, str) else set(filename_filter)
+            )
+            candidates = [
+                r for r in self._documents if r.get("metadata", {}).get("filename") in allowed
+            ]
+            if not candidates:
+                return []
 
         query_embedding = await self._ollama_client.embed(query)
         scored: list[tuple[float, dict[str, Any]]] = []
 
-        for record in self._documents:
+        for record in candidates:
             score = self._cosine_similarity(query_embedding, record["embedding"])
             scored.append((score, record))
 
