@@ -226,3 +226,8 @@ async def generate_course(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except GeminiInvalidResponseError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except (OllamaUnavailableError, OllamaModelNotFoundError) as exc:
+        # Levée par vector_store.search() -> ollama_client.embed() lors du
+        # retrieval RAG (Mode 2). Non capturée avant ce correctif : partait
+        # en 500 non géré au lieu d'un 503 explicite côté client.
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
