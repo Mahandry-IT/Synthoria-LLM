@@ -63,25 +63,35 @@ class OllamaClient:
         ) from last_error
 
     async def embed(self, text: str, model: str | None = None) -> list[float]:
-        """Retourne un vecteur d'embedding via l'API d'Ollama."""
+        """Retourne un vecteur d'embedding via l'API d'Ollama.
+
+        Utilise le endpoint /api/embed (Ollama ≥ 0.9) — l'ancien
+        /api/embeddings retourne un tableau vide sur les versions récentes.
+        Fallback automatique si le nouveau endpoint n'est pas disponible.
+        """
         payload = {"model": model or self._settings.ollama_embedding_model, "input": text}
         last_error: Exception | None = None
 
         for attempt in range(self._settings.ollama_max_retries):
             try:
-                response = await self._client.post("/api/embeddings", json=payload)
+                response = await self._client.post("/api/embed", json=payload)
+                if response.status_code == 404:
+                    # Fallback: ancien endpoint pour Ollama < 0.9
+                    response = await self._client.post("/api/embeddings", json=payload)
                 if response.status_code == 404:
                     raise OllamaModelNotFoundError(f"Modèle d'embedding introuvable: {payload['model']}")
                 response.raise_for_status()
                 data = response.json()
 
                 if isinstance(data, dict):
-                    if "embedding" in data and isinstance(data["embedding"], list):
-                        return data["embedding"]
+                    # /api/embed → {"embeddings": [[...]]}
                     if "embeddings" in data and isinstance(data["embeddings"], list):
                         first = data["embeddings"][0]
-                        if isinstance(first, list):
+                        if isinstance(first, list) and first:
                             return first
+                    # Fallback ancien format → {"embedding": [...]}
+                    if "embedding" in data and isinstance(data["embedding"], list) and data["embedding"]:
+                        return data["embedding"]
                 raise ValueError("Format de réponse embedding inattendu")
             except (OllamaModelNotFoundError, ValueError):
                 raise
