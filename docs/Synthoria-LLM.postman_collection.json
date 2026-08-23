@@ -8,6 +8,11 @@
     {
       "key": "baseUrl",
       "value": "http://localhost:8000"
+    },
+    {
+      "key": "sessionId",
+      "value": "",
+      "description": "UUID d'une session de cours (remplir après un POST /courses/generate)"
     }
   ],
   "item": [
@@ -348,6 +353,57 @@
               "raw": "{\n  \"question\": \"Qu'est-ce que la régression linéaire ?\"\n}"
             },
             "description": "Mode 3 : pas de `filename` → auto-détecté en question_only. Gemini utilise la recherche web pour trouver l'information.\n\nCodes de retour:\n- 200 : succès\n- 429 : quota Gemini dépassé\n- 500/502/503 : erreur Gemini"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /courses/history",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/history?page=1&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Numéro de page (défaut: 1)"
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Éléments par page (défaut: 20, max: 100)"
+                }
+              ]
+            },
+            "description": "Historique paginé des sessions de génération de cours.\n\nRéponse : { status, data: [{ id, created_at, question, filenames, mode }], meta: { page, limit, total, totalPages } }\n\nCodes de retour :\n- 200 : succès\n- 400 : paramètre invalide"
+          },
+          "response": []
+        },
+        {
+          "name": "GET /courses/history/{id}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/history/{{sessionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "history",
+                "{{sessionId}}"
+              ]
+            },
+            "description": "Détail d'une session de cours avec la réponse Gemini complète.\n\nRéponse : { id, created_at, question, filenames, mode, gemini_response: CourseGenerationResponse }\n\nCodes de retour :\n- 200 : succès\n- 404 : session introuvable\n- 422 : UUID malformé"
           },
           "response": []
         }

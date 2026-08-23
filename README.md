@@ -10,6 +10,7 @@ API FastAPI dédiée à l'ingestion et à la recherche de documents PDF via une 
 - **Gemini Vision** pour les images clés (optionnel si `GEMINI_API_KEY` est fourni)
 - **Ollama** pour les embeddings locaux (`nomic-embed-text`) et le modèle de génération
 - **Stockage vectoriel local léger** (JSON + embeddings NumPy, sans dépendance native C++)
+- **PostgreSQL 16** pour l'historique des sessions de cours (SQLAlchemy async + asyncpg)
 - **Rate limiting** et **CORS** configurables
 - Tests **pytest**
 
@@ -35,6 +36,7 @@ docker compose up -d --build
 Le docker compose démarre :
 - l'API FastAPI sur `http://localhost:8000`
 - Ollama sur `http://localhost:11434`
+- PostgreSQL sur `localhost:5432`
 - un conteneur d'initialisation qui télécharge les modèles nécessaires
 
 Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama :
@@ -49,7 +51,9 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | POST | `/generate` | Génère une réponse à partir d'un prompt classique |
 | POST | `/pdf/ingest` | Envoie un fichier PDF, extrait ses blocs, les découpe et les indexe dans le stockage local |
 | POST | `/pdf/search` | Recherche sémantique dans les documents déjà indexés |
-| POST | `/courses/generate` | Génère un cours structuré (JSON). **Mode 2** (fichier + question) si `filename` fourni, **Mode 3** (question seule + recherche web) sinon. Le mode peut être forcé avec `"mode": "file_question"` ou `"mode": "question_only"`. |
+| POST | `/courses/generate` | Génère un cours structuré (JSON). **Mode 2** (fichier + question) si `filename` fourni, **Mode 3** (question seule + recherche web) sinon. Session persistée en DB (best-effort). |
+| GET | `/courses/history?page=1&limit=20` | Historique paginé des sessions de cours (UUID, date, question, fichiers, mode) |
+| GET | `/courses/history/{id}` | Détail d'une session avec la réponse Gemini complète |
 
 ### Tester l'API
 
@@ -76,7 +80,10 @@ GEMINI_MAX_RETRIES=3
 GEMINI_TIMEOUT_SECONDS=30
 COURSE_TOP_K_DEFAULT=6
 COURSE_QUESTION_MAX_LENGTH=2000
+DATABASE_URL=postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
 ```
+
+> `DATABASE_URL` pointe vers le conteneur PostgreSQL du compose. Pour un dev local sans Docker, ajustez l'URL (ex. `postgresql+asyncpg://user:pass@localhost:5432/synthoria`).
 
 > `GEMINI_API_KEY` est optionnel. Sans clé, l'extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative.
 
@@ -98,14 +105,18 @@ pytest -v
 
 ```text
 app/
-├── api/          # routes + schémas FastAPI
-├── core/         # configuration, exceptions, rate limiting
-├── services/     # Ollama, chunking, extraction PDF, vector store, Gemini Vision
-├── main.py       # bootstrap FastAPI
+├── api/              # routes + schémas FastAPI
+├── core/             # configuration, exceptions, rate limiting
+├── db/               # SQLAlchemy models + session async
+├── repositories/     # accès aux données (course sessions)
+├── services/         # Ollama, chunking, extraction PDF, vector store, Gemini Vision
+├── main.py           # bootstrap FastAPI
 ├── __init__.py
 docs/
 ├── Synthoria-LLM.postman_collection.json  # collection Postman
 instruction/
-├── vision_instructions.md  # instructions système Gemini pour séparer images utiles / non utiles
+├── vision_instructions.md  # instructions système Gemini
+migrations/
+├── versions/         # migrations Alembic (PostgreSQL)
 └── ...
 ```

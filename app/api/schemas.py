@@ -1,6 +1,40 @@
-from typing import Literal
+from typing import Any, Generic, Literal, TypeVar
+from uuid import UUID
 
+from fastapi import Query
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+T = TypeVar("T")
+
+
+class PageParams:
+    """FastAPI dependency — paramètres de pagination standardisés."""
+
+    def __init__(
+        self,
+        page: int = Query(1, ge=1, description="Numéro de page (commence à 1)"),
+        limit: int = Query(20, ge=1, le=100, description="Nombre d'éléments par page (1-100)"),
+    ) -> None:
+        self.page = max(page, 1)
+        self.limit = min(limit, 100)
+
+    @property
+    def offset(self) -> int:
+        return (self.page - 1) * self.limit
+
+
+class PaginationMeta(BaseModel):
+    page: int = Field(..., description="Page courante")
+    limit: int = Field(..., description="Taille de page")
+    total: int = Field(..., description="Nombre total d'éléments")
+    totalPages: int = Field(..., description="Nombre total de pages")
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Réponse paginée générique."""
+    status: str = "ok"
+    data: list[T]
+    meta: PaginationMeta
 
 
 class GenerateRequest(BaseModel):
@@ -60,9 +94,10 @@ class FileInfo(BaseModel):
 
 
 class FileListResponse(BaseModel):
-    """Réponse de l'endpoint GET /pdf/files."""
+    """Réponse de l'endpoint GET /pdf/files (paginée)."""
     status: str = "ok"
-    files: list[FileInfo]
+    data: list[FileInfo]
+    meta: PaginationMeta
 
 
 
@@ -182,3 +217,25 @@ class CourseGenerationResponse(BaseModel):
         if self.format == "focused_answer" and self.answer is None:
             raise ValueError("format='focused_answer' nécessite 'answer'")
         return self
+
+
+# --- Historique des sessions de cours (PostgreSQL) ---
+
+
+class CourseHistoryItem(BaseModel):
+    """Élément de la liste paginée de l'historique (sans gemini_response)."""
+    id: UUID
+    created_at: str
+    question: str
+    filenames: list[str]
+    mode: str
+
+
+class CourseHistoryDetail(BaseModel):
+    """Détail d'une session de cours (avec gemini_response)."""
+    id: UUID
+    created_at: str
+    question: str
+    filenames: list[str]
+    mode: str
+    gemini_response: CourseGenerationResponse
