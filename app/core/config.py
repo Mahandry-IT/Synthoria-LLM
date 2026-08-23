@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     pdf_chunk_target_tokens: int = 400
     pdf_chunk_overlap_tokens: int = 50
     gemini_api_key: str | None = None
-    gemini_model_flash: str = "gemini-3.5-flash"
-    gemini_model_flash_lite: str = "gemini-3.6-flash-lite"
+    gemini_model_flash: str = "gemini-3.6-flash"
+    gemini_model_flash_lite: str = "gemini-3.5-flash-lite"
     gemini_max_retries: int = 3
     gemini_timeout_seconds: float = 30.0
     course_top_k_default: int = 6
