@@ -180,7 +180,7 @@ class CourseGenerationRequest(BaseModel):
             "file_question si filename est présent, question_only sinon."
         ),
     )
-    top_k: int = Field(6, ge=1, le=20, description="Nombre de chunks à récupérer pour le contexte")
+    top_k: int = Field(20, ge=1, le=20, description="Nombre de chunks à récupérer pour le contexte")
     filename: str | list[str] | None = Field(
         None,
         description=(
