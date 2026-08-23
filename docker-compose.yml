@@ -23,6 +23,9 @@ services:
     restart: unless-stopped
     volumes:
       - chroma-data:/data
+    networks:
+      - default
+      - synthoria-net   # ajouté : accessible depuis Studio
 
   ollama:
     image: ollama/ollama:latest
@@ -87,6 +90,11 @@ services:
     volumes:
       - chroma-data:/chroma/chroma
     restart: unless-stopped
+    
+networks:
+  default:
+  synthoria-net:
+    external: true
 
 volumes:
   ollama-data:
