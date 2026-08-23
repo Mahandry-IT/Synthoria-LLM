@@ -221,16 +221,28 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/pdf/files",
+              "raw": "{{baseUrl}}/pdf/files?page=1&limit=20",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "pdf",
                 "files"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Numéro de page (commence à 1, défaut: 1)"
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Nombre d'éléments par page (1-100, défaut: 20)"
+                }
               ]
             },
-            "description": "Liste les fichiers PDF stockés dans le vector store. Retourne FileListResponse { status, files: [{ id, filename }] }.\n\nChaque fichier reçoit un ID séquentiel (1, 2, 3...) basé sur l'ordre d'insertion.\n\nCodes de retour:\n- 200 : succès"
+            "description": "Liste les fichiers PDF stockés dans le vector store (paginé).\n\nParamètres de query :\n- page (int, défaut 1) : numéro de page\n- limit (int, défaut 20, max 100) : taille de page\n\nRéponse : { status, data: [{ id, filename }], meta: { page, limit, total, totalPages } }\n\nCodes de retour :\n- 200 : succès\n- 400 : paramètre invalide"
           },
           "response": []
         }

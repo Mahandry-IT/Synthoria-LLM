@@ -123,7 +123,7 @@ def test_ingest_new_file_no_duplicate(client):
 
 
 def test_list_files_endpoint(client):
-    """GET /pdf/files retourne la liste des fichiers."""
+    """GET /pdf/files retourne la liste paginée des fichiers."""
     app.state.vector_store.list_files.return_value = [
         {"id": 1, "filename": "doc1.pdf"},
         {"id": 2, "filename": "doc2.pdf"},
@@ -134,11 +134,14 @@ def test_list_files_endpoint(client):
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"
-    assert len(data["files"]) == 2
-    assert data["files"][0]["id"] == 1
-    assert data["files"][0]["filename"] == "doc1.pdf"
-    assert data["files"][1]["id"] == 2
-    assert data["files"][1]["filename"] == "doc2.pdf"
+    assert len(data["data"]) == 2
+    assert data["data"][0]["id"] == 1
+    assert data["data"][0]["filename"] == "doc1.pdf"
+    assert data["data"][1]["id"] == 2
+    assert data["data"][1]["filename"] == "doc2.pdf"
+    assert data["meta"]["page"] == 1
+    assert data["meta"]["total"] == 2
+    assert data["meta"]["totalPages"] == 1
 
 
 def test_list_files_empty(client):
@@ -150,4 +153,6 @@ def test_list_files_empty(client):
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"
-    assert data["files"] == []
+    assert data["data"] == []
+    assert data["meta"]["total"] == 0
+    assert data["meta"]["totalPages"] == 1
