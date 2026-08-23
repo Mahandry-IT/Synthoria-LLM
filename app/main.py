@@ -8,6 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.rate_limit import RateLimitMiddleware
+from app.db.base import Base
+from app.db.session import create_engine
+from app.db.models import CourseSession  # noqa: F401 — ensure Base.metadata knows the model
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.vector_store import NumpyVectorStore
@@ -26,7 +29,17 @@ async def lifespan(app: FastAPI):
     app.state.ollama_client = OllamaClient(settings)
     app.state.vector_store = NumpyVectorStore(settings, app.state.ollama_client)
     app.state.gemini_client = GeminiClient(settings)
+
+    # PostgreSQL async engine + auto-create tables
+    engine, session_factory = create_engine(settings)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    app.state.db_engine = engine
+    app.state.db_session_factory = session_factory
+
     yield
+
+    await engine.dispose()
     await app.state.ollama_client.close()
 
 

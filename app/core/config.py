@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     course_top_k_default: int = 6
     course_question_max_length: int = 2000
     gemini_use_search_grounding: bool = True
+    database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
 
 
 @lru_cache

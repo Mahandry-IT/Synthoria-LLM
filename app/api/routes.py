@@ -1,16 +1,24 @@
+import logging
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.schemas import (
     COURSE_DEFAULT_QUESTION,
     CourseGenerationRequest,
     CourseGenerationResponse,
+    CourseHistoryDetail,
+    CourseHistoryItem,
     DocumentQueryRequest,
     DocumentQueryResponse,
-    FileInfo,
     FileListResponse,
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
+    PageParams,
+    PaginatedResponse,
+    PaginationMeta,
     PDFIngestMultiResponse,
     PDFIngestResponse,
 )
@@ -22,10 +30,13 @@ from app.core.exceptions import (
     OllamaModelNotFoundError,
     OllamaUnavailableError,
 )
+from app.repositories import course_session_repository
 from app.services.course_generator import generate_course_from_question
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -36,6 +47,10 @@ def get_ollama_client(request: Request) -> OllamaClient:
 
 def get_gemini_client(request: Request) -> GeminiClient:
     return request.app.state.gemini_client
+
+
+def get_db_session_factory(request: Request) -> async_sessionmaker:
+    return request.app.state.db_session_factory
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -178,11 +193,29 @@ async def search_pdf(
 
 
 @router.get("/pdf/files", response_model=FileListResponse)
-async def list_files(request: Request) -> FileListResponse:
-    """Liste les fichiers PDF stockés dans le vector store."""
+async def list_files(
+    request: Request,
+    pagination: PageParams = Depends(),
+) -> FileListResponse:
+    """Liste les fichiers PDF stockés dans le vector store (paginé)."""
     vector_store = request.app.state.vector_store
-    files = vector_store.list_files()
-    return FileListResponse(files=files)
+    all_files = vector_store.list_files()
+
+    total = len(all_files)
+    total_pages = max(1, (total + pagination.limit - 1) // pagination.limit)
+    page = min(pagination.page, total_pages) if total > 0 else 1
+    offset = (page - 1) * pagination.limit
+    paginated = all_files[offset : offset + pagination.limit]
+
+    return FileListResponse(
+        data=paginated,
+        meta=PaginationMeta(
+            page=page,
+            limit=pagination.limit,
+            total=total,
+            totalPages=total_pages,
+        ),
+    )
 
 
 @router.post("/courses/generate", response_model=CourseGenerationResponse)
@@ -211,7 +244,7 @@ async def generate_course(
     vector_store = request.app.state.vector_store
 
     try:
-        return await generate_course_from_question(
+        course_response = await generate_course_from_question(
             question=question,
             vector_store=vector_store,
             gemini_client=gemini_client,
@@ -227,7 +260,88 @@ async def generate_course(
     except GeminiInvalidResponseError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except (OllamaUnavailableError, OllamaModelNotFoundError) as exc:
-        # Levée par vector_store.search() -> ollama_client.embed() lors du
-        # retrieval RAG (Mode 2). Non capturée avant ce correctif : partait
-        # en 500 non géré au lieu d'un 503 explicite côté client.
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    # Best-effort : persistance de la session en PostgreSQL
+    filenames_list = (
+        [body.filename] if isinstance(body.filename, str)
+        else body.filename if isinstance(body.filename, list)
+        else []
+    )
+    try:
+        session_factory: async_sessionmaker = request.app.state.db_session_factory
+        async with session_factory() as db:
+            await course_session_repository.save(
+                db,
+                question=question,
+                filenames=filenames_list,
+                mode=resolved_mode,
+                response=course_response,
+            )
+    except Exception:
+        logger.error("course_session_persist_failed", exc_info=True)
+
+    return course_response
+
+
+@router.get("/courses/history", response_model=PaginatedResponse[CourseHistoryItem])
+async def list_course_history(
+    request: Request,
+    pagination: PageParams = Depends(),
+) -> PaginatedResponse[CourseHistoryItem]:
+    """Historique paginé des sessions de génération de cours."""
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        rows, total = await course_session_repository.list_paginated(
+            db, page=pagination.page, limit=pagination.limit
+        )
+
+    total_pages = max(1, (total + pagination.limit - 1) // pagination.limit)
+    page = min(pagination.page, total_pages) if total > 0 else 1
+
+    items = [
+        CourseHistoryItem(
+            id=row.id,
+            created_at=row.created_at.isoformat(),
+            question=row.question,
+            filenames=row.filenames,
+            mode=row.mode,
+        )
+        for row in rows
+    ]
+
+    return PaginatedResponse(
+        data=items,
+        meta=PaginationMeta(
+            page=page,
+            limit=pagination.limit,
+            total=total,
+            totalPages=total_pages,
+        ),
+    )
+
+
+@router.get("/courses/history/{session_id}", response_model=CourseHistoryDetail)
+async def get_course_history(
+    session_id: UUID,
+    request: Request,
+) -> CourseHistoryDetail:
+    """Détail d'une session de cours (404 si introuvable)."""
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session introuvable",
+        )
+
+    return CourseHistoryDetail(
+        id=row.id,
+        created_at=row.created_at.isoformat(),
+        question=row.question,
+        filenames=row.filenames,
+        mode=row.mode,
+        gemini_response=row.gemini_response,
+    )

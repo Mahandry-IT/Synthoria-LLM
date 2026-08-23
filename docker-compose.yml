@@ -12,11 +12,14 @@ services:
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       CHROMA_PERSIST_DIRECTORY: /data/chroma
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
     depends_on:
       ollama:
         condition: service_healthy
       chroma:
         condition: service_started
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - app-net
@@ -68,6 +71,23 @@ services:
     volumes:
       - ollama-data:/root/.ollama
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-synthoria}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synthoria}
+      POSTGRES_DB: ${POSTGRES_DB:-synthoria}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synthoria}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-net
+
   chroma:
     image: ghcr.io/chroma-core/chroma:latest
     ports:
@@ -85,3 +105,4 @@ networks:
 volumes:
   ollama-data:
   chroma-data:
+  postgres-data:
