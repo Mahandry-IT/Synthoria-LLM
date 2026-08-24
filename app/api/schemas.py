@@ -146,13 +146,32 @@ class CoursePitfall(BaseModel):
 
 
 class QuizQuestion(BaseModel):
+    """Question de quiz — rétro-compatible avec les anciennes données stockées.
+
+    Les anciennes données en base peuvent avoir :
+    - correct_option_index (int) au lieu de correct_option_indices (list[int])
+    - pas de champ difficulty, points, time_limit_seconds
+    Le model_validator ci-dessous harmonise ces cas.
+    """
+
     question: str
     options: list[str] = Field(..., min_length=2)
-    correct_option_indices: list[int] = Field(..., min_length=1, description="Indices 0-based des bonnes réponses (1 = unique, >1 = QCM multiple)")
-    difficulty: Literal["facile", "normale", "difficile"]
-    points: float = Field(..., ge=0.5, description="Points alloués à cette question (calculé côté serveur, borne sup ~2.0 pour N≥10)")
-    explanation: str
-    time_limit_seconds: int = Field(..., description="45 par défaut, 80 si la question implique un calcul")
+    correct_option_indices: list[int] = Field(default=[], min_length=0, description="Indices 0-based des bonnes réponses (1 = unique, >1 = QCM multiple)")
+    difficulty: Literal["facile", "normale", "difficile"] = "normale"
+    points: float = Field(default=1.0, ge=0.0, description="Points alloués à cette question (calculé côté serveur, borne sup ~2.0 pour N≥10)")
+    explanation: str = ""
+    time_limit_seconds: int = Field(default=45, description="45 par défaut, 80 si la question implique un calcul")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, values: dict) -> dict:
+        """Rétro-compatibilité : convertit correct_option_index (int) → correct_option_indices (list)."""
+        if isinstance(values, dict):
+            # Ancien champ singular → nouveau champ pluriel
+            if "correct_option_index" in values and "correct_option_indices" not in values:
+                idx = values.pop("correct_option_index")
+                values["correct_option_indices"] = [idx] if isinstance(idx, int) else idx
+        return values
 
     @field_validator("correct_option_indices")
     @classmethod
