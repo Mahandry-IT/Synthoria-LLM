@@ -3,9 +3,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.core.config import Settings
-from app.core.exceptions import GeminiInvalidResponseError
+from app.core.exceptions import (
+    GeminiInvalidResponseError,
+    GeminiUnavailableError,
+)
 from app.schemas.course_generation import QuizDifficulty, QuizQuestion
-from app.services.course_generator import compute_quiz_points, generate_course_from_question
+from app.services.course_generator import (
+    _map_sections_to_course_sections,
+    compute_quiz_points,
+    generate_course_from_question,
+)
 
 VALID_STRUCTURED_ANSWER_FILE = {
     "mode": "file_question",
@@ -403,8 +410,8 @@ async def test_generate_course_full_document_false_keeps_existing_behavior(setti
 
 @pytest.mark.asyncio
 async def test_coverage_check_appends_missing_pages(settings, gemini_client):
-    """Des pages non citées dans les sources doivent être ajoutées en section
-    complémentaire, sans appel Gemini additionnel."""
+    """Des pages non citées dans les sources doivent être intégrées dans des
+    sections réelles via un 2e appel Gemini (complétion de couverture)."""
     vector_store = AsyncMock()
     vector_store.search.return_value = [
         {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
@@ -412,14 +419,28 @@ async def test_coverage_check_appends_missing_pages(settings, gemini_client):
     vector_store.count_pages = MagicMock(return_value=2)
     vector_store.get_all_chunks = MagicMock(
         return_value=[
-            {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
-            {"content": "contenu page 2 manquant", "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+            {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},                {"content": "contenu page 2 manquant sur les index B-tree en PostgreSQL. " * 10, "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
         ]
     )
-    # La source générée par Gemini ne cite que la page 1
-    structured = VALID_STRUCTURED_ANSWER_FILE.copy()
-    structured["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
-    gemini_client.format_structured.return_value = structured
+    # 1er appel : réponse principale (cite seulement page 1)
+    structured_main = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured_main["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    # 2e appel : complétion de couverture (section thématique réelle)
+    structured_completion = {
+        "sections": [
+            {
+                "type": "development",
+                "title": "Index B-tree en PostgreSQL",
+                "blocks": [],
+                "subsections": [
+                    {"title": "Quoi", "blocks": [{"type": "text", "text": "Les index B-tree optimisent les requêtes de range."}]},
+                    {"title": "Pourquoi", "blocks": [{"type": "text", "text": "Ils accélèrent les recherches par comparaison."}]},
+                    {"title": "Comment", "blocks": [{"type": "text", "text": "contenu page 2 manquant sur les index B-tree"}]},
+                ],
+            },
+        ],
+    }
+    gemini_client.format_structured.side_effect = [structured_main, structured_completion]
 
     result = await generate_course_from_question(
         question="question",
@@ -429,7 +450,11 @@ async def test_coverage_check_appends_missing_pages(settings, gemini_client):
         filename="doc.pdf",
     )
 
-    assert gemini_client.format_structured.await_count == 1  # pas de relance Gemini
+    assert gemini_client.format_structured.await_count == 2  # 1 principale + 1 complétion
+    section_titles = [s.title for s in (result.sections or [])]
+    assert any("index" in t.lower() or "b-tree" in t.lower() for t in section_titles)
+    # Vérifier qu'aucune section ne porte un titre générique
+    assert not any("complémentaire" in t.lower() or "non couvert" in t.lower() for t in section_titles)
     section_texts = [s.comment for s in (result.sections or [])]
     assert any("contenu page 2 manquant" in t for t in section_texts)
     assert any(s.label == "doc.pdf" and s.reference == "page 2" for s in result.sources)
@@ -575,6 +600,189 @@ def test_quiz_question_correct_indices_single():
         requires_calculation=False,
     )
     assert q.correct_indices == [1]
+
+
+@pytest.mark.asyncio
+async def test_coverage_check_noop_below_threshold(settings, gemini_client):
+    """Volume manquant sous le seuil → aucun 2e appel Gemini, sections inchangées."""
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=2)
+    # Chunk manquant très court (< course_coverage_min_missing_chars = 300)
+    vector_store.get_all_chunks = MagicMock(
+        return_value=[
+            {"content": "x", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
+            {"content": "court", "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+        ]
+    )
+    structured = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    gemini_client.format_structured.return_value = structured
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename="doc.pdf",
+    )
+
+    # Un seul appel Gemini (pas de complétion)
+    assert gemini_client.format_structured.await_count == 1
+    assert len(result.sections or []) == len(structured["sections"])
+
+
+@pytest.mark.asyncio
+async def test_coverage_check_disabled_via_settings(gemini_client):
+    """course_coverage_completion_enabled=False → aucun 2e appel même avec contenu manquant."""
+    disabled_settings = Settings(
+        gemini_api_key="fake-key",
+        gemini_use_search_grounding=True,
+        course_coverage_completion_enabled=False,
+    )
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=2)
+    vector_store.get_all_chunks = MagicMock(
+        return_value=[
+            {"content": "x" * 500, "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
+            {"content": "y" * 500, "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+        ]
+    )
+    structured = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    gemini_client.format_structured.return_value = structured
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=disabled_settings,
+        filename="doc.pdf",
+    )
+
+    assert gemini_client.format_structured.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_coverage_completion_gemini_failure_is_non_blocking(settings, gemini_client):
+    """Exception Gemini lors de la complétion → cours principal intact, aucune exception propagée."""
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=2)
+    vector_store.get_all_chunks = MagicMock(
+        return_value=[
+            {"content": "x" * 500, "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
+            {"content": "y" * 500, "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+        ]
+    )
+    structured_main = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured_main["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    # 1er appel OK, 2e appel lève une exception
+    gemini_client.format_structured.side_effect = [structured_main, GeminiUnavailableError("Gemini down")]
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename="doc.pdf",
+    )
+
+    # Le cours principal est retourné intact
+    assert result.mode == "file_question"
+    assert result.sections is not None
+    assert len(result.sections) == 1  # seule la section initiale, pas de complétion
+
+
+@pytest.mark.asyncio
+async def test_coverage_completion_merges_into_existing_section_by_title(settings, gemini_client):
+    """Gemini renvoie une section avec un titre existant → fusion (pas de doublon)."""
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=2)
+    vector_store.get_all_chunks = MagicMock(
+        return_value=[
+            {"content": "x" * 500, "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
+            {"content": "y" * 500, "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+        ]
+    )
+    structured_main = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured_main["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    # 2e appel : section avec même titre que la section existante
+    structured_completion = {
+        "sections": [
+            {
+                "type": "development",
+                "title": "Le transformateur",  # même titre que la section initiale
+                "blocks": [],
+                "subsections": [
+                    {"title": "Quoi", "blocks": [{"type": "text", "text": ""}]},
+                    {"title": "Pourquoi", "blocks": [{"type": "text", "text": ""}]},
+                    {"title": "Comment", "blocks": [{"type": "text", "text": "détails supplémentaires sur le transformateur"}]},
+                ],
+            },
+        ],
+    }
+    gemini_client.format_structured.side_effect = [structured_main, structured_completion]
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename="doc.pdf",
+    )
+
+    # Pas de doublon : une seule section "Le transformateur"
+    titles = [s.title for s in (result.sections or [])]
+    assert titles.count("Le transformateur") == 1
+    # Le comment de la section existante doit contenir le contenu fusionné
+    transformer_section = next(s for s in result.sections if s.title == "Le transformateur")
+    assert "détails supplémentaires" in transformer_section.comment
+
+
+@pytest.mark.asyncio
+async def test_map_sections_to_course_sections_non_regression():
+    """_map_sections_to_course_sections produit un résultat identique à l'ancien mapping inline."""
+    from app.schemas.course_generation import (
+        ContentBlock,
+        Section,
+        SectionType,
+        Subsection,
+    )
+    sections = [
+        Section(
+            type=SectionType.DEVELOPMENT,
+            title="Le transformateur",
+            subsections=[
+                Subsection(title="Quoi", blocks=[ContentBlock(type="text", text="définition")]),
+                Subsection(title="Pourquoi", blocks=[ContentBlock(type="text", text="raison")]),
+                Subsection(title="Comment", blocks=[ContentBlock(type="text", text="mécanisme")]),
+            ],
+        ),
+        Section(
+            type=SectionType.INTRODUCTION,
+            title="Introduction",
+            blocks=[ContentBlock(type="text", text="intro text")],
+        ),
+    ]
+    api_sections = _map_sections_to_course_sections(sections)
+    assert len(api_sections) == 2
+    assert api_sections[0].title == "Le transformateur"
+    assert api_sections[0].quoi == "définition"
+    assert api_sections[0].pourquoi == "raison"
+    assert api_sections[0].comment == "mécanisme"
+    assert api_sections[1].title == "Introduction"
+    assert api_sections[1].quoi == "intro text"
 
 
 def test_quiz_question_correct_indices_multiple():
