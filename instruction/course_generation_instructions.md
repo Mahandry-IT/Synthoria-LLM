@@ -58,10 +58,10 @@ Pattern:
 Do NOT collapse all content into a single section. Each distinct concept deserves its own section with a focused Quoi/Pourquoi/Comment.
 
 **Completeness requirements**:
-- Minimum 6 DEVELOPMENT sections for any course, and never fewer than what is needed to cover the topic completely. Simple concepts: 6-8 sections. Complex topics: 10-12+ sections. These counts are minimums driven by coverage, not caps — if the topic has more distinct sub-topics than the guide suggests, create additional sections rather than merging them.
+- Minimum 10 DEVELOPMENT sections for any course, and never fewer than what is needed to cover the topic completely. Simple concepts: 10-15 sections. Complex topics: 15-20+ sections. These counts are minimums driven by coverage, not caps — if the topic has more distinct sub-topics than the guide suggests, create additional sections rather than merging them.
 - Every DEVELOPMENT section MUST fill all three subsections: Quoi, Pourquoi, Comment. Never leave any empty.
 - Every Comment subsection MUST include at least one fully worked example (statement + steps + result).
-- Generate 6-8 quiz questions minimum (preferably a multiple of 4), mixing conceptual and calculation questions, adapted to the content and topic depth.
+- Generate 12-16 quiz questions minimum (preferably a multiple of 4), mixing conceptual and calculation questions, adapted to the content and topic depth.
 - **Single vs. multiple correct answers**: some questions have a single correct answer (`correct_indices` has 1 element), while others have multiple correct answers (`correct_indices` has 2+ elements). For multi-answer questions, the question wording must make it clear (e.g. "Sélectionnez toutes les réponses correctes" or "Parmi les propositions suivantes, lesquelles sont correctes ?").
 - **Difficulty distribution**: assign each question a `difficulty` level. Distribution should be approximately: 50% `difficile`, 25% `normale`, 25% `facile`.
   - `difficile` = requires multi-step calculation, synthesis across multiple sections, or non-trivial reasoning.
