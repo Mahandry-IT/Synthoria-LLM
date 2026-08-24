@@ -225,7 +225,12 @@ async def generate_course(
     gemini_client: GeminiClient = Depends(get_gemini_client),
     settings: Settings = Depends(get_settings),
 ) -> CourseGenerationResponse:
-    """Mode 2 (fichier + question) ou Mode 3 (question seule + recherche web)."""
+    """Mode 2 (fichier + question) ou Mode 3 (question seule + recherche web).
+
+    `full_document=True` bascule le retrieval en mode exhaustif : tous les
+    chunks du/des fichier(s) filtré(s) sont utilisés au lieu du top-k par
+    similarité, au prix d'un contexte plus volumineux envoyé à Gemini.
+    """
     question = (body.question or "").strip() or COURSE_DEFAULT_QUESTION
     if len(question) > settings.course_question_max_length:
         raise HTTPException(
@@ -252,6 +257,7 @@ async def generate_course(
             mode=resolved_mode,
             top_k=body.top_k,
             filename=body.filename,
+            full_document=body.full_document,
         )
     except GeminiUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc

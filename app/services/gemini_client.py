@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.core.exceptions import (
     GeminiInvalidResponseError,
     GeminiQuotaExceededError,
+    GeminiServiceError,
     GeminiUnavailableError,
 )
 
@@ -183,6 +184,37 @@ class GeminiClient:
             error_message=detail,
         ) from last_error
 
+    async def _call_with_model_cascade(self, build_request: Any, models: list[str]) -> Any:
+        """Essaie chaque modèle de `models` dans l'ordre, bascule sur le suivant
+        si l'appel échoue avec une erreur Gemini non transitoire côté appelant
+        (`GeminiQuotaExceededError`/`GeminiUnavailableError` — `_call_with_retry`
+        ne laisse jamais fuiter d'exception brute, ces deux types couvrent donc
+        déjà tous les cas : quota atteint, service indisponible, ou toute autre
+        erreur non retryable après épuisement des tentatives).
+
+        Paramètres:
+            build_request: callable `(model: str) -> Any` construisant l'appel
+                Gemini pour un modèle donné (passé à `_call_with_retry`).
+            models: liste ordonnée de modèles à essayer (ex. [flash, flash_lite]).
+
+        Retour: la réponse du premier modèle qui réussit.
+
+        Lève: l'erreur du dernier modèle essayé, si tous échouent.
+        """
+        last_error: GeminiServiceError | None = None
+        for i, model in enumerate(models):
+            try:
+                return await self._call_with_retry(build_request, model)
+            except (GeminiQuotaExceededError, GeminiUnavailableError) as exc:
+                last_error = exc
+                next_model = models[i + 1] if i + 1 < len(models) else None
+                if next_model is not None:
+                    logger.warning(
+                        "gemini_model_fallback",
+                        extra={"failed_model": model, "next_model": next_model, "error": type(exc).__name__},
+                    )
+        raise last_error  # type: ignore[misc]
+
     async def search_grounded(self, prompt: str, system_instruction: str) -> tuple[str, list[dict]]:
         """
         Appel 1 : génère une réponse groundée par recherche web (sans response_schema).
@@ -194,13 +226,18 @@ class GeminiClient:
         Retour: tuple (texte_brut, sources_web) où chaque source web est
             {"type": "web", "label": str, "reference": str}.
 
-        Lève: GeminiUnavailableError, GeminiQuotaExceededError.
+        Fonctionnement: essaie `gemini_model_flash` puis, en cas de quota
+        dépassé ou d'indisponibilité, bascule sur `gemini_model_flash_lite`
+        (voir `_call_with_model_cascade`).
+
+        Lève: GeminiUnavailableError, GeminiQuotaExceededError (du dernier
+            modèle essayé, si les deux échouent).
         """
         self._ensure_configured()
 
-        def _run() -> Any:
+        def _run(model: str) -> Any:
             return self._client.models.generate_content(
-                model=self._settings.gemini_model_flash,
+                model=model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
@@ -208,7 +245,9 @@ class GeminiClient:
                 ),
             )
 
-        response = await self._call_with_retry(_run)
+        response = await self._call_with_model_cascade(
+            _run, [self._settings.gemini_model_flash, self._settings.gemini_model_flash_lite]
+        )
         text = getattr(response, "text", "") or ""
         return text, self._extract_web_sources(response)
 

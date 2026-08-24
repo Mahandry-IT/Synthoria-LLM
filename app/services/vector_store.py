@@ -96,6 +96,38 @@ class NumpyVectorStore:
             })
         return results
 
+    def get_all_chunks(self, filename_filter: str | list[str]) -> list[dict[str, Any]]:
+        """Retourne TOUS les chunks d'un ou plusieurs fichiers, triés par page.
+
+        Contrairement à `search`, aucune similarité cosinus n'est appliquée :
+        utilisé par le mode `full_document` où l'exhaustivité prime sur la
+        pertinence sémantique. Le filtrage par fichier reste strict — un
+        filtre vide/None n'est jamais interprété comme "tous les fichiers"
+        pour éviter toute fuite de contenu entre documents.
+        """
+        allowed = {filename_filter} if isinstance(filename_filter, str) else set(filename_filter)
+        if not allowed:
+            return []
+
+        matching = [
+            r for r in self._documents if r.get("metadata", {}).get("filename") in allowed
+        ]
+        matching.sort(key=lambda r: r.get("metadata", {}).get("page") or 0)
+
+        return [
+            {"content": r["content"], "metadata": r["metadata"], "distance": 0.0}
+            for r in matching
+        ]
+
+    def count_pages(self, filename: str) -> int:
+        """Retourne le nombre de pages distinctes indexées pour un fichier."""
+        pages = {
+            r.get("metadata", {}).get("page")
+            for r in self._documents
+            if r.get("metadata", {}).get("filename") == filename and r.get("metadata", {}).get("page") is not None
+        }
+        return len(pages)
+
     def list_files(self) -> list[dict[str, Any]]:
         """Retourne la liste des fichiers uniques dans le store avec un ID séquentiel.
 

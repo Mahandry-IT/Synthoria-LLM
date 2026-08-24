@@ -188,6 +188,14 @@ class CourseGenerationRequest(BaseModel):
             "Accepte un seul nom de fichier (string) ou une liste de noms."
         ),
     )
+    full_document: bool = Field(
+        False,
+        description=(
+            "Si True, ignore top_k et récupère l'intégralité des chunks du/des "
+            "fichier(s) filtré(s) pour une couverture exhaustive du document "
+            "(augmente la taille du contexte envoyé à Gemini)."
+        ),
+    )
 
 
 class CourseGenerationResponse(BaseModel):

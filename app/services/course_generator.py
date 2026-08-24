@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,42 @@ def _build_context_block(chunks: list[dict[str, Any]]) -> str:
         origin = f"{meta.get('filename', 'inconnu')} (page {meta.get('page', '?')})"
         blocks.append(f"[Source fichier: {origin}]\n{chunk['content']}")
     return "\n\n".join(blocks)
+
+
+def _assert_file_isolation(chunks: list[dict[str, Any]], filename: str | list[str] | None) -> None:
+    """Garde-fou contre la fuite de contenu entre fichiers.
+
+    Vérifie qu'aucun chunk retourné n'a un `metadata.filename` hors du
+    filtre demandé. Logue un warning en cas de fuite (au lieu de lever,
+    pour ne pas transformer un bug de retrieval en panne totale) et
+    retire les chunks fautifs de la liste utilisée pour la génération.
+    """
+    if not filename:
+        return
+    allowed = {filename} if isinstance(filename, str) else set(filename)
+    leaked = [
+        c for c in chunks if c.get("metadata", {}).get("filename") not in allowed
+    ]
+    if leaked:
+        logger.warning(
+            "course_file_isolation_breach",
+            extra={
+                "expected_files": list(allowed),
+                "leaked_files": sorted({c.get("metadata", {}).get("filename") for c in leaked}),
+                "leaked_count": len(leaked),
+            },
+        )
+        chunks[:] = [c for c in chunks if c not in leaked]
+
+
+def _missing_pages(chunks: list[dict[str, Any]], total_pages: int) -> list[int]:
+    """Retourne les numéros de page (1..total_pages) absents des chunks fournis."""
+    covered = {
+        c.get("metadata", {}).get("page")
+        for c in chunks
+        if c.get("metadata", {}).get("page") is not None
+    }
+    return [p for p in range(1, total_pages + 1) if p not in covered]
 
 
 def _file_sources_from_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -256,6 +293,82 @@ def _validate_and_map(structured: dict[str, Any], mode: str) -> CourseGeneration
         raise GeminiInvalidResponseError(f"JSON structuré invalide: {exc}") from exc
 
 
+def _apply_coverage_check(
+    response: CourseGenerationResponse,
+    vector_store: NumpyVectorStore,
+    filename: str | list[str] | None,
+) -> CourseGenerationResponse:
+    """Contrôle de couverture post-génération (une seule passe, pas de boucle).
+
+    Compare les pages citées dans `sources` (type "file") aux pages totales
+    du/des fichier(s) (`vector_store.count_pages`). Les pages manquantes sont
+    récupérées via `get_all_chunks` — déjà en mémoire, aucun appel réseau/LLM
+    additionnel — et fusionnées dans une section complémentaire avant retour.
+
+    Lève: rien. En cas d'échec de parsing (référence de page non numérique),
+    la page correspondante est simplement ignorée du calcul de couverture.
+    """
+    if not filename:
+        return response
+
+    filenames = [filename] if isinstance(filename, str) else list(filename)
+    cited_pages_by_file: dict[str, set[int]] = {f: set() for f in filenames}
+    for src in response.sources:
+        if src.type != "file" or src.label not in cited_pages_by_file:
+            continue
+        match = re.search(r"\d+", src.reference)
+        if match:
+            cited_pages_by_file[src.label].add(int(match.group()))
+
+    missing_chunks: list[dict[str, Any]] = []
+    missing_pages_log: dict[str, list[int]] = {}
+    for fname in filenames:
+        total_pages = vector_store.count_pages(fname)
+        if total_pages == 0:
+            continue
+        missing = [p for p in range(1, total_pages + 1) if p not in cited_pages_by_file[fname]]
+        if not missing:
+            continue
+        missing_pages_log[fname] = missing
+        missing_chunks.extend(
+            c for c in vector_store.get_all_chunks(fname) if c.get("metadata", {}).get("page") in missing
+        )
+
+    if not missing_chunks:
+        logger.info("course_coverage_check", extra={"missing_pages": {}})
+        return response
+
+    logger.info("course_coverage_check", extra={"missing_pages": missing_pages_log})
+
+    from app.api.schemas import CourseSection, WorkedExample
+
+    supplement_text = "\n\n".join(
+        f"[{c.get('metadata', {}).get('filename')} p.{c.get('metadata', {}).get('page')}] {c['content']}"
+        for c in missing_chunks
+    )
+    supplement_section = CourseSection(
+        id=f"coverage-supplement-{len(response.sections or [])}",
+        title="Contenu complémentaire (pages non couvertes initialement)",
+        quoi="",
+        pourquoi="",
+        comment=supplement_text,
+        worked_example=WorkedExample(statement="", steps=[], result=""),
+    )
+    supplement_sources = [
+        CourseSource(
+            type="file",
+            label=c.get("metadata", {}).get("filename", "document"),
+            reference=f"page {c.get('metadata', {}).get('page', '?')}",
+        )
+        for c in missing_chunks
+    ]
+
+    return response.model_copy(update={
+        "sections": (response.sections or []) + [supplement_section],
+        "sources": response.sources + supplement_sources,
+    })
+
+
 async def generate_course_from_question(
     question: str,
     vector_store: NumpyVectorStore,
@@ -264,6 +377,7 @@ async def generate_course_from_question(
     mode: str = "file_question",
     top_k: int | None = None,
     filename: str | list[str] | None = None,
+    full_document: bool = False,
 ) -> CourseGenerationResponse:
     """
     Orchestration RAG + génération de cours structuré.
@@ -276,15 +390,23 @@ async def generate_course_from_question(
         mode: "file_question" (Mode 2, retrieval RAG) ou "question_only" (Mode 3, recherche web).
         top_k: nombre de chunks à récupérer (défaut settings.course_top_k_default).
         filename: filtre optionnel — un nom (str), une liste de noms, ou None.
+        full_document: si True, ignore le top-k et récupère TOUS les chunks du/des
+            fichier(s) (`vector_store.get_all_chunks`) pour une couverture exhaustive,
+            au prix d'un contexte plus volumineux envoyé à Gemini.
 
     Retour: CourseGenerationResponse validé.
 
     Fonctionnement:
         1. Retrieval des chunks pertinents dans le vector store local (sauf mode question_only).
+           - Si full_document=True : tous les chunks du/des fichier(s), triés par page.
            - Si filename est une liste : recherche séparée par fichier + fusion équilibrée.
            - Si filename est un str ou None : recherche unique.
+           Isolation stricte : tout chunk hors du filtre `filename` demandé est
+           écarté et logué (`course_file_isolation_breach`).
         2. Si gemini_use_search_grounding=True : 2 appels (search_grounded + format_structured).
            Sinon : 1 seul appel (format_structured direct avec contexte RAG).
+        3. Contrôle de couverture post-génération (`course_coverage_check`) : les
+           pages non citées dans `sources` sont ajoutées en section complémentaire.
 
     Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
     """
@@ -295,9 +417,11 @@ async def generate_course_from_question(
 
     chunks: list[dict[str, Any]] = []
     if mode != "question_only":
+        if full_document and filename:
+            chunks = vector_store.get_all_chunks(filename)
         # Si plusieurs fichiers : recherche séparée par fichier pour assurer
         # une représentation équilibrée de chaque document.
-        if isinstance(filename, list) and len(filename) > 1:
+        elif isinstance(filename, list) and len(filename) > 1:
             per_file_k = max(resolved_top_k // len(filename), 5)
             all_chunks: list[dict[str, Any]] = []
             for fname in filename:
@@ -324,6 +448,8 @@ async def generate_course_from_question(
             chunks = await vector_store.search(
                 search_query, top_k=resolved_top_k, filename_filter=filename
             )
+
+    _assert_file_isolation(chunks, filename)
 
     context_block = _build_context_block(chunks)
     file_sources = _file_sources_from_chunks(chunks)
@@ -355,7 +481,7 @@ async def generate_course_from_question(
             system_instruction=system_instruction,
             response_schema=CourseGenerationSchema,
         )
-        return _validate_and_map(structured, mode)
+        return _apply_coverage_check(_validate_and_map(structured, mode), vector_store, filename)
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -384,4 +510,4 @@ async def generate_course_from_question(
         system_instruction=system_instruction,
         response_schema=CourseGenerationSchema,
     )
-    return _validate_and_map(structured, mode)
+    return _apply_coverage_check(_validate_and_map(structured, mode), vector_store, filename)

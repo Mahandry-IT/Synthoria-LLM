@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -116,6 +116,7 @@ async def test_generate_course_filters_by_filename(settings, gemini_client):
     vector_store.search.return_value = [
         {"content": "a", "metadata": {"filename": "doc1.pdf", "page": 1}, "distance": 0.1},
     ]
+    vector_store.count_pages = MagicMock(return_value=0)  # pas de controle de couverture pour ce test
 
     await generate_course_from_question(
         question="question",
@@ -266,6 +267,7 @@ async def test_generate_course_multi_file_separate_searches(settings):
         [{"content": "chunk gradient", "metadata": {"filename": "gradient.pdf", "page": 1}, "distance": 0.1}],
         [{"content": "chunk regression", "metadata": {"filename": "regression.pdf", "page": 1}, "distance": 0.15}],
     ]
+    vector_store.count_pages = MagicMock(return_value=0)  # pas de controle de couverture pour ce test
     gemini_client = AsyncMock()
     gemini_client.search_grounded.return_value = ("reponse", [])
     gemini_client.format_structured.return_value = VALID_STRUCTURED_ANSWER_FILE.copy()
@@ -348,3 +350,108 @@ async def test_generate_course_multi_file_real_store_both_files_represented(sett
     prompt_used = gemini_client.search_grounded.call_args.kwargs["prompt"]
     assert "extrait minoritaire" in prompt_used
     assert "dominant" in prompt_used
+
+
+# --- full_document mode ---
+
+
+@pytest.mark.asyncio
+async def test_generate_course_full_document_bypasses_search(settings, gemini_client):
+    """full_document=True doit appeler get_all_chunks au lieu de search."""
+    vector_store = AsyncMock()
+    vector_store.get_all_chunks = MagicMock(
+        return_value=[
+            {"content": "page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
+            {"content": "page 2", "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+        ]
+    )
+    vector_store.count_pages = MagicMock(return_value=0)  # isole le test du contrôle de couverture
+
+    await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename="doc.pdf",
+        full_document=True,
+    )
+
+    vector_store.get_all_chunks.assert_called_once_with("doc.pdf")
+    vector_store.search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_course_full_document_false_keeps_existing_behavior(settings, vector_store, gemini_client):
+    """full_document=False (défaut) : comportement inchangé, search() est utilisé."""
+    vector_store.count_pages = MagicMock(return_value=0)
+
+    result = await generate_course_from_question(
+        question="Comment fonctionne un transformateur ?",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        mode="file_question",
+    )
+
+    vector_store.search.assert_awaited_once()
+    assert result.mode == "file_question"
+
+
+# --- Contrôle de couverture post-génération ---
+
+
+@pytest.mark.asyncio
+async def test_coverage_check_appends_missing_pages(settings, gemini_client):
+    """Des pages non citées dans les sources doivent être ajoutées en section
+    complémentaire, sans appel Gemini additionnel."""
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=2)
+    vector_store.get_all_chunks = MagicMock(
+        return_value=[
+            {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
+            {"content": "contenu page 2 manquant", "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+        ]
+    )
+    # La source générée par Gemini ne cite que la page 1
+    structured = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    gemini_client.format_structured.return_value = structured
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename="doc.pdf",
+    )
+
+    assert gemini_client.format_structured.await_count == 1  # pas de relance Gemini
+    section_texts = [s.comment for s in (result.sections or [])]
+    assert any("contenu page 2 manquant" in t for t in section_texts)
+    assert any(s.label == "doc.pdf" and s.reference == "page 2" for s in result.sources)
+
+
+@pytest.mark.asyncio
+async def test_coverage_check_noop_when_all_pages_covered(settings, gemini_client):
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=1)
+    structured = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    gemini_client.format_structured.return_value = structured
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename="doc.pdf",
+    )
+
+    original_section_count = len(structured["sections"])
+    assert len(result.sections or []) == original_section_count
