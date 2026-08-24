@@ -148,9 +148,26 @@ class CoursePitfall(BaseModel):
 class QuizQuestion(BaseModel):
     question: str
     options: list[str] = Field(..., min_length=2)
-    correct_option_index: int = Field(..., ge=0)
+    correct_option_indices: list[int] = Field(..., min_length=1, description="Indices 0-based des bonnes réponses (1 = unique, >1 = QCM multiple)")
+    difficulty: Literal["facile", "normale", "difficile"]
+    points: float = Field(..., ge=0.5, description="Points alloués à cette question (calculé côté serveur, borne sup ~2.0 pour N≥10)")
     explanation: str
     time_limit_seconds: int = Field(..., description="45 par défaut, 80 si la question implique un calcul")
+
+    @field_validator("correct_option_indices")
+    @classmethod
+    def _check_indices(cls, v: list[int], info) -> list[int]:
+        if len(v) != len(set(v)):
+            raise ValueError("correct_option_indices contient des doublons")
+        options = info.data.get("options")
+        if options:
+            for idx in v:
+                if idx < 0 or idx >= len(options):
+                    raise ValueError(
+                        f"correct_option_index {idx} hors bornes "
+                        f"(options a {len(options)} éléments, index 0..{len(options)-1})"
+                    )
+        return v
 
 
 class CourseMeta(BaseModel):
