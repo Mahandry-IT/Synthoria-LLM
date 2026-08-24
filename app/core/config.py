@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: float = 30.0
     course_top_k_default: int = 6
     course_question_max_length: int = 2000
+    course_coverage_completion_enabled: bool = True
+    course_coverage_min_missing_chars: int = 300
     gemini_use_search_grounding: bool = True
     database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
 

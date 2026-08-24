@@ -185,6 +185,23 @@ class QuizQuestion(BaseModel):
         return self
 
 
+class CoverageCompletionSchema(BaseModel):
+    """Schéma léger pour l'appel Gemini de complétion de couverture.
+
+    Réutilise Section existante — pas de nouveau model_validator nécessaire.
+    """
+
+    sections: list[Section] = Field(
+        description=(
+            "Nouvelles sections thématiques (ou sections destinées à enrichir "
+            "une section existante de même sujet) couvrant le contenu fourni. "
+            "Chaque section suit Quoi/Pourquoi/Comment comme le reste du cours. "
+            "INTERDIT : tout titre générique du type 'Contenu complémentaire', "
+            "'Pages non couvertes', 'Supplément' — donner un titre thématique réel."
+        )
+    )
+
+
 class Meta(BaseModel):
     title: str
     subject: str

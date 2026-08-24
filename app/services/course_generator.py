@@ -6,8 +6,11 @@ from typing import Any
 
 from app.api.schemas import CourseGenerationResponse, CourseMeta, CourseSource
 from app.core.config import Settings
-from app.core.exceptions import GeminiInvalidResponseError
-from app.schemas.course_generation import CourseGenerationSchema, QuizDifficulty
+from app.core.exceptions import (
+    GeminiInvalidResponseError,
+    GeminiUnavailableError,
+)
+from app.schemas.course_generation import CoverageCompletionSchema, CourseGenerationSchema, QuizDifficulty, Section
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
 
@@ -174,6 +177,78 @@ def _block_to_text(block: Any) -> str:
     return ""
 
 
+def _map_sections_to_course_sections(
+    sections: list[Section],
+    start_index: int = 0,
+) -> list["CourseSection"]:
+    """Convertit des sections block-based (Gemini schema) en CourseSection (API).
+
+    Extraite de `_map_schema_to_response` pour être réutilisée par la
+    complétion de couverture sans dupliquer la logique de mapping.
+
+    Paramètres:
+        sections: sections block-based depuis CourseGenerationSchema.
+        start_index: index de départ pour les IDs (défaut 0, utile pour
+            la complétion qui ajoute après les sections existantes).
+
+    Retour: liste de CourseSection au format API.
+    """
+    from app.api.schemas import CourseSection, Step, WorkedExample
+
+    api_sections: list[CourseSection] = []
+    _SKIPPED = {"common_pitfalls", "summary", "next_steps"}
+
+    for i, section in enumerate(sections):
+        if section.type.value in _SKIPPED:
+            continue
+        # Extraire les sous-sections (Quoi/Pourquoi/Comment)
+        quoi_text = ""
+        pourquoi_text = ""
+        comment_text = ""
+        worked_ex = None
+
+        for sub in section.subsections:
+            sub_text = " ".join(_block_to_text(b) for b in sub.blocks if _block_to_text(b))
+            title_lower = sub.title.lower()
+            if "pourquoi" in title_lower:
+                pourquoi_text = sub_text
+            elif "quoi" in title_lower:
+                quoi_text = sub_text
+            elif "comment" in title_lower:
+                comment_text = sub_text
+            for b in sub.blocks:
+                if b.worked_example:
+                    worked_ex = WorkedExample(
+                        statement=b.worked_example.statement,
+                        steps=[Step(id=str(idx + 1), content=s) for idx, s in enumerate(b.worked_example.steps)],
+                        result=b.worked_example.result,
+                    )
+
+        # Si pas de sous-sections, extraire depuis les blocks directs
+        if not section.subsections and section.blocks:
+            direct_text = " ".join(_block_to_text(b) for b in section.blocks if _block_to_text(b))
+            if section.type.value == "introduction":
+                quoi_text = direct_text
+            else:
+                comment_text = direct_text
+
+        if quoi_text or pourquoi_text or comment_text:
+            api_sections.append(CourseSection(
+                id=str(start_index + i),
+                title=section.title,
+                quoi=quoi_text,
+                pourquoi=pourquoi_text,
+                comment=comment_text,
+                worked_example=WorkedExample(
+                    statement=worked_ex.statement if worked_ex else "",
+                    steps=worked_ex.steps if worked_ex else [],
+                    result=worked_ex.result if worked_ex else "",
+                ),
+            ))
+
+    return api_sections
+
+
 def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationResponse:
     """Convertit la réponse Gemini (CourseGenerationSchema) en CourseGenerationResponse API.
 
@@ -206,12 +281,10 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
                     break
 
     # Mapper les sections block-based vers CourseSection (format API)
-    from app.api.schemas import CourseSection, CoursePitfall, Step, WorkedExample
-    api_sections: list[CourseSection] = []
+    from app.api.schemas import CoursePitfall
+    api_sections = _map_sections_to_course_sections(schema.sections)
     pitfalls: list[CoursePitfall] = []
-    _SKIPPED_SECTION_TYPES = {"common_pitfalls", "summary", "next_steps"}
-
-    for i, section in enumerate(schema.sections):
+    for section in schema.sections:
         if section.type.value == "common_pitfalls":
             for block in section.blocks:
                 if block.pitfall:
@@ -221,55 +294,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
                         how_to_avoid=block.pitfall.how_to_avoid,
                     ))
                 elif block.text:
-                    # Fallback pour un block TEXT non structuré (ancien format / omission du modèle)
                     pitfalls.append(CoursePitfall(description=block.text, why_it_happens="", how_to_avoid=""))
-            continue
-        if section.type.value in _SKIPPED_SECTION_TYPES:
-            continue
-
-        # Extraire les sous-sections (Quoi/Pourquoi/Comment)
-        quoi_text = ""
-        pourquoi_text = ""
-        comment_text = ""
-        worked_ex = None
-
-        for sub in section.subsections:
-            sub_text = " ".join(_block_to_text(b) for b in sub.blocks if _block_to_text(b))
-            if "quoi" in sub.title.lower():
-                quoi_text = sub_text
-            elif "pourquoi" in sub.title.lower():
-                pourquoi_text = sub_text
-            elif "comment" in sub.title.lower():
-                comment_text = sub_text
-            for b in sub.blocks:
-                if b.worked_example:
-                    worked_ex = WorkedExample(
-                        statement=b.worked_example.statement,
-                        steps=[Step(id=str(idx + 1), content=s) for idx, s in enumerate(b.worked_example.steps)],
-                        result=b.worked_example.result,
-                    )
-
-        # Si pas de sous-sections, extraire depuis les blocks directs
-        if not section.subsections and section.blocks:
-            direct_text = " ".join(_block_to_text(b) for b in section.blocks if _block_to_text(b))
-            if section.type.value == "introduction":
-                quoi_text = direct_text
-            else:
-                comment_text = direct_text
-
-        if quoi_text or pourquoi_text or comment_text:
-            api_sections.append(CourseSection(
-                id=str(i),
-                title=section.title,
-                quoi=quoi_text,
-                pourquoi=pourquoi_text,
-                comment=comment_text,
-                worked_example=WorkedExample(
-                    statement=worked_ex.statement if worked_ex else "",
-                    steps=worked_ex.steps if worked_ex else [],
-                    result=worked_ex.result if worked_ex else "",
-                ),
-            ))
 
     # Construire answer depuis la première section avec Quoi/Pourquoi/Comment
     answer = None
@@ -353,20 +378,148 @@ def _validate_and_map(structured: dict[str, Any], mode: str) -> CourseGeneration
         raise GeminiInvalidResponseError(f"JSON structuré invalide: {exc}") from exc
 
 
-def _apply_coverage_check(
+def _build_coverage_completion_prompt(
+    missing_chunks: list[dict[str, Any]],
+    existing_titles: list[str],
+) -> str:
+    """Construit le prompt pour l'appel Gemini de complétion de couverture.
+
+    Paramètres:
+        missing_chunks: chunks non couverts (texte + métadonnées fichier/page).
+        existing_titles: titres des sections déjà générées, pour que Gemini
+            décide fusion vs nouvelle section.
+
+    Retour: prompt texte prêt à être passé à format_structured.
+    """
+    chunks_text = "\n\n".join(
+        f"[{c.get('metadata', {}).get('filename')} p.{c.get('metadata', {}).get('page')}] {c['content']}"
+        for c in missing_chunks
+    )
+    titles_str = "\n".join(f"- {t}" for t in existing_titles) if existing_titles else "(aucune section existante)"
+    return (
+        "Tu dois intégrer le contenu manquant ci-dessous dans le cours. "
+        "Pour chaque extrait : "
+        "1. Si le sujet correspond à une section existante (liste ci-dessous), "
+        "crée une section avec le MÊME titre pour permettre la fusion.\n"
+        "2. Sinon, crée une NOUVELLE section thématique avec un titre réel et précis.\n\n"
+        "INTERDICTION ABSOLUE : tout titre générique du type 'Contenu complémentaire', "
+        "'Pages non couvertes', 'Supplément', 'Section additionnelle', etc. "
+        "Chaque section DOIT porter un titre thématique réel et descriptif.\n\n"
+        f"--- Sections existantes ---\n{titles_str}\n\n"
+        f"--- Contenu manquant à intégrer ---\n{chunks_text}"
+    )
+
+
+async def _complete_missing_coverage(
+    response: CourseGenerationResponse,
+    missing_chunks: list[dict[str, Any]],
+    gemini_client: GeminiClient,
+    settings: Settings,
+    system_instruction: str,
+) -> CourseGenerationResponse:
+    """Appel Gemini conditionnel pour intégrer le contenu manquant dans des
+    sections réelles (fusion ou nouvelles sections thématiques).
+
+    Comportement :
+    - Si le flag course_coverage_completion_enabled est désactivé → retour inchangé.
+    - Si le volume cumulé est inférieur au seuil → retour inchangé.
+    - En cas d'exception (Gemini indisponible, quota, JSON invalide) →
+      logger.warning + retour inchangé (best-effort non-bloquant).
+
+    Paramètres:
+        response: réponse API courante (à enrichir).
+        missing_chunks: chunks non couverts.
+        gemini_client: client Gemini.
+        settings: configuration applicative.
+        system_instruction: instructions système pour Gemini.
+
+    Retour: CourseGenerationResponse potentiellement enrichi.
+    """
+    if not settings.course_coverage_completion_enabled:
+        return response
+
+    total_missing_chars = sum(len(c.get("content", "")) for c in missing_chunks)
+    if total_missing_chars < settings.course_coverage_min_missing_chars:
+        logger.info(
+            "course_coverage_below_threshold",
+            extra={"missing_chars": total_missing_chars, "threshold": settings.course_coverage_min_missing_chars},
+        )
+        return response
+
+    existing_titles = [s.title for s in (response.sections or [])]
+    prompt = _build_coverage_completion_prompt(missing_chunks, existing_titles)
+
+    try:
+        structured = await gemini_client.format_structured(
+            raw_answer=prompt,
+            system_instruction=system_instruction,
+            response_schema=CoverageCompletionSchema,
+        )
+        completion = CoverageCompletionSchema.model_validate(structured)
+    except Exception as exc:
+        logger.warning("course_coverage_completion_failed", extra={"error": str(exc)})
+        return response
+
+    new_sections = _map_sections_to_course_sections(
+        completion.sections,
+        start_index=len(response.sections or []),
+    )
+
+    # Fusion par titre : si le titre normalisé correspond déjà → concatener comment
+    merged: list = list(response.sections or [])
+    existing_normalized = {s.title.strip().casefold(): s for s in merged}
+    new_sources: list[CourseSource] = []
+
+    for ns in new_sections:
+        key = ns.title.strip().casefold()
+        if key in existing_normalized:
+            existing_section = existing_normalized[key]
+            existing_section.comment = (
+                (existing_section.comment + "\n\n" + ns.comment).strip()
+            )
+            if not existing_section.quoi and ns.quoi:
+                existing_section.quoi = ns.quoi
+            if not existing_section.pourquoi and ns.pourquoi:
+                existing_section.pourquoi = ns.pourquoi
+        else:
+            merged.append(ns)
+            existing_normalized[key] = ns
+
+    # Ajouter les sources correspondantes aux chunks absorbés
+    for c in missing_chunks:
+        new_sources.append(
+            CourseSource(
+                type="file",
+                label=c.get("metadata", {}).get("filename", "document"),
+                reference=f"page {c.get('metadata', {}).get('page', '?')}",
+            )
+        )
+
+    return response.model_copy(update={
+        "sections": merged,
+        "sources": response.sources + new_sources,
+    })
+
+
+async def _apply_coverage_check(
     response: CourseGenerationResponse,
     vector_store: NumpyVectorStore,
     filename: str | list[str] | None,
+    gemini_client: GeminiClient | None = None,
+    settings: Settings | None = None,
+    system_instruction: str = "",
 ) -> CourseGenerationResponse:
     """Contrôle de couverture post-génération (une seule passe, pas de boucle).
 
     Compare les pages citées dans `sources` (type "file") aux pages totales
     du/des fichier(s) (`vector_store.count_pages`). Les pages manquantes sont
-    récupérées via `get_all_chunks` — déjà en mémoire, aucun appel réseau/LLM
-    additionnel — et fusionnées dans une section complémentaire avant retour.
+    récupérées via `get_all_chunks` puis intégrées dans des sections réelles
+    via un appel Gemini de complétion (best-effort, non-bloquant).
 
-    Lève: rien. En cas d'échec de parsing (référence de page non numérique),
-    la page correspondante est simplement ignorée du calcul de couverture.
+    Si gemini_client/settings ne sont pas fournis, fallback sur le comportement
+    legacy (dump brut) pour compatibilité.
+
+    Lève: rien. En cas d'échec, la réponse courante est retournée inchangée.
     """
     if not filename:
         return response
@@ -400,6 +553,13 @@ def _apply_coverage_check(
 
     logger.info("course_coverage_check", extra={"missing_pages": missing_pages_log})
 
+    # Nouveau comportement : complétion réelle via Gemini (best-effort)
+    if gemini_client is not None and settings is not None:
+        return await _complete_missing_coverage(
+            response, missing_chunks, gemini_client, settings, system_instruction
+        )
+
+    # Fallback legacy si gemini_client/settings non fournis (compatibilité)
     from app.api.schemas import CourseSection, WorkedExample
 
     supplement_text = "\n\n".join(
@@ -465,8 +625,11 @@ async def generate_course_from_question(
            écarté et logué (`course_file_isolation_breach`).
         2. Si gemini_use_search_grounding=True : 2 appels (search_grounded + format_structured).
            Sinon : 1 seul appel (format_structured direct avec contexte RAG).
-        3. Contrôle de couverture post-génération (`course_coverage_check`) : les
-           pages non citées dans `sources` sont ajoutées en section complémentaire.
+        3. Contrôle de couverture post-génération (`_apply_coverage_check`) : les
+           pages non citées dans `sources` sont intégrées dans des sections réelles
+           via un appel Gemini additionnel (best-effort, non-bloquant). Seuil
+           configurable (`course_coverage_min_missing_chars`) et coupe-circuit
+           (`course_coverage_completion_enabled`).
 
     Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
     """
@@ -541,7 +704,11 @@ async def generate_course_from_question(
             system_instruction=system_instruction,
             response_schema=CourseGenerationSchema,
         )
-        return _apply_coverage_check(_validate_and_map(structured, mode), vector_store, filename)
+        return await _apply_coverage_check(
+            _validate_and_map(structured, mode), vector_store, filename,
+            gemini_client=gemini_client, settings=settings,
+            system_instruction=system_instruction,
+        )
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -570,4 +737,8 @@ async def generate_course_from_question(
         system_instruction=system_instruction,
         response_schema=CourseGenerationSchema,
     )
-    return _apply_coverage_check(_validate_and_map(structured, mode), vector_store, filename)
+    return await _apply_coverage_check(
+        _validate_and_map(structured, mode), vector_store, filename,
+        gemini_client=gemini_client, settings=settings,
+        system_instruction=system_instruction,
+    )
