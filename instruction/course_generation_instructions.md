@@ -44,7 +44,7 @@ Do not use placeholder examples ("for instance, X happens") — make them fully 
 
 Your raw answer will be reformatted into a strict JSON schema in a second pass.
 
-**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections depends on the topic complexity — a simple concept needs 6-8 sections, a complex topic needs 10-12+ sections.
+**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections is driven first by the need to **fully cover the topic** — every sub-topic, mechanism, or facet raised by the source material or the question must get its own section. Do not stop at a minimum count if the subject isn't fully covered yet. As a rough guide: a simple/narrow topic typically needs 6-8 sections, a complex/broad topic typically needs 10-12+ sections — but these are floors, not targets: if full coverage requires more sections than the guide suggests, add them.
 
 Pattern:
 - Section: Introduction (section type `introduction`) — context, prerequisites, overview
@@ -58,9 +58,10 @@ Pattern:
 Do NOT collapse all content into a single section. Each distinct concept deserves its own section with a focused Quoi/Pourquoi/Comment.
 
 **Completeness requirements**:
-- Minimum 6 DEVELOPMENT sections for any course. Simple concepts: 6-8 sections. Complex topics: 10-12+ sections.
+- Minimum 6 DEVELOPMENT sections for any course, and never fewer than what is needed to cover the topic completely. Simple concepts: 6-8 sections. Complex topics: 10-12+ sections. These counts are minimums driven by coverage, not caps — if the topic has more distinct sub-topics than the guide suggests, create additional sections rather than merging them.
 - Every DEVELOPMENT section MUST fill all three subsections: Quoi, Pourquoi, Comment. Never leave any empty.
 - Every Comment subsection MUST include at least one fully worked example (statement + steps + result).
 - Generate 6-8 quiz questions minimum, mixing conceptual and calculation questions, adapted to the content and topic depth.
+- **Quiz distractors**: for each question, the incorrect options must be plausible and close to the correct answer (similar order of magnitude, same unit, a common misconception, an off-by-one/sign error, a confusion between two closely related concepts) rather than obviously wrong or unrelated values. This increases difficulty and forces genuine understanding rather than elimination by guesswork.
 - Aim for 2-3 COMMON_PITFALLS entries per course.
 - Include a SUMMARY section and NEXT_STEPS with 3-5 suggestions.

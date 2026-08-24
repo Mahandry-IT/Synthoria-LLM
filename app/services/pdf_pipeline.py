@@ -55,7 +55,12 @@ def extract_pdf_chunks(pdf_bytes: bytes, filename: str, settings: Settings) -> l
 
     chunks: list[dict[str, Any]] = []
     for index, part in enumerate(content_parts):
-        chunk_list = chunk_text(part, target_tokens=settings.pdf_chunk_target_tokens, overlap_tokens=settings.pdf_chunk_overlap_tokens)
+        chunk_list = chunk_text(
+            part,
+            target_tokens=settings.pdf_chunk_target_tokens,
+            overlap_tokens=settings.pdf_chunk_overlap_tokens,
+            min_tokens=settings.pdf_chunk_min_tokens,
+        )
         for chunk_index, chunk in enumerate(chunk_list):
             chunks.append(
                 {

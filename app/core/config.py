@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     chroma_collection_name: str = "synthoria_documents"
     pdf_chunk_target_tokens: int = 400
     pdf_chunk_overlap_tokens: int = 50
+    pdf_chunk_min_tokens: int = 80
+    course_full_document_mode: bool = False
     gemini_api_key: str | None = None
     gemini_model_flash: str = "gemini-3.6-flash"
     gemini_model_flash_lite: str = "gemini-3.5-flash-lite"
