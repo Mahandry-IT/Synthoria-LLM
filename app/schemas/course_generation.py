@@ -140,11 +140,28 @@ class Section(BaseModel):
     subsections: list[Subsection] = Field(default_factory=list, description="Subsections, e.g. Quoi/Pourquoi/Comment under 'development'.")
 
 
+class QuizDifficulty(str, Enum):
+    FACILE = "facile"
+    NORMALE = "normale"
+    DIFFICILE = "difficile"
+
+
 class QuizQuestion(BaseModel):
     question: str
     choices: list[str] = Field(description="Answer options, 2-5 items.")
-    correct_index: int = Field(description="0-based index into `choices`.")
-    explanation: str = Field(description="Why the correct answer is correct.")
+    correct_indices: list[int] = Field(
+        description=(
+            "0-based indices into `choices`. Exactly one element for a single-"
+            "answer question, multiple elements for a multi-answer (QCM) question."
+        ),
+    )
+    difficulty: QuizDifficulty = Field(
+        description=(
+            "Difficulty level of this question. Distribution across the quiz "
+            "should be ~50% difficile, ~25% normale, ~25% facile."
+        ),
+    )
+    explanation: str = Field(description="Why the correct answer(s) is/are correct.")
     requires_calculation: bool = Field(
         description=(
             "True if answering requires performing a calculation, not just "
@@ -152,6 +169,20 @@ class QuizQuestion(BaseModel):
             "don't compute the timer value yourself, just flag this."
         )
     )
+
+    @model_validator(mode="after")
+    def _check_correct_indices(self) -> "QuizQuestion":
+        if not self.correct_indices:
+            raise ValueError("correct_indices ne peut pas être vide")
+        if len(self.correct_indices) != len(set(self.correct_indices)):
+            raise ValueError("correct_indices contient des doublons")
+        for idx in self.correct_indices:
+            if idx < 0 or idx >= len(self.choices):
+                raise ValueError(
+                    f"correct_index {idx} hors bornes "
+                    f"(choices a {len(self.choices)} éléments, index 0..{len(self.choices)-1})"
+                )
+        return self
 
 
 class Meta(BaseModel):
@@ -210,5 +241,39 @@ class CourseGenerationSchema(BaseModel):
         if self.mode in (InteractionMode.FILE_QUESTION, InteractionMode.QUESTION_ONLY) and self.format is not OutputFormat.FOCUSED_ANSWER:
             raise ValueError(
                 f"mode='{self.mode.value}' requires format='focused_answer', got '{self.format.value}'"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_quiz_difficulty_distribution(self) -> "CourseGenerationSchema":
+        """Vérifie la répartition de difficulté dans le quiz.
+
+        Distribution attendue : ~50% difficile, ~25% normale, ~25% facile.
+        Tolérance : ±1 question par catégorie (arrondi pour N non multiple de 4).
+        Le quiz vide est autorisé (pas de quiz si pas de contenu pertinent).
+        """
+        if not self.quiz or len(self.quiz) < 2:
+            return self
+        n = len(self.quiz)
+        counts = {d: 0 for d in QuizDifficulty}
+        for q in self.quiz:
+            counts[q.difficulty] += 1
+        expected_difficile = n / 2
+        expected_normale = n / 4
+        expected_facile = n / 4
+        if abs(counts[QuizDifficulty.DIFFICILE] - expected_difficile) > 1:
+            raise ValueError(
+                f"Répartition de difficulté incorrecte : {counts[QuizDifficulty.DIFFICILE]} "
+                f"difficile(s) pour {n} questions (attendu ≈{expected_difficile:.0f})"
+            )
+        if abs(counts[QuizDifficulty.NORMALE] - expected_normale) > 1:
+            raise ValueError(
+                f"Répartition de difficulté incorrecte : {counts[QuizDifficulty.NORMALE]} "
+                f"normale(s) pour {n} questions (attendu ≈{expected_normale:.0f})"
+            )
+        if abs(counts[QuizDifficulty.FACILE] - expected_facile) > 1:
+            raise ValueError(
+                f"Répartition de difficulté incorrecte : {counts[QuizDifficulty.FACILE]} "
+                f"facile(s) pour {n} questions (attendu ≈{expected_facile:.0f})"
             )
         return self

@@ -4,7 +4,8 @@ import pytest
 
 from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError
-from app.services.course_generator import generate_course_from_question
+from app.schemas.course_generation import QuizDifficulty, QuizQuestion
+from app.services.course_generator import compute_quiz_points, generate_course_from_question
 
 VALID_STRUCTURED_ANSWER_FILE = {
     "mode": "file_question",
@@ -455,3 +456,339 @@ async def test_coverage_check_noop_when_all_pages_covered(settings, gemini_clien
 
     original_section_count = len(structured["sections"])
     assert len(result.sections or []) == original_section_count
+
+
+# --- compute_quiz_points ---
+
+
+def _make_quiz(difficulties: list[QuizDifficulty]) -> list[QuizQuestion]:
+    """Génère des questions quiz factices avec les difficultés données."""
+    return [
+        QuizQuestion(
+            question=f"Q{i+1}",
+            choices=["A", "B", "C"],
+            correct_indices=[0],
+            difficulty=d,
+            explanation="",
+            requires_calculation=False,
+        )
+        for i, d in enumerate(difficulties)
+    ]
+
+
+def test_compute_quiz_points_empty():
+    assert compute_quiz_points([]) == []
+
+
+def _expected_points_for(difficulties: list[QuizDifficulty]) -> list[float]:
+    """Calcule les points attendus pour une liste de difficultés (algorithme de référence)."""
+    WEIGHTS = {QuizDifficulty.FACILE: 1.0, QuizDifficulty.NORMALE: 1.5, QuizDifficulty.DIFFICILE: 2.0}
+    n = len(difficulties)
+    weights = [WEIGHTS[d] for d in difficulties]
+    tw = sum(weights)
+    raw = [w / tw * 20.0 for w in weights]
+    points = [round(r * 2) / 2 for r in raw]
+    points = [max(0.5, p) for p in points]
+    residual = round((20.0 - sum(points)) * 2) / 2
+    if residual != 0:
+        for i, d in enumerate(difficulties):
+            if d in (QuizDifficulty.DIFFICILE, QuizDifficulty.NORMALE):
+                points[i] = round((points[i] + residual) * 2) / 2
+                break
+    return points
+
+
+def test_compute_quiz_points_sum_20():
+    """La somme des points doit être exactement 20.0."""
+    difficulties = (
+        [QuizDifficulty.DIFFICILE] * 5
+        + [QuizDifficulty.NORMALE] * 3
+        + [QuizDifficulty.FACILE] * 2
+    )  # 10 questions, distribution 50/30/20 ≈ 50/25/25
+    questions = _make_quiz(difficulties)
+    points = compute_quiz_points(questions)
+    assert len(points) == 10
+    assert abs(sum(points) - 20.0) < 1e-9
+
+
+def test_compute_quiz_points_bounds():
+    """Chaque point doit être >= 0.5 (borne inférieure stricte).
+    La borne supérieure ~2.0 est une cible, pas une garantie absolue
+    (impossible à respecter pour tous les N avec la distribution 50/25/25).
+    """
+    difficulties = (
+        [QuizDifficulty.DIFFICILE] * 5
+        + [QuizDifficulty.NORMALE] * 2
+        + [QuizDifficulty.FACILE] * 3
+    )
+    questions = _make_quiz(difficulties)
+    points = compute_quiz_points(questions)
+    for p in points:
+        assert p >= 0.5, f"{p} < 0.5"
+
+
+def test_compute_quiz_points_steps_of_0_5():
+    """Les points doivent être des multiples de 0.5."""
+    difficulties = (
+        [QuizDifficulty.DIFFICILE] * 5
+        + [QuizDifficulty.NORMALE] * 2
+        + [QuizDifficulty.FACILE] * 3
+    )
+    questions = _make_quiz(difficulties)
+    points = compute_quiz_points(questions)
+    for p in points:
+        assert abs(p * 2 - round(p * 2)) < 1e-9, f"{p} n'est pas un multiple de 0.5"
+
+
+def test_compute_quiz_points_non_multiple_of_4():
+    """Avec N non multiple de 4 (ex: 9), la somme doit quand même être 20.0."""
+    difficulties = (
+        [QuizDifficulty.DIFFICILE] * 5
+        + [QuizDifficulty.NORMALE] * 2
+        + [QuizDifficulty.FACILE] * 2
+    )  # 9 questions
+    questions = _make_quiz(difficulties)
+    points = compute_quiz_points(questions)
+    assert abs(sum(points) - 20.0) < 1e-9
+    assert len(points) == 9
+
+
+def test_compute_quiz_points_all_same_difficulty():
+    """Toutes les questions de même difficulté : points identiques, somme 20."""
+    difficulties = [QuizDifficulty.DIFFICILE] * 10
+    questions = _make_quiz(difficulties)
+    points = compute_quiz_points(questions)
+    assert abs(sum(points) - 20.0) < 1e-9
+    assert len(set(points)) <= 2  # au plus 2 valeurs différentes (reliat ajusté)
+
+
+# --- Pydantic validation — QuizQuestion LLM schema ---
+
+
+def test_quiz_question_correct_indices_single():
+    q = QuizQuestion(
+        question="Q",
+        choices=["A", "B", "C"],
+        correct_indices=[1],
+        difficulty=QuizDifficulty.NORMALE,
+        explanation="",
+        requires_calculation=False,
+    )
+    assert q.correct_indices == [1]
+
+
+def test_quiz_question_correct_indices_multiple():
+    q = QuizQuestion(
+        question="Q",
+        choices=["A", "B", "C", "D"],
+        correct_indices=[0, 2],
+        difficulty=QuizDifficulty.DIFFICILE,
+        explanation="",
+        requires_calculation=False,
+    )
+    assert q.correct_indices == [0, 2]
+
+
+def test_quiz_question_correct_indices_empty_rejected():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="correct_indices ne peut pas être vide"):
+        QuizQuestion(
+            question="Q",
+            choices=["A", "B"],
+            correct_indices=[],
+            difficulty=QuizDifficulty.FACILE,
+            explanation="",
+            requires_calculation=False,
+        )
+
+
+def test_quiz_question_correct_indices_duplicates_rejected():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="doublons"):
+        QuizQuestion(
+            question="Q",
+            choices=["A", "B", "C"],
+            correct_indices=[0, 0],
+            difficulty=QuizDifficulty.FACILE,
+            explanation="",
+            requires_calculation=False,
+        )
+
+
+def test_quiz_question_correct_indices_out_of_bounds_rejected():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="hors bornes"):
+        QuizQuestion(
+            question="Q",
+            choices=["A", "B"],
+            correct_indices=[5],
+            difficulty=QuizDifficulty.FACILE,
+            explanation="",
+            requires_calculation=False,
+        )
+
+
+# --- Quiz mapping dans generate_course_from_question ---
+
+
+def _quiz_entries(n_diff: int, n_norm: int, n_fac: int) -> list[dict]:
+    """Génère des entrées quiz factices avec la distribution donnée."""
+    entries = []
+    idx = 0
+    for diff, count in [("difficile", n_diff), ("normale", n_norm), ("facile", n_fac)]:
+        for _ in range(count):
+            idx += 1
+            entries.append({
+                "question": f"Q{idx}",
+                "choices": ["A", "B", "C", "D"],
+                "correct_indices": [0],
+                "difficulty": diff,
+                "explanation": "",
+                "requires_calculation": diff == "difficile",
+            })
+    return entries
+
+
+VALID_STRUCTURED_ANSWER_WITH_QUIZ = {
+    "mode": "file_question",
+    "format": "focused_answer",
+    "meta": {
+        "title": "Algebre",
+        "subject": "Maths",
+        "language": "fr",
+        "generated_at": "2026-08-19T10:00:00Z",
+    },
+    "sources": [{"type": "file_chunk", "label": "doc.pdf", "reference": "doc_1_chunk_0"}],
+    "sections": [
+        {
+            "type": "development",
+            "title": "Les matrices",
+            "blocks": [],
+            "subsections": [
+                {"title": "Quoi", "blocks": [{"type": "text", "text": "definition"}]},
+                {"title": "Pourquoi", "blocks": [{"type": "text", "text": "raison"}]},
+                {"title": "Comment", "blocks": [{"type": "text", "text": "mecanisme"}]},
+            ],
+        },
+    ],
+    "quiz": _quiz_entries(n_diff=5, n_norm=2, n_fac=3),
+    "confidence": "high",
+    "unconfirmed_points": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_generate_course_quiz_has_points_and_indices(settings, gemini_client):
+    """Le quiz映射é doit contenir correct_option_indices, difficulty, points."""
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "extrait", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=0)
+    gemini_client.format_structured.return_value = VALID_STRUCTURED_ANSWER_WITH_QUIZ.copy()
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+    )
+
+    assert result.quiz is not None
+    assert len(result.quiz) == 10
+    total_points = 0.0
+    for q in result.quiz:
+        assert hasattr(q, "correct_option_indices")
+        assert hasattr(q, "difficulty")
+        assert hasattr(q, "points")
+        assert q.points >= 0.5
+        assert q.difficulty in ("facile", "normale", "difficile")
+        assert len(q.correct_option_indices) >= 1
+        total_points += q.points
+    assert abs(total_points - 20.0) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_generate_course_quiz_single_answer(settings, gemini_client):
+    """Question à réponse unique : correct_option_indices a un seul élément."""
+    structured = VALID_STRUCTURED_ANSWER_WITH_QUIZ.copy()
+    structured["quiz"] = [
+        {
+            "question": "Q unique",
+            "choices": ["A", "B", "C"],
+            "correct_indices": [1],
+            "difficulty": "normale",
+            "explanation": "",
+            "requires_calculation": False,
+        },
+    ]
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "extrait", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=0)
+    gemini_client.format_structured.return_value = structured
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+    )
+
+    assert result.quiz is not None
+    assert len(result.quiz) == 1
+    assert result.quiz[0].correct_option_indices == [1]
+
+
+@pytest.mark.asyncio
+async def test_generate_course_quiz_multiple_answers(settings, gemini_client):
+    """Question à réponses multiples : correct_option_indices a 2+ éléments."""
+    structured = VALID_STRUCTURED_ANSWER_WITH_QUIZ.copy()
+    structured["quiz"] = [
+        {
+            "question": "Q multi",
+            "choices": ["A", "B", "C", "D"],
+            "correct_indices": [0, 2, 3],
+            "difficulty": "difficile",
+            "explanation": "",
+            "requires_calculation": True,
+        },
+    ]
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "extrait", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=0)
+    gemini_client.format_structured.return_value = structured
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+    )
+
+    assert result.quiz is not None
+    assert result.quiz[0].correct_option_indices == [0, 2, 3]
+    assert result.quiz[0].difficulty == "difficile"
+
+
+@pytest.mark.asyncio
+async def test_generate_course_empty_quiz_still_works(settings, gemini_client):
+    """Quiz vide doit toujours fonctionner (non-régression)."""
+    gemini_client.format_structured.return_value = VALID_STRUCTURED_ANSWER_FILE.copy()
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "extrait", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=0)
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+    )
+
+    assert result.quiz is None or result.quiz == []

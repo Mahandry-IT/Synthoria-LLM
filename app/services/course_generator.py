@@ -7,7 +7,7 @@ from typing import Any
 from app.api.schemas import CourseGenerationResponse, CourseMeta, CourseSource
 from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError
-from app.schemas.course_generation import CourseGenerationSchema
+from app.schemas.course_generation import CourseGenerationSchema, QuizDifficulty
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
 
@@ -84,6 +84,61 @@ def _missing_pages(chunks: list[dict[str, Any]], total_pages: int) -> list[int]:
         if c.get("metadata", {}).get("page") is not None
     }
     return [p for p in range(1, total_pages + 1) if p not in covered]
+
+
+def compute_quiz_points(questions: list[Any]) -> list[float]:
+    """Répartit 20 points sur les questions selon leur difficulté.
+
+    Poids relatifs : facile 1.0, normale 1.5, difficile 2.0. Les points
+    bruts sont proportionnels aux poids, puis arrondis au 0.5 le plus proche.
+    Le reliquat (écart à 20.0) est ajusté sur la première question difficile
+    (ou normale à défaut) pour garantir que la somme == 20.0 exactement.
+
+    Seule la borne inférieure 0.5 est imposée strictement ; la borne
+    supérieure 2.0 est une cible — si le nombre de questions est trop faible
+    pour atteindre 20 sans la dépasser, la valeur peut excéder 2.0.
+
+    Paramètres:
+        questions: liste d'objets ayant un attribut `difficulty` (QuizDifficulty).
+
+    Retour: liste de points (float) dans le même ordre que `questions`.
+
+    Cas limites:
+        - Quiz vide → liste vide.
+        - N=1 → 20 points sur une seule question.
+    """
+    if not questions:
+        return []
+
+    WEIGHTS: dict[QuizDifficulty, float] = {
+        QuizDifficulty.FACILE: 1.0,
+        QuizDifficulty.NORMALE: 1.5,
+        QuizDifficulty.DIFFICILE: 2.0,
+    }
+
+    n = len(questions)
+    weights = [WEIGHTS.get(q.difficulty, 1.5) for q in questions]
+    total_weight = sum(weights)
+
+    # Points bruts proportionnels aux poids, cible = 20
+    raw = [w / total_weight * 20.0 for w in weights]
+
+    # Arrondir au 0.5 le plus proche
+    points = [round(r * 2) / 2 for r in raw]
+
+    # Borne inférieure 0.5 (pas de borne supérieure stricte)
+    points = [max(0.5, p) for p in points]
+
+    # Ajuster le reliat sur la première question difficile (ou normale)
+    current_total = sum(points)
+    residual = round((20.0 - current_total) * 2) / 2
+    if residual != 0:
+        for i, q in enumerate(questions):
+            if q.difficulty in (QuizDifficulty.DIFFICILE, QuizDifficulty.NORMALE):
+                points[i] = round((points[i] + residual) * 2) / 2
+                break
+
+    return points
 
 
 def _file_sources_from_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -232,6 +287,20 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
             "key_points": schema.unconfirmed_points,
         }
 
+    # Calculer les points du quiz (déterministe, source de vérité côté serveur)
+    quiz_points = compute_quiz_points(schema.quiz) if schema.quiz else []
+    quiz_items = []
+    for q, pts in zip(schema.quiz, quiz_points):
+        quiz_items.append({
+            "question": q.question,
+            "options": q.choices,
+            "correct_option_indices": q.correct_indices,
+            "difficulty": q.difficulty.value,
+            "points": pts,
+            "explanation": q.explanation,
+            "time_limit_seconds": 80 if q.requires_calculation else 45,
+        })
+
     return CourseGenerationResponse(
         mode=schema.mode.value,
         format=schema.format.value,
@@ -245,16 +314,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
         answer=answer,
         sections=api_sections or None,
         common_pitfalls=pitfalls or None,
-        quiz=[
-            {
-                "question": q.question,
-                "options": q.choices,
-                "correct_option_index": q.correct_index,
-                "explanation": q.explanation,
-                "time_limit_seconds": 80 if q.requires_calculation else 45,
-            }
-            for q in schema.quiz
-        ] or None,
+        quiz=quiz_items or None,
         summary=summary or (schema.sections[0].title if schema.sections else ""),
         next_steps=next_steps or schema.unconfirmed_points,
     )
