@@ -63,7 +63,13 @@ Do NOT collapse all content into a single section. Each distinct concept deserve
 - Every Comment subsection MUST include at least one fully worked example (statement + steps + result).
 - Generate 12-16 quiz questions minimum (preferably a multiple of 4), mixing conceptual and calculation questions, adapted to the content and topic depth.
 - **Single vs. multiple correct answers**: some questions have a single correct answer (`correct_indices` has 1 element), while others have multiple correct answers (`correct_indices` has 2+ elements). For multi-answer questions, the question wording must make it clear (e.g. "Sélectionnez toutes les réponses correctes" or "Parmi les propositions suivantes, lesquelles sont correctes ?").
-- **Difficulty distribution**: assign each question a `difficulty` level. Distribution should be approximately: 50% `difficile`, 25% `normale`, 25% `facile`.
+- **Difficulty distribution**: assign each question a `difficulty` level following these **exact counts** (apply this rule BEFORE producing the final JSON):
+  1. Count the total number of questions N.
+  2. Compute: `difficile = round(N / 2)`, `normale = round(N / 4)`, `facile = N - difficile - normale`.
+  3. Verify that your actual assignment matches these counts (±1 tolerance) before finalizing.
+  - Example: N=14 → difficile=7, normale=4, facile=3.
+  - Example: N=12 → difficile=6, normale=3, facile=3.
+  - Example: N=16 → difficile=8, normale=4, facile=4.
   - `difficile` = requires multi-step calculation, synthesis across multiple sections, or non-trivial reasoning.
   - `normale` = requires application of a concept or simple calculation.
   - `facile` = direct recall of a definition, fact, or straightforward property.

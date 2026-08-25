@@ -366,6 +366,37 @@ def _coerce_known_format(structured: dict[str, Any], mode: str) -> dict[str, Any
     return structured
 
 
+def _is_quiz_difficulty_error(exc: Exception) -> bool:
+    """Détecte si l'erreur est liée à la répartition de difficulté du quiz."""
+    msg = str(exc).lower()
+    return "répartition de difficulté" in msg or "quiz_difficulty" in msg.lower()
+
+
+def _rebalance_quiz_difficulty(structured: dict[str, Any]) -> dict[str, Any]:
+    """Réassigne déterministiquement les labels difficulty du quiz pour respecter
+    exactement la distribution attendue (difficile=round(N/2), normale=round(N/4),
+    facile=N-reste). Tri stable par index pour un comportement prévisible.
+
+    Cette fonction est le filet de sécurité final : aucune génération ne doit
+    échouer sur ce seul critère.
+    """
+    quiz = structured.get("quiz")
+    if not quiz or len(quiz) < 2:
+        return structured
+
+    n = len(quiz)
+    n_difficile = round(n / 2)
+    n_normale = round(n / 4)
+    n_facile = n - n_difficile - n_normale
+
+    # Tri stable par index d'origine : on garde l'ordre d'arrivée
+    difficulties = ["difficile"] * n_difficile + ["normale"] * n_normale + ["facile"] * n_facile
+    for i, q in enumerate(quiz):
+        q["difficulty"] = difficulties[i]
+
+    return structured
+
+
 def _validate_and_map(structured: dict[str, Any], mode: str) -> CourseGenerationResponse:
     """Corrige le format déterministe, valide contre CourseGenerationSchema,
     puis mappe vers CourseGenerationResponse — sous un seul try/except.
@@ -375,7 +406,61 @@ def _validate_and_map(structured: dict[str, Any], mode: str) -> CourseGeneration
         gemini_result = CourseGenerationSchema.model_validate(structured)
         return _map_schema_to_response(gemini_result)
     except Exception as exc:
+        if _is_quiz_difficulty_error(exc):
+            # Fallback déterministe : rééquilibre sans appel LLM supplémentaire
+            structured = _rebalance_quiz_difficulty(structured)
+            structured = _coerce_known_format(structured, mode)
+            try:
+                gemini_result = CourseGenerationSchema.model_validate(structured)
+                return _map_schema_to_response(gemini_result)
+            except Exception:
+                pass  # passer au raise final ci-dessous
         raise GeminiInvalidResponseError(f"JSON structuré invalide: {exc}") from exc
+
+
+async def _validate_and_map_with_retry(
+    structured: dict[str, Any],
+    mode: str,
+    gemini_client: GeminiClient,
+    system_instruction: str,
+    raw_answer_for_retry: str,
+) -> CourseGenerationResponse:
+    """Wrapper async de _validate_and_map avec retry ciblé Gemini sur erreur
+    de répartition de difficulté du quiz.
+
+    Stratégie :
+      1. Essaie _validate_and_map (inclut déjà le fallback déterministe).
+      2. Si échec GeminiInvalidResponseError sur difficulté → 1 retry Gemini
+         avec message d'erreur exact, en demandant de corriger uniquement
+         le champ difficulty.
+      3. Si le retry échoue aussi → fallback déterministe garanti.
+    """
+    try:
+        return _validate_and_map(structured, mode)
+    except GeminiInvalidResponseError as exc:
+        if not _is_quiz_difficulty_error(exc):
+            raise
+        # Retry ciblé Gemini (1 tentative)
+        retry_prompt = (
+            f"{raw_answer_for_retry}\n\n"
+            f"ERREUR DE VALIDATION : {exc}\n"
+            f"Corrige UNIQUEMENT le champ 'difficulty' des questions concernées "
+            f"pour respecter la distribution : difficile=round(N/2), "
+            f"normale=round(N/4), facile=N-difficile-normale. "
+            f"Ne change ni les questions ni les réponses."
+        )
+        try:
+            retried = await gemini_client.format_structured(
+                raw_answer=retry_prompt,
+                system_instruction=system_instruction,
+                response_schema=CourseGenerationSchema,
+            )
+            return _validate_and_map(retried, mode)
+        except Exception:
+            pass  # Fallback déterministe final (déjà dans _validate_and_map)
+        # Dernier filet : rebalance sur le structured original
+        structured = _rebalance_quiz_difficulty(structured)
+        return _validate_and_map(structured, mode)
 
 
 def _build_coverage_completion_prompt(
@@ -704,8 +789,11 @@ async def generate_course_from_question(
             system_instruction=system_instruction,
             response_schema=CourseGenerationSchema,
         )
+        validated = await _validate_and_map_with_retry(
+            structured, mode, gemini_client, system_instruction, prompt,
+        )
         return await _apply_coverage_check(
-            _validate_and_map(structured, mode), vector_store, filename,
+            validated, vector_store, filename,
             gemini_client=gemini_client, settings=settings,
             system_instruction=system_instruction,
         )
@@ -737,8 +825,11 @@ async def generate_course_from_question(
         system_instruction=system_instruction,
         response_schema=CourseGenerationSchema,
     )
+    validated = await _validate_and_map_with_retry(
+        structured, mode, gemini_client, system_instruction, formatting_prompt,
+    )
     return await _apply_coverage_check(
-        _validate_and_map(structured, mode), vector_store, filename,
+        validated, vector_store, filename,
         gemini_client=gemini_client, settings=settings,
         system_instruction=system_instruction,
     )

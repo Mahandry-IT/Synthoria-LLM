@@ -9,7 +9,11 @@ from app.core.exceptions import (
 )
 from app.schemas.course_generation import QuizDifficulty, QuizQuestion
 from app.services.course_generator import (
+    _is_quiz_difficulty_error,
     _map_sections_to_course_sections,
+    _rebalance_quiz_difficulty,
+    _validate_and_map,
+    _validate_and_map_with_retry,
     compute_quiz_points,
     generate_course_from_question,
 )
@@ -1000,3 +1004,151 @@ async def test_generate_course_empty_quiz_still_works(settings, gemini_client):
     )
 
     assert result.quiz is None or result.quiz == []
+
+
+# --- Fix répartition difficulté quiz (Partie C) ---
+
+
+def test_is_quiz_difficulty_error_detects():
+    assert _is_quiz_difficulty_error(ValueError("Répartition de difficulté incorrecte : 5")) is True
+    assert _is_quiz_difficulty_error(ValueError("quiz_difficulty distribution")) is True
+    assert _is_quiz_difficulty_error(ValueError("autre erreur")) is False
+    assert _is_quiz_difficulty_error(ValueError("")) is False
+
+
+def test_rebalance_quiz_difficulty_n14():
+    """N=14 → difficile=7, normale=4, facile=3."""
+    quiz = [{"question": f"Q{i}", "choices": ["A", "B"], "correct_indices": [0],
+             "difficulty": "facile", "explanation": "", "requires_calculation": False}
+            for i in range(14)]
+    structured = {"quiz": quiz}
+    result = _rebalance_quiz_difficulty(structured)
+    counts = {"difficile": 0, "normale": 0, "facile": 0}
+    for q in result["quiz"]:
+        counts[q["difficulty"]] += 1
+    assert counts["difficile"] == 7
+    assert counts["normale"] == 4
+    assert counts["facile"] == 3
+
+
+def test_rebalance_quiz_difficulty_n12():
+    """N=12 → difficile=6, normale=3, facile=3."""
+    quiz = [{"question": f"Q{i}", "choices": ["A", "B"], "correct_indices": [0],
+             "difficulty": "normale", "explanation": "", "requires_calculation": False}
+            for i in range(12)]
+    structured = {"quiz": quiz}
+    result = _rebalance_quiz_difficulty(structured)
+    counts = {"difficile": 0, "normale": 0, "facile": 0}
+    for q in result["quiz"]:
+        counts[q["difficulty"]] += 1
+    assert counts["difficile"] == 6
+    assert counts["normale"] == 3
+    assert counts["facile"] == 3
+
+
+def test_rebalance_quiz_difficulty_n16():
+    """N=16 → difficile=8, normale=4, facile=4."""
+    quiz = [{"question": f"Q{i}", "choices": ["A", "B"], "correct_indices": [0],
+             "difficulty": "difficile", "explanation": "", "requires_calculation": False}
+            for i in range(16)]
+    structured = {"quiz": quiz}
+    result = _rebalance_quiz_difficulty(structured)
+    counts = {"difficile": 0, "normale": 0, "facile": 0}
+    for q in result["quiz"]:
+        counts[q["difficulty"]] += 1
+    assert counts["difficile"] == 8
+    assert counts["normale"] == 4
+    assert counts["facile"] == 4
+
+
+def test_rebalance_quiz_difficulty_n2():
+    """N=2 → difficile=1, normale=0 (round(0.5)=0 banker), facile=1."""
+    quiz = [{"question": f"Q{i}", "choices": ["A", "B"], "correct_indices": [0],
+             "difficulty": "facile", "explanation": "", "requires_calculation": False}
+            for i in range(2)]
+    structured = {"quiz": quiz}
+    result = _rebalance_quiz_difficulty(structured)
+    counts = {"difficile": 0, "normale": 0, "facile": 0}
+    for q in result["quiz"]:
+        counts[q["difficulty"]] += 1
+    assert counts["difficile"] == round(2 / 2)
+    assert counts["normale"] == round(2 / 4)
+    assert counts["facile"] == 2 - counts["difficile"] - counts["normale"]
+
+
+def test_rebalance_quiz_difficulty_n3():
+    """N=3 → difficile=2, normale=1, facile=0."""
+    quiz = [{"question": f"Q{i}", "choices": ["A", "B"], "correct_indices": [0],
+             "difficulty": "facile", "explanation": "", "requires_calculation": False}
+            for i in range(3)]
+    structured = {"quiz": quiz}
+    result = _rebalance_quiz_difficulty(structured)
+    counts = {"difficile": 0, "normale": 0, "facile": 0}
+    for q in result["quiz"]:
+        counts[q["difficulty"]] += 1
+    assert counts["difficile"] == 2
+    assert counts["normale"] == 1
+    assert counts["facile"] == 0
+
+
+def test_rebalance_quiz_difficulty_n20():
+    """N=20 → difficile=10, normale=5, facile=5."""
+    quiz = [{"question": f"Q{i}", "choices": ["A", "B"], "correct_indices": [0],
+             "difficulty": "normale", "explanation": "", "requires_calculation": False}
+            for i in range(20)]
+    structured = {"quiz": quiz}
+    result = _rebalance_quiz_difficulty(structured)
+    counts = {"difficile": 0, "normale": 0, "facile": 0}
+    for q in result["quiz"]:
+        counts[q["difficulty"]] += 1
+    assert counts["difficile"] == 10
+    assert counts["normale"] == 5
+    assert counts["facile"] == 5
+
+
+def test_rebalance_quiz_difficulty_empty_noop():
+    """Quiz vide ou None → pas de modification."""
+    assert _rebalance_quiz_difficulty({}) == {}
+    assert _rebalance_quiz_difficulty({"quiz": []}) == {"quiz": []}
+    assert _rebalance_quiz_difficulty({"quiz": None}) == {"quiz": None}
+
+
+def test_rebalance_quiz_difficulty_n1_noop():
+    """N=1 → pas de rééquilibrage (trop peu de questions)."""
+    quiz = [{"question": "Q1", "choices": ["A", "B"], "correct_indices": [0],
+             "difficulty": "facile", "explanation": "", "requires_calculation": False}]
+    structured = {"quiz": quiz}
+    result = _rebalance_quiz_difficulty(structured)
+    assert result["quiz"][0]["difficulty"] == "facile"  # inchangé
+
+
+def test_validate_and_map_with_bad_distribution_rebalances():
+    """Quiz avec 5 difficile (N=14, attendu 7) → _validate_and_map doit rebalancer."""
+    # Construire un structured avec une distribution incorrecte
+    structured = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured["quiz"] = [
+        {"question": f"Q{i}", "choices": ["A", "B", "C"], "correct_indices": [0],
+         "difficulty": "difficile", "explanation": "", "requires_calculation": False}
+        for i in range(5)
+    ] + [
+        {"question": f"Q{i}", "choices": ["A", "B", "C"], "correct_indices": [0],
+         "difficulty": "difficile", "explanation": "", "requires_calculation": False}
+        for i in range(5, 9)
+    ] + [
+        {"question": f"Q{i}", "choices": ["A", "B", "C"], "correct_indices": [0],
+         "difficulty": "facile", "explanation": "", "requires_calculation": False}
+        for i in range(9, 14)
+    ]
+    # 14 questions, 9 difficile → déclenche l'erreur
+    result = _validate_and_map(structured, "file_question")
+    assert result.quiz is not None
+    assert len(result.quiz) == 14
+    # Vérifier que la distribution est maintenant valide (attributs, pas subscripts)
+    counts = {"difficile": 0, "normale": 0, "facile": 0}
+    for q in result.quiz:            counts[q.difficulty] += 1
+    expected_d = round(14 / 2)
+    expected_n = round(14 / 4)
+    expected_f = 14 - expected_d - expected_n
+    assert counts["difficile"] == expected_d
+    assert counts["normale"] == expected_n
+    assert counts["facile"] == expected_f

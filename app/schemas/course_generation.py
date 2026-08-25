@@ -157,8 +157,9 @@ class QuizQuestion(BaseModel):
     )
     difficulty: QuizDifficulty = Field(
         description=(
-            "Difficulty level of this question. Distribution across the quiz "
-            "should be ~50% difficile, ~25% normale, ~25% facile."
+            "Difficulty level of this question. Counts must follow the rule: "
+            "difficile = round(N/2), normale = round(N/4), "
+            "facile = N - difficile - normale."
         ),
     )
     explanation: str = Field(description="Why the correct answer(s) is/are correct.")
