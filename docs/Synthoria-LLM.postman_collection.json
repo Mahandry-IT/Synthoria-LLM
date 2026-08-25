@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Synthoria LLM API",
-    "description": "API FastAPI pour l'ingestion de PDF, la recherche vectorielle et la génération de cours structurés via Gemini.\n\n→ Quiz : questions à réponse unique ou multiple (QCM), points par question (0.5–2) calculés côté serveur, répartition 50% difficile / 25% normale / 25% facile.",
+    "description": "API FastAPI pour l'ingestion de PDF, la recherche vectorielle, la génération de cours structurés via Gemini, et la génération vidéo pédagogique via HuggingFace Inference.\n\n→ Quiz : questions QCM, points calculés côté serveur (20/20), répartition 50% difficile / 25% normale / 25% facile.\n→ Vidéo : POST /video/generate/{session_id} → 202 Accepted, polling GET /video/generate/{job_id}/status, téléchargement GET /video/{job_id}/download.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -12,7 +12,12 @@
     {
       "key": "sessionId",
       "value": "",
-      "description": "UUID d'une session de cours (remplir après un POST /courses/generate)"
+      "description": "UUID d'une session de cours (remplir après POST /courses/generate)"
+    },
+    {
+      "key": "jobId",
+      "value": "",
+      "description": "UUID d'un job vidéo (remplir après POST /video/generate/{sessionId})"
     }
   ],
   "item": [
@@ -64,7 +69,7 @@
               "mode": "raw",
               "raw": "{\n  \"prompt\": \"Explique Docker en une phrase\",\n  \"model\": \"llama3.2\",\n  \"stream\": false\n}"
             },
-            "description": "Génère une réponse à partir d'un prompt classique via Ollama. Le champ `model` est optionnel (défaut: llama3.2). Le champ `stream` est false par défaut.\n\nCodes de retour:\n- 200 : succès\n- 400 : prompt vide\n- 404 : modèle introuvable\n- 413 : prompt trop long\n- 503 : Ollama indisponible"
+            "description": "Génère une réponse via Ollama. model optionnel (défaut: llama3.2). Codes: 200 ok, 400 prompt vide, 404 modèle introuvable, 413 prompt trop long, 503 Ollama indisponible."
           },
           "response": []
         }
@@ -98,7 +103,7 @@
                 }
               ]
             },
-            "description": "Envoie un seul fichier PDF. Retourne PDFIngestResponse { status, filename, chunks_added, documents_added, message }.\n\nLa détection de doublons est activée : si le fichier existe déjà dans le vector store,\nle statut est 'failed' avec le message 'File already uploaded' (pas d'erreur HTTP globale).\n\nCodes de retour:\n- 200 : succès (ou doublon détecté avec status='failed')\n- 400 : pas un PDF ou contenu vide\n- 422 : fichier non exploitable"
+            "description": "Envoie un seul fichier PDF. Détection de doublons activée. Codes: 200 succès/doublon, 400 pas un PDF, 422 non exploitable."
           },
           "response": []
         },
@@ -132,7 +137,7 @@
                 }
               ]
             },
-            "description": "Envoie plusieurs fichiers PDF en une seule requête. Retourne PDFIngestMultiResponse { status, files: [...], total_chunks, total_documents }.\n\nChaque fichier est ingéré individuellement avec son propre statut (ok, error, ou failed pour doublon).\nLes erreurs d'un fichier n'empêchent pas l'ingestion des autres.\n\nExemple de réponse avec doublon :\n{\"status\": \"ok\", \"files\": [{\"status\": \"failed\", \"filename\": \"doc.pdf\", \"message\": \"File already uploaded\"}, {\"status\": \"ok\", \"filename\": \"new.pdf\", \"chunks_added\": 56}], \"total_chunks\": 56, \"total_documents\": 56}\n\nCodes de retour:\n- 200 : succès (avec ou sans erreurs/partiels doublons)\n- 400 : aucun fichier fourni"
+            "description": "Envoie plusieurs fichiers PDF. Chaque fichier est ingéré individuellement. Codes: 200 succès, 400 aucun fichier."
           },
           "response": []
         },
@@ -160,7 +165,7 @@
               "mode": "raw",
               "raw": "{\n  \"query\": \"Quel est le point clé du document ?\",\n  \"top_k\": 5\n}"
             },
-            "description": "Recherche sémantique dans les documents PDF déjà indexés. `query` requis, `top_k` optionnel (1-20, défaut 5). Retourne 200 avec { query, results: [...] }."
+            "description": "Recherche sémantique dans les documents PDF indexés. query requis, top_k optionnel (1-20, défaut 5)."
           },
           "response": []
         },
@@ -188,7 +193,7 @@
               "mode": "raw",
               "raw": "{\n  \"query\": \"Explique le gradient\",\n  \"top_k\": 10,\n  \"filename\": \"presentation_descente_gradient_marp.pdf\"\n}"
             },
-            "description": "Recherche vectorielle filtrée sur un seul fichier. Le champ `filename` accepte un string ou une liste de strings."
+            "description": "Recherche vectorielle filtrée sur un seul fichier. Le champ filename accepte un string ou une liste."
           },
           "response": []
         },
@@ -216,7 +221,7 @@
               "mode": "raw",
               "raw": "{\n  \"query\": \"Quels sont les concepts communs ?\",\n  \"top_k\": 15,\n  \"filename\": [\"presentation_descente_gradient_marp.pdf\", \"cours_regression.pdf\"]\n}"
             },
-            "description": "Recherche vectorielle filtrée sur plusieurs fichiers. Les résultats proviennent uniquement des fichiers listés dans `filename`."
+            "description": "Recherche vectorielle filtrée sur plusieurs fichiers."
           },
           "response": []
         },
@@ -235,7 +240,7 @@
                 "files"
               ]
             },
-            "description": "Liste les fichiers PDF stockés dans le vector store. Retourne FileListResponse { status, files: [{ id, filename }] }.\n\nChaque fichier reçoit un ID séquentiel (1, 2, 3...) basé sur l'ordre d'insertion.\n\nCodes de retour:\n- 200 : succès"
+            "description": "Liste les fichiers PDF stockés. Retourne FileListResponse { status, files: [{ id, filename }] }."
           },
           "response": []
         }
@@ -268,7 +273,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Explique le principe de fonctionnement\",\n  \"filename\": \"presentation_descente_gradient_marp.pdf\",\n  \"top_k\": 6\n}"
             },
-            "description": "Mode 2 : un seul fichier + question. Retrieval RAG sur le document puis génération Gemini.\n\nQuiz dans la réponse : chaque question a `correct_option_indices` (liste d'indices 0-based, 1 = unique, >1 = QCM multiple), `difficulty` (facile/normale/difficile), `points` (calculé côté serveur pour un total de 20/20), et `time_limit_seconds` (45 ou 80).\n\nCodes de retour:\n- 200 : succès (CourseGenerationResponse)\n- 413 : question trop longue\n- 429 : quota Gemini dépassé (réponse structurée : { error, gemini_code, gemini_status, message })\n- 500/502/503 : erreur Gemini (réponse structurée : { error, gemini_code, message })"
+            "description": "Mode 2 : un seul fichier + question. Retrieval RAG puis Gemini. Quiz avec correct_option_indices, difficulty, points, time_limit_seconds. Codes: 200, 413, 429, 500/502/503."
           },
           "response": []
         },
@@ -296,7 +301,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Compare les concepts des deux cours\",\n  \"filename\": [\"presentation_descente_gradient_marp.pdf\", \"cours_regression.pdf\"],\n  \"top_k\": 20\n}"
             },
-            "description": "Mode 2 : plusieurs fichiers. Recherche séparée par fichier pour assurer une représentation équilibrée de chaque document.\n\nQuiz dans la réponse : chaque question a `correct_option_indices` (liste d'indices 0-based, 1 = unique, >1 = QCM multiple), `difficulty` (facile/normale/difficile), `points` (calculé côté serveur pour un total de 20/20), et `time_limit_seconds` (45 ou 80).\n\nCodes de retour:\n- 200 : succès (CourseGenerationResponse)\n- 429 : quota Gemini dépassé\n- 500/502/503 : erreur Gemini"
+            "description": "Mode 2 : plusieurs fichiers. Recherche séparée par fichier. Codes: 200, 429, 500/502/503."
           },
           "response": []
         },
@@ -324,7 +329,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Explique le principe de fonctionnement\",\n  \"filename\": \"presentation_descente_gradient_marp.pdf\",\n  \"top_k\": 20,\n  \"mode\": \"file_question\"\n}"
             },
-            "description": "Mode 2 forcé explicitement. Le champ `mode` prime sur l'auto-détection.\n\nQuiz dans la réponse : chaque question a `correct_option_indices` (liste d'indices 0-based), `difficulty`, `points`, et `time_limit_seconds`.\n\nCodes de retour identiques aux autres modes."
+            "description": "Mode 2 forcé explicitement. Le champ mode prime sur l'auto-détection."
           },
           "response": []
         },
@@ -352,7 +357,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Qu'est-ce que la régression linéaire ?\"\n}"
             },
-            "description": "Mode 3 : pas de `filename` → auto-détecté en question_only. Gemini utilise la recherche web pour trouver l'information.\n\nQuiz dans la réponse : chaque question a `correct_option_indices` (liste d'indices 0-based, 1 = unique, >1 = QCM multiple), `difficulty` (facile/normale/difficile), `points` (calculé côté serveur pour un total de 20/20), et `time_limit_seconds` (45 ou 80).\n\nCodes de retour:\n- 200 : succès\n- 429 : quota Gemini dépassé\n- 500/502/503 : erreur Gemini"
+            "description": "Mode 3 : pas de filename → question_only. Gemini utilise la recherche web. Codes: 200, 429, 500/502/503."
           },
           "response": []
         },
@@ -383,7 +388,7 @@
                 }
               ]
             },
-            "description": "Historique paginé des sessions de génération de cours.\n\nRéponse : { status, data: [{ id, created_at, question, filenames, mode }], meta: { page, limit, total, totalPages } }\n\nCodes de retour :\n- 200 : succès\n- 400 : paramètre invalide"
+            "description": "Historique paginé des sessions de cours. Codes: 200, 400."
           },
           "response": []
         },
@@ -403,7 +408,78 @@
                 "{{sessionId}}"
               ]
             },
-            "description": "Détail d'une session de cours avec la réponse Gemini complète.\n\nRéponse : { id, created_at, question, filenames, mode, gemini_response: CourseGenerationResponse }\n\nCodes de retour :\n- 200 : succès\n- 404 : session introuvable\n- 422 : UUID malformé"
+            "description": "Détail d'une session avec la réponse Gemini complète. Codes: 200, 404, 422."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Video",
+      "item": [
+        {
+          "name": "POST /video/generate/{session_id}",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/video/generate/{{sessionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "video",
+                "generate",
+                "{{sessionId}}"
+              ]
+            },
+            "description": "Lance la génération vidéo pédagogique d'un cours existant (asynchrone via BackgroundTasks).\n\nWorkflow :\n1. POST → 202 Accepted { job_id, status: \"pending\", course_session_id }\n2. Poller GET /video/generate/{job_id}/status\n3. Quand status = \"succeeded\", télécharger via GET /video/{job_id}/download\n\nStoryboard extrait déterministement du gemini_response, envoyé à LTX-Video via HF Inference API.\n\nCodes: 202 job créé, 404 session introuvable, 409 job déjà en cours, 422 UUID malformé."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /video/generate/{job_id}/status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/video/generate/{{jobId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "video",
+                "generate",
+                "{{jobId}}",
+                "status"
+              ]
+            },
+            "description": "Polling du statut d'un job de génération vidéo.\n\nRéponse : { job_id, status (pending|running|succeeded|failed), model_used, fallback_used, video_url, error, created_at, updated_at }\n\nvideo_url n'est renseigné que quand status = \"succeeded\".\n\nCodes: 200, 404 job introuvable."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /video/{job_id}/download",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/video/{{jobId}}/download",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "video",
+                "{{jobId}}",
+                "download"
+              ]
+            },
+            "description": "Télécharge le fichier vidéo généré (MP4). Protégé contre path traversal.\n\nPrérequis : status = \"succeeded\" (video_url disponible via polling).\n\nCodes: 200 fichier MP4, 404 job introuvable ou vidéo non disponible."
           },
           "response": []
         }

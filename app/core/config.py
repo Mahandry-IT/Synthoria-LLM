@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     gemini_use_search_grounding: bool = True
     database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
 
+    # --- HF Video Generation ---
+    hf_api_token: str | None = None
+    hf_video_model_primary: str = "LTX-Video"
+    hf_video_model_fallback: str = "LTX-Video"  # identique en V1,CogVideoX en V2
+    hf_video_timeout_seconds: float = 300.0
+    hf_video_max_retries: int = 2
+    video_storage_path: str = "/data/videos"
+
 
 @lru_cache
 def get_settings() -> Settings:

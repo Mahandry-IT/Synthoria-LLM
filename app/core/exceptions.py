@@ -29,3 +29,26 @@ class GeminiQuotaExceededError(GeminiServiceError):
 
 class GeminiInvalidResponseError(GeminiServiceError):
     """La réponse de Gemini n'a pas pu être interprétée comme un JSON structuré valide."""
+
+
+# --- HuggingFace Video Generation ---
+
+
+class HFVideoServiceError(Exception):
+    """Erreur générique lors de la communication avec l'API HF Inference."""
+
+    def __init__(self, message: str, *, error_code: int | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
+class HFVideoUnavailableError(HFVideoServiceError):
+    """HF Inference injoignable (connexion, timeout, token absent)."""
+
+
+class HFVideoRateLimitError(HFVideoServiceError):
+    """Quota / rate limit HF dépassé (429)."""
+
+
+class HFVideoGenerationError(HFVideoServiceError):
+    """La génération vidéo a échoué côté HF (500/502/503)."""

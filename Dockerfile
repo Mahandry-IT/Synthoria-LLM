@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libgomp1 \
     ghostscript \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 1000 appuser
@@ -29,7 +30,7 @@ COPY --from=builder /root/.local /home/appuser/.local
 COPY instruction ./instruction
 COPY app ./app
 
-RUN mkdir -p /data/chroma && chown -R appuser:appuser /data /app /home/appuser/.local
+RUN mkdir -p /data/chroma /data/videos && chown -R appuser:appuser /data /app /home/appuser/.local
 USER appuser
 
 EXPOSE 8000

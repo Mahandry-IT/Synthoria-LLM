@@ -13,6 +13,10 @@ services:
       CHROMA_PERSIST_DIRECTORY: /data/chroma
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
+      HF_API_TOKEN: ${HF_API_TOKEN:-}
+      HF_VIDEO_MODEL_PRIMARY: ${HF_VIDEO_MODEL_PRIMARY:-LTX-Video}
+      HF_VIDEO_MODEL_FALLBACK: ${HF_VIDEO_MODEL_FALLBACK:-LTX-Video}
+      VIDEO_STORAGE_PATH: /data/videos
     depends_on:
       ollama:
         condition: service_healthy
@@ -23,6 +27,7 @@ services:
     restart: unless-stopped
     volumes:
       - chroma-data:/data
+      - video-data:/data/videos
     networks:
       - default
       - synthoria-net   # ajouté : accessible depuis Studio
@@ -100,3 +105,4 @@ volumes:
   ollama-data:
   chroma-data:
   postgres-data:
+  video-data:
