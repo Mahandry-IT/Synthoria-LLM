@@ -11,8 +11,6 @@ API FastAPI dédiée à l'ingestion et à la recherche de documents PDF via une 
 - **Ollama** pour les embeddings locaux (`nomic-embed-text`) et le modèle de génération
 - **Stockage vectoriel local léger** (JSON + embeddings NumPy, sans dépendance native C++)
 - **PostgreSQL 16** pour l'historique des sessions de cours (SQLAlchemy async + asyncpg)
-- **HuggingFace Inference API** pour la génération vidéo (LTX-Video, fallback configurable)
-- **ffmpeg** pour la concaténation des clips vidéo
 - **Rate limiting** et **CORS** configurables
 - Tests **pytest**
 
@@ -56,9 +54,6 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | POST | `/courses/generate` | Génère un cours structuré (JSON). **Mode 2** (fichier + question) si `filename` fourni, **Mode 3** (question seule + recherche web) sinon. Session persistée en DB (best-effort). Quiz inclus avec réponses multiples, difficulté et points. |
 | GET | `/courses/history?page=1&limit=20` | Historique paginé des sessions de cours (UUID, date, question, fichiers, mode) |
 | GET | `/courses/history/{id}` | Détail d'une session avec la réponse Gemini complète |
-| POST | `/video/generate/{session_id}` | Lance la génération vidéo pédagogique (202 Accepted, traitement asynchrone) |
-| GET | `/video/generate/{job_id}/status` | Polling du statut d'un job vidéo (pending/running/succeeded/failed) |
-| GET | `/video/{job_id}/download` | Télécharge la vidéo MP4 générée (path traversal protégé) |
 
 ### Tester l'API
 
@@ -88,14 +83,6 @@ GEMINI_TIMEOUT_SECONDS=30
 COURSE_TOP_K_DEFAULT=6
 COURSE_QUESTION_MAX_LENGTH=2000
 DATABASE_URL=postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
-
-# Vidéo (optionnel)
-HF_API_TOKEN=
-HF_VIDEO_MODEL_PRIMARY=LTX-Video
-HF_VIDEO_MODEL_FALLBACK=LTX-Video
-HF_VIDEO_TIMEOUT_SECONDS=300
-HF_VIDEO_MAX_RETRIES=2
-VIDEO_STORAGE_PATH=/data/videos
 ```
 
 > `DATABASE_URL` pointe vers le conteneur PostgreSQL du compose. Pour un dev local sans Docker, ajustez l'URL (ex. `postgresql+asyncpg://user:pass@localhost:5432/synthoria`).
@@ -123,15 +110,14 @@ app/
 ├── api/              # routes + schémas FastAPI
 ├── core/             # configuration, exceptions, rate limiting
 ├── db/               # SQLAlchemy models + session async
-├── repositories/     # accès aux données (course sessions, video jobs)
-├── services/         # Ollama, chunking, extraction PDF, vector store, Gemini Vision, HF video
+├── repositories/     # accès aux données (course sessions)
+├── services/         # Ollama, chunking, extraction PDF, vector store, Gemini Vision
 ├── main.py           # bootstrap FastAPI
 ├── __init__.py
 docs/
 ├── Synthoria-LLM.postman_collection.json  # collection Postman
 instruction/
 ├── course_generation_instructions.md  # instructions LLM (quiz, cours)
-├── video_tutorial_instructions.md  # storyboard vidéo style YouTube
 ├── vision_instructions.md  # instructions système Gemini
 migrations/
 ├── versions/         # migrations Alembic (PostgreSQL)
@@ -162,33 +148,3 @@ Chaque question de quiz dans `CourseGenerationResponse.quiz` suit ce schéma :
 | `time_limit_seconds` | `int` | 45s par défaut, 80s si la question implique un calcul |
 
 > **⚠️ Breaking change** : `correct_option_index` (int) a été remplacé par `correct_option_indices` (list[int]). Mettre à jour le frontend en conséquence.
-
-## Génération vidéo
-
-La génération vidéo transforme le contenu d'un cours en vidéo pédagogique style tutoriel YouTube.
-
-### Workflow
-
-1. **Créer une session de cours** via `POST /courses/generate`
-2. **Lancer la génération vidéo** : `POST /video/generate/{session_id}` → 202 Accepted
-3. **Poller le statut** : `GET /video/generate/{job_id}/status` → attendant `succeeded`
-4. **Télécharger** : `GET /video/{job_id}/download` → fichier MP4
-
-### Fonctionnement interne
-
-- Le `gemini_response` (contenu du cours) est converti en storyboard (liste de scènes) de manière déterministe (titre + sections)
-- Chaque scène contient une `narration` et un `visual_prompt` (description pour le modèle vidéo)
-- Les clips sont générés un par un via HuggingFace Inference API (LTX-Video)
-- Les clips sont concaténés en un seul fichier MP4 via ffmpeg
-- Fallback automatique si le modèle principal échoue (même modèle en V1, CogVideoX en V2)
-
-### Variables d'environnement requises
-
-| Variable | Description | Défaut |
-| -------- | ----------- | ------ |
-| `HF_API_TOKEN` | Token d'accès HuggingFace Inference API | — (requis pour la vidéo) |
-| `HF_VIDEO_MODEL_PRIMARY` | Modèle principal de génération vidéo | `LTX-Video` |
-| `HF_VIDEO_MODEL_FALLBACK` | Modèle de fallback | `LTX-Video` |
-| `HF_VIDEO_TIMEOUT_SECONDS` | Timeout par appel HF (secondes) | `300` |
-| `HF_VIDEO_MAX_RETRIES` | Nombre max de retries par clip | `2` |
-| `VIDEO_STORAGE_PATH` | Répertoire de stockage des vidéos | `/data/videos` |

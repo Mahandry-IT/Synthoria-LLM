@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Configuration de l'application, chargée depuis les variables d'environnement."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "Synthoria LLM"
     ollama_base_url: str = "http://ollama:11434"
@@ -34,14 +34,6 @@ class Settings(BaseSettings):
     course_coverage_min_missing_chars: int = 300
     gemini_use_search_grounding: bool = True
     database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
-
-    # --- HF Video Generation ---
-    hf_api_token: str | None = None
-    hf_video_model_primary: str = "LTX-Video"
-    hf_video_model_fallback: str = "LTX-Video"  # identique en V1,CogVideoX en V2
-    hf_video_timeout_seconds: float = 300.0
-    hf_video_max_retries: int = 2
-    video_storage_path: str = "/data/videos"
 
 
 @lru_cache

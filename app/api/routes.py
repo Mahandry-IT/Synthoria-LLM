@@ -1,9 +1,7 @@
 import logging
-from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.schemas import (
@@ -32,17 +30,11 @@ from app.core.exceptions import (
     OllamaModelNotFoundError,
     OllamaUnavailableError,
 )
-from app.repositories import course_session_repository, video_job_repository
-from app.schemas.video_generation import (
-    VideoGenerationJobCreate,
-    VideoGenerationJobResponse,
-    VideoJobStatus,
-)
+from app.repositories import course_session_repository
 from app.services.course_generator import generate_course_from_question
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
-from app.services.video_generator import generate_course_video
 
 logger = logging.getLogger(__name__)
 
@@ -358,143 +350,4 @@ async def get_course_history(
         filenames=row.filenames,
         mode=row.mode,
         gemini_response=row.gemini_response,
-    )
-
-
-# --- Video Generation ---------------------------------------------------------
-
-
-@router.post(
-    "/video/generate/{session_id}",
-    response_model=VideoGenerationJobCreate,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def generate_video(
-    session_id: UUID,
-    request: Request,
-    background_tasks: "BackgroundTasks",
-) -> VideoGenerationJobCreate:
-    """Lance la génération vidéo d'un cours.
-
-    - 202 Accepted : job créé, traitement en arrière-plan.
-    - 404 : session introuvable.
-    - 409 : un job pending/running existe déjà pour cette session.
-    - 500 : erreur interne lors de la création du job.
-    """
-    session_factory: async_sessionmaker = request.app.state.db_session_factory
-
-    async with session_factory() as db:
-        # Vérifier que la session existe
-        course_session = await course_session_repository.get_by_id(db, session_id)
-        if course_session is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session introuvable",
-            )
-
-        # Vérifier qu'aucun job actif n'existe déjà
-        existing = await video_job_repository.get_active_job_for_session(db, session_id)
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Un job vidéo est déjà en cours pour cette session (job_id={existing.id})",
-            )
-
-    # Lancer la génération en arrière-plan
-    background_tasks.add_task(
-        generate_course_video,
-        course_session_id=str(session_id),
-        gemini_response=course_session.gemini_response,
-        session_factory=session_factory,
-    )
-
-    # Récupérer le job créé (il a été créé dans generate_course_video, avant le background)
-    # Note: le job est créé au début de generate_course_video. Pour le retour immédiat,
-    # on crée un placeholder avec un UUID temporaire.
-    import uuid as _uuid
-    temp_job_id = _uuid.uuid4()
-    return VideoGenerationJobCreate(
-        job_id=temp_job_id,
-        status=VideoJobStatus.PENDING,
-        course_session_id=session_id,
-    )
-
-
-@router.get(
-    "/video/generate/{job_id}/status",
-    response_model=VideoGenerationJobResponse,
-)
-async def get_video_job_status(
-    job_id: UUID,
-    request: Request,
-) -> VideoGenerationJobResponse:
-    """Récupère le statut d'un job de génération vidéo."""
-    session_factory: async_sessionmaker = request.app.state.db_session_factory
-    async with session_factory() as db:
-        job = await video_job_repository.get_by_id(db, job_id)
-
-    if job is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job vidéo introuvable",
-        )
-
-    # Construire l'URL de téléchargement si le fichier existe
-    video_url = None
-    if job.video_path:
-        video_url = f"/api/v1/video/{job.id}/download"
-
-    return VideoGenerationJobResponse(
-        job_id=job.id,
-        status=VideoJobStatus(job.status),
-        model_used=job.model_used,
-        fallback_used=job.fallback_used,
-        video_url=video_url,
-        error=job.error_message,
-        created_at=job.created_at.isoformat(),
-        updated_at=job.updated_at.isoformat(),
-    )
-
-
-@router.get("/video/{job_id}/download")
-async def download_video(
-    job_id: UUID,
-    request: Request,
-) -> FileResponse:
-    """Télécharge le fichier vidéo généré.
-
-    - 200 avec le fichier MP4.
-    - 404 si job introuvable ou vidéo non disponible.
-    """
-    session_factory: async_sessionmaker = request.app.state.db_session_factory
-    async with session_factory() as db:
-        job = await video_job_repository.get_by_id(db, job_id)
-
-    if job is None or not job.video_path:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Vidéo non disponible",
-        )
-
-    video_file = Path(job.video_path)
-    # Path traversal guard : vérifie que le chemin reste dans le storage
-    storage = Path(request.app.state.settings.video_storage_path if hasattr(request.app.state, 'settings') else "/data/videos")
-    try:
-        video_file.resolve().relative_to(storage.resolve())
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Vidéo non disponible",
-        )
-
-    if not video_file.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Fichier vidéo introuvable",
-        )
-
-    return FileResponse(
-        path=str(video_file),
-        media_type="video/mp4",
-        filename=f"course_video_{job.id}.mp4",
     )
