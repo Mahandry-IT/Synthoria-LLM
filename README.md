@@ -35,7 +35,7 @@ docker compose up -d --build
 
 Le docker compose démarre :
 - l'API FastAPI sur `http://localhost:8000`
-- Ollama sur `http://localhost:11434`
+- Ollama sur `http://localhost:11435`
 - PostgreSQL sur `localhost:5432`
 - un conteneur d'initialisation qui télécharge les modèles nécessaires
 
@@ -68,7 +68,7 @@ Une collection Postman pré-configurée est disponible dans [`docs/Synthoria-LLM
 Voir `.env.example`.
 
 ```env
-OLLAMA_BASE_URL=http://ollama:11434
+OLLAMA_BASE_URL=http://ollama:11435
 OLLAMA_DEFAULT_MODEL=llama3.2
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 CHROMA_PERSIST_DIRECTORY=./chroma_db

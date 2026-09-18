@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "Synthoria LLM"
-    ollama_base_url: str = "http://ollama:11434"
+    ollama_base_url: str = "http://ollama:11435"
     ollama_default_model: str = "llama3.2"
     ollama_embedding_model: str = "nomic-embed-text"
     ollama_timeout_seconds: float = 60.0
