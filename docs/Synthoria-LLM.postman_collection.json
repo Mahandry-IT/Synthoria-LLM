@@ -18,6 +18,11 @@
       "key": "jobId",
       "value": "",
       "description": "UUID d'un job vidéo (remplir après POST /video/generate/{sessionId})"
+    },
+    {
+      "key": "planId",
+      "value": "",
+      "description": "UUID d'un plan de cours (remplir après POST /courses/plan)"
     }
   ],
   "item": [
@@ -358,6 +363,91 @@
               "raw": "{\n  \"question\": \"Qu'est-ce que la régression linéaire ?\"\n}"
             },
             "description": "Mode 3 : pas de filename → question_only. Gemini utilise la recherche web. Codes: 200, 429, 500/502/503."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /courses/plan — Un fichier",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courses/plan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "plan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Explique le cours en complet\",\n  \"filename\": \"cours-transformateurs.pdf\",\n  \"top_k\": 20,\n  \"full_document\": false\n}"
+            },
+            "description": "Étape 1 de la génération en deux temps : retourne un plan détaillé (structure uniquement, sans contenu Quoi/Pourquoi/Comment) et un plan_id. Copier plan_id dans la variable {{planId}}. Mêmes paramètres que POST /courses/generate. Codes: 200 ok, 413 question trop longue, 422 body invalide, 429 quota Gemini, 502 plan invalide, 503 Gemini/Ollama ou persistance indisponible."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /courses/plan — Question seule (recherche web)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courses/plan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "plan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Comment fonctionne un transformateur électrique ?\"\n}"
+            },
+            "description": "Étape 1 de la génération en deux temps : retourne un plan détaillé (structure uniquement, sans contenu Quoi/Pourquoi/Comment) et un plan_id. Copier plan_id dans la variable {{planId}}. Mêmes paramètres que POST /courses/generate. Codes: 200 ok, 413 question trop longue, 422 body invalide, 429 quota Gemini, 502 plan invalide, 503 Gemini/Ollama ou persistance indisponible."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /courses/generate/from-plan",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courses/generate/from-plan",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "generate",
+                "from-plan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plan_id\": \"{{planId}}\",\n  \"sections\": [\n    {\n      \"type\": \"introduction\",\n      \"title\": \"Introduction aux transformateurs\",\n      \"objective\": \"Situer le transformateur et ses prérequis.\",\n      \"subtopics\": [\n        \"Rôle\",\n        \"Prérequis\"\n      ],\n      \"order\": 1\n    },\n    {\n      \"type\": \"development\",\n      \"title\": \"Principe de fonctionnement\",\n      \"objective\": \"Comprendre l'induction mutuelle entre primaire et secondaire.\",\n      \"subtopics\": [\n        \"Flux magnétique\",\n        \"Rapport de transformation\"\n      ],\n      \"order\": 2\n    },\n    {\n      \"type\": \"summary\",\n      \"title\": \"Résumé\",\n      \"objective\": \"Retenir l'essentiel.\",\n      \"subtopics\": [],\n      \"order\": 3\n    }\n  ]\n}"
+            },
+            "description": "Étape 2 : génère le cours complet à partir du plan validé ou édité (sections renvoyées en entier, revalidées côté serveur). Question, mode et contexte viennent du plan persisté. Réponse identique à POST /courses/generate. Codes: 200 ok, 404 plan inconnu, 410 plan expiré, 422 plan invalide (1 à 80 sections, au moins une 'development', title non vide, order ≥ 1), 429 quota Gemini, 502 tous les lots en échec, 503 Gemini indisponible."
           },
           "response": []
         },
