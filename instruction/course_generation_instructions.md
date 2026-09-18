@@ -44,7 +44,7 @@ Do not use placeholder examples ("for instance, X happens") — make them fully 
 
 Your raw answer will be reformatted into a strict JSON schema in a second pass.
 
-**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections is driven first by the need to **fully cover the topic** — every sub-topic, mechanism, or facet raised by the source material or the question must get its own section. Do not stop at a minimum count if the subject isn't fully covered yet. As a rough guide: a simple/narrow topic typically needs 6-8 sections, a complex/broad topic typically needs 10-12+ sections — but these are floors, not targets: if full coverage requires more sections than the guide suggests, add them.
+**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections is driven first by the need to **fully cover the topic** — every sub-topic, mechanism, or facet raised by the source material or the question must get its own section. Do not stop at a minimum count if the subject isn't fully covered yet. As a rough guide, a simple/narrow topic typically needs at least 10 sections and a complex/broad topic 15-20 or more — these figures are **floors, never ceilings** (no number, 12 included, is a maximum): if full coverage requires more sections than the guide suggests, add them.
 
 Pattern:
 - Section: Introduction (section type `introduction`) — context, prerequisites, overview
@@ -76,3 +76,12 @@ Do NOT collapse all content into a single section. Each distinct concept deserve
 - **Quiz distractors**: for each question, the incorrect options must be plausible and close to the correct answer (similar order of magnitude, same unit, a common misconception, an off-by-one/sign error, a confusion between two closely related concepts) rather than obviously wrong or unrelated values. This increases difficulty and forces genuine understanding rather than elimination by guesswork.
 - Aim for 2-3 COMMON_PITFALLS entries per course.
 - Include a SUMMARY section and NEXT_STEPS with 3-5 suggestions.
+
+## Alignment with a validated plan
+
+When the prompt provides a **validated course plan** (list of planned sections with `title`, `objective`, `subtopics`), the plan **overrides every minimum count above** and is binding:
+
+- Generate **exactly** the sections requested: same number, same titles, same order. No merging, no deletion, no extra section that is not in the plan.
+- Each section must develop the `objective` and cover **every** listed `subtopic`, with its own Quoi / Pourquoi / Comment and a fully worked example in Comment.
+- When only a **batch** of the plan is requested, generate only the sections of that batch: the other titles of the plan are given to avoid duplicates and keep the course coherent — do not develop them.
+- The plan is the learner's decision: never "improve" it by renaming, reordering or splitting its sections.
