@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     course_question_max_length: int = 2000
     course_coverage_completion_enabled: bool = True
     course_coverage_min_missing_chars: int = 300
+    course_plan_batch_size: int = 4
+    course_plan_ttl_minutes: int = 120
     gemini_use_search_grounding: bool = True
     database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
 
