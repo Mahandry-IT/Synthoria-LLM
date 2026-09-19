@@ -144,7 +144,10 @@ async def _ingest_single_pdf(
             chunks_added=added,
             documents_added=len(chunks),
         )
-    except Exception as exc:
+    except (OllamaUnavailableError, OllamaModelNotFoundError) as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("pdf_ingest_failed", extra={"pdf_filename": file.filename})
         return PDFIngestResponse(
             status="error",
             filename=file.filename or "unknown",
