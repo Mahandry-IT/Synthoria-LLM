@@ -83,7 +83,15 @@ class FormulaData(BaseModel):
 
 class WorkedExample(BaseModel):
     statement: str = Field(description="Concrete, non-placeholder statement of the example (with real numbers/data).")
-    steps: list[str] = Field(description="Explicit intermediate steps, in order. Never skip to the final result.")
+    steps: list[str] = Field(
+        description=(
+            "Explicit intermediate steps, in order. Never skip to the final result. "
+            "Any code inside a step must be wrapped in single backticks (`code`), "
+            "one whole statement per step — never split a statement across steps. "
+            "Sentences end with a period, but never add a period or a closing "
+            "parenthesis after code, and never wrap code in '(ex: ...)'."
+        )
+    )
     result: str = Field(description="Final result, commented — what it means, not just the raw value.")
 
 
@@ -104,7 +112,9 @@ class ContentBlock(BaseModel):
             "Set for TEXT, DEFINITION, CALLOUT. A standalone equation belongs in "
             "its own FORMULA block, never inline here — but a short inline math "
             "fragment inside a sentence (e.g. x^n, a_b) must be wrapped in single "
-            "$...$ so the frontend can render it."
+            "$...$ so the frontend can render it. Any inline code (identifier, "
+            "statement, command) must be wrapped in single backticks (`code`); "
+            "multi-line code belongs in its own CODE block."
         ),
     )
     callout_variant: CalloutVariant | None = Field(default=None, description="Set for CALLOUT only.")
@@ -113,7 +123,14 @@ class ContentBlock(BaseModel):
     table: TableData | None = Field(default=None, description="Set for TABLE.")
     formula: FormulaData | None = Field(default=None, description="Set for FORMULA.")
     code_language: str | None = Field(default=None, description="Set for CODE, e.g. 'python'.")
-    code: str | None = Field(default=None, description="Set for CODE.")
+    code: str | None = Field(
+        default=None,
+        description=(
+            "Set for CODE. Real multi-line source: one statement per line, one line "
+            "per brace, 4-space indentation, line breaks as actual newlines — never "
+            "a function or braced block collapsed on a single line."
+        ),
+    )
     worked_example: WorkedExample | None = Field(default=None, description="Set for WORKED_EXAMPLE.")
     image_caption: str | None = Field(default=None, description="Set for IMAGE.")
     image_reference: str | None = Field(default=None, description="Set for IMAGE — chunk/page reference of the source figure.")

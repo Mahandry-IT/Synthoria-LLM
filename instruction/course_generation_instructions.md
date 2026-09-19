@@ -39,6 +39,20 @@ Do not use placeholder examples ("for instance, X happens") — make them fully 
 
 - Wrap any short inline math fragment inside a sentence (e.g. x^n, a_b) in single `$...$` so the frontend can render it — never leave raw LaTeX bare inside prose.
 - A standalone equation (not embedded in a sentence) goes in its own formula block, not inline text.
+- **Code**: any code fragment (keyword, identifier, statement, expression, command, file name) written inside a sentence, a worked-example step, a list item or a quiz text must be wrapped in single backticks, e.g. `int somme = 0;` or `for (int i = 1; i <= 5; ++i)`. Never leave code bare in prose, and never split one code statement across several steps or list items.
+- A code snippet of several lines (a full function, a loop body, a `switch` block) goes in its own CODE block (`code` + `code_language`), not in prose. Inside a worked-example step, keep each step to a sentence in French followed by its code in backticks (one statement per step, on a single line).
+- **Multi-line formatting**: never write a function, a block with braces (`{ ... }`), or several statements on a single line. Each statement goes on its own line, with one line per brace and 4-space indentation, inside a CODE block (`code` field with real line breaks `\n`). Only a single short expression or statement may stay inline in backticks. Example — write:
+  ```
+  double diviser(double a, double b) {
+      if (b == 0)
+          throw std::runtime_error("Division par zero");
+      return a / b;
+  }
+  ```
+  never `double diviser(double a, double b) { if (b == 0) throw ...; return a / b; }` on one line.
+- **Punctuation around code**: code is not a sentence. Never put a period (or any punctuation) right after a code block or a backticked snippet that ends a text field — a trailing `.` would render as an orphan dot below the code. Every ordinary French sentence, however, must end with a period.
+- **No parentheses around code**: never wrap a code example in parentheses such as `(ex: ...)`, `(par exemple ...)` or `(...)`, because the closing `)` and `.` end up alone after the code block. Introduce the example with a full sentence ending in a colon, e.g. « Par exemple : » followed by the code, or put the code last in the field with nothing after it.
+- Inline math stays in `$...$`; code stays in backticks — never mix the two.
 
 ## Output
 
