@@ -1,4 +1,4 @@
-from typing import Any, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 from uuid import UUID
 
 from fastapi import Query
@@ -260,6 +260,78 @@ class CourseGenerationResponse(BaseModel):
             raise ValueError("format='full_course' nécessite 'introduction' et 'sections'")
         if self.format == "focused_answer" and self.answer is None:
             raise ValueError("format='focused_answer' nécessite 'answer'")
+        return self
+
+
+# --- Génération en deux temps : plan validable → cours complet ----------------
+
+# Plafond anti-abus (coût/quota Gemini) sur le plan renvoyé par le client.
+# Ce n'est PAS une limite pédagogique : la génération du plan elle-même n'a pas de cap.
+COURSE_PLAN_MAX_SECTIONS = 80
+_PLAN_TITLE_MAX = 200
+_PLAN_OBJECTIVE_MAX = 1000
+_PLAN_SUBTOPIC_MAX = 300
+_PLAN_SUBTOPICS_MAX_ITEMS = 20
+
+PlannedSectionType = Literal["introduction", "development", "common_pitfalls", "summary", "next_steps"]
+
+
+class CoursePlanRequest(CourseGenerationRequest):
+    """Requête de planification : mêmes paramètres que la génération directe."""
+
+
+class ApiPlannedSection(BaseModel):
+    type: PlannedSectionType
+    title: str = Field(..., min_length=1, max_length=_PLAN_TITLE_MAX)
+    objective: str = Field("", max_length=_PLAN_OBJECTIVE_MAX)
+    subtopics: list[Annotated[str, Field(min_length=1, max_length=_PLAN_SUBTOPIC_MAX)]] = Field(
+        default_factory=list, max_length=_PLAN_SUBTOPICS_MAX_ITEMS
+    )
+    order: int = Field(..., ge=1)
+
+    @field_validator("title", "objective")
+    @classmethod
+    def _strip_text(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, v: str) -> str:
+        if not v:
+            raise ValueError("title ne peut pas être vide")
+        return v
+
+
+class CoursePlanMeta(BaseModel):
+    title: str
+    subject: str
+    language: str = "fr"
+
+
+class CoursePlanResponse(BaseModel):
+    plan_id: UUID
+    expires_at: str
+    mode: Literal["file_question", "question_only"]
+    meta: CoursePlanMeta
+    sections: list[ApiPlannedSection]
+    coverage_notes: str = ""
+
+
+class CourseFromPlanRequest(BaseModel):
+    """Plan (éventuellement édité par l'utilisateur) à transformer en cours complet.
+
+    La question, le mode et les fichiers sont lus depuis le plan persisté
+    (`plan_id`) — jamais depuis le client — pour garantir que le cours est
+    généré à partir du contexte exact qui a servi à proposer le plan.
+    """
+
+    plan_id: UUID
+    sections: list[ApiPlannedSection] = Field(..., min_length=1, max_length=COURSE_PLAN_MAX_SECTIONS)
+
+    @model_validator(mode="after")
+    def _check_has_development_section(self) -> "CourseFromPlanRequest":
+        if not any(s.type == "development" for s in self.sections):
+            raise ValueError("Le plan doit contenir au moins une section 'development'")
         return self
 
 

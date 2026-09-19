@@ -20,26 +20,37 @@ _DEFAULT_INSTRUCTIONS = (
     "Tu es un professeur pédagogue. Réponds en français avec la méthode "
     "Quoi/Pourquoi/Comment, en incluant systématiquement un exemple travaillé complet."
 )
-_teacher_instructions_cache: str | None = None
+_DEFAULT_PLAN_INSTRUCTIONS = (
+    "Tu es un architecte pédagogique. Produis en français un plan de cours détaillé, "
+    "complet et ordonné par dépendances logiques (structure uniquement, sans contenu rédigé). "
+    "Le nombre de sections est un plancher, jamais un plafond."
+)
+_instructions_cache: dict[str, str] = {}
 
 
-def _load_teacher_instructions() -> str:
+def _load_instruction(filename: str, fallback: str) -> str:
+    """Charge (et met en cache) un fichier d'instructions Gemini, avec repli sur `fallback`."""
+    if filename in _instructions_cache:
+        return _instructions_cache[filename]
     candidates = [
-        Path(__file__).resolve().parents[2] / "instruction" / "course_generation_instructions.md",
-        Path(__file__).resolve().parents[1] / "instruction" / "course_generation_instructions.md",
+        Path(__file__).resolve().parents[2] / "instruction" / filename,
+        Path(__file__).resolve().parents[1] / "instruction" / filename,
     ]
     for candidate in candidates:
         if candidate.exists():
-            return candidate.read_text(encoding="utf-8")
-    logger.warning("course_generation_instructions_missing_fallback_to_default")
-    return _DEFAULT_INSTRUCTIONS
+            _instructions_cache[filename] = candidate.read_text(encoding="utf-8")
+            return _instructions_cache[filename]
+    logger.warning("instruction_file_missing_fallback_to_default", extra={"instruction_file": filename})
+    _instructions_cache[filename] = fallback
+    return fallback
 
 
 def _get_teacher_instructions() -> str:
-    global _teacher_instructions_cache
-    if _teacher_instructions_cache is None:
-        _teacher_instructions_cache = _load_teacher_instructions()
-    return _teacher_instructions_cache
+    return _load_instruction("course_generation_instructions.md", _DEFAULT_INSTRUCTIONS)
+
+
+def _get_plan_instructions() -> str:
+    return _load_instruction("course_plan_instructions.md", _DEFAULT_PLAN_INSTRUCTIONS)
 
 
 def _build_context_block(chunks: list[dict[str, Any]]) -> str:
@@ -173,7 +184,8 @@ def _block_to_text(block: Any) -> str:
     if block.list_items:
         return " ; ".join(block.list_items)
     if block.code:
-        return block.code
+        # Bloc fencé pour que le frontend l'affiche avec son composant de code.
+        return f"```{block.code_language or ''}\n{block.code}\n```"
     return ""
 
 
@@ -674,6 +686,66 @@ async def _apply_coverage_check(
     })
 
 
+async def _retrieve_chunks(
+    question: str,
+    vector_store: NumpyVectorStore,
+    gemini_client: GeminiClient,
+    settings: Settings,
+    mode: str,
+    top_k: int | None,
+    filename: str | list[str] | None,
+    full_document: bool,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Reformule la question puis récupère les chunks du vector store.
+
+    Partagée par la génération directe et la planification.
+
+    Retour: (requête reformulée, chunks filtrés par isolation fichier).
+    Vide en mode `question_only`.
+    """
+    resolved_top_k = top_k or settings.course_top_k_default
+
+    # Reformulation de la query pour améliorer le matching sémantique
+    search_query = await gemini_client.reformulate_query(question, filename)
+
+    chunks: list[dict[str, Any]] = []
+    if mode != "question_only":
+        if full_document and filename:
+            chunks = vector_store.get_all_chunks(filename)
+        # Si plusieurs fichiers : recherche séparée par fichier pour assurer
+        # une représentation équilibrée de chaque document.
+        elif isinstance(filename, list) and len(filename) > 1:
+            per_file_k = max(resolved_top_k // len(filename), 5)
+            all_chunks: list[dict[str, Any]] = []
+            for fname in filename:
+                # Le filtre filename_filter restreint les candidats AVANT le
+                # classement top_k : chaque fichier obtient ses propres chunks
+                # les plus pertinents, au lieu de puiser dans un même top_k
+                # global (ce qui écrasait les fichiers non dominants).
+                file_chunks = await vector_store.search(
+                    search_query, top_k=per_file_k, filename_filter=fname
+                )
+                all_chunks.extend(file_chunks)
+            # Dé-duplication (un chunk peut matcher dans plusieurs recherches)
+            seen: set[str] = set()
+            chunks = []
+            for c in all_chunks:
+                # Les chunks n'ont pas de champ 'id' dans les résultats de search
+                cid = c.get("content", "")[:200]
+                if cid not in seen:
+                    seen.add(cid)
+                    chunks.append(c)
+            # Limiter au top_k global
+            chunks = chunks[:resolved_top_k]
+        else:
+            chunks = await vector_store.search(
+                search_query, top_k=resolved_top_k, filename_filter=filename
+            )
+
+    _assert_file_isolation(chunks, filename)
+    return search_query, chunks
+
+
 async def generate_course_from_question(
     question: str,
     vector_store: NumpyVectorStore,
@@ -718,46 +790,9 @@ async def generate_course_from_question(
 
     Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
     """
-    resolved_top_k = top_k or settings.course_top_k_default
-
-    # Reformulation de la query pour améliorer le matching sémantique
-    search_query = await gemini_client.reformulate_query(question, filename)
-
-    chunks: list[dict[str, Any]] = []
-    if mode != "question_only":
-        if full_document and filename:
-            chunks = vector_store.get_all_chunks(filename)
-        # Si plusieurs fichiers : recherche séparée par fichier pour assurer
-        # une représentation équilibrée de chaque document.
-        elif isinstance(filename, list) and len(filename) > 1:
-            per_file_k = max(resolved_top_k // len(filename), 5)
-            all_chunks: list[dict[str, Any]] = []
-            for fname in filename:
-                # Le filtre filename_filter restreint les candidats AVANT le
-                # classement top_k : chaque fichier obtient ses propres chunks
-                # les plus pertinents, au lieu de puiser dans un même top_k
-                # global (ce qui écrasait les fichiers non dominants).
-                file_chunks = await vector_store.search(
-                    search_query, top_k=per_file_k, filename_filter=fname
-                )
-                all_chunks.extend(file_chunks)
-            # Dé-duplication (un chunk peut matcher dans plusieurs recherches)
-            seen: set[str] = set()
-            chunks = []
-            for c in all_chunks:
-                # Les chunks n'ont pas de champ 'id' dans les résultats de search
-                cid = c.get("content", "")[:200]
-                if cid not in seen:
-                    seen.add(cid)
-                    chunks.append(c)
-            # Limiter au top_k global
-            chunks = chunks[:resolved_top_k]
-        else:
-            chunks = await vector_store.search(
-                search_query, top_k=resolved_top_k, filename_filter=filename
-            )
-
-    _assert_file_isolation(chunks, filename)
+    search_query, chunks = await _retrieve_chunks(
+        question, vector_store, gemini_client, settings, mode, top_k, filename, full_document
+    )
 
     context_block = _build_context_block(chunks)
     file_sources = _file_sources_from_chunks(chunks)

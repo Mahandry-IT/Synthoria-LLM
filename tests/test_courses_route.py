@@ -188,3 +188,151 @@ def test_generate_course_mode_overrides_filename_detection(client):
 
         assert res.status_code == 200
         assert mock_generate.call_args.kwargs["mode"] == "question_only"
+
+# ─── Génération en deux temps : /courses/plan → /courses/generate/from-plan ───
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from app.schemas.course_generation import CoursePlanSchema
+
+
+class _FakeSessionFactory:
+    """Remplace app.state.db_session_factory : `async with factory() as db` sans PostgreSQL."""
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return AsyncMock()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _planned_json(order: int, type_: str = "development", title: str | None = None) -> dict:
+    return {
+        "type": type_, "title": title or f"Section {order}",
+        "objective": "obj", "subtopics": ["a", "b"], "order": order,
+    }
+
+
+def _plan_row(**overrides) -> SimpleNamespace:
+    row = dict(
+        id=uuid.uuid4(), question="Q", mode="file_question", filenames=["doc.pdf"],
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    row.update(overrides)
+    return SimpleNamespace(**row)
+
+
+@pytest.fixture
+def plan_client(client):
+    app.state.db_session_factory = _FakeSessionFactory()
+    return client
+
+
+def test_create_course_plan_success(plan_client):
+    plan = CoursePlanSchema.model_validate({
+        "meta": {"title": "T", "subject": "S", "language": "fr"},
+        "planned_sections": [_planned_json(1, "introduction"), _planned_json(2)],
+        "coverage_notes": "RAS",
+    })
+    saved = _plan_row()
+    with patch("app.api.routes.generate_course_plan", new_callable=AsyncMock) as mock_plan, patch(
+        "app.api.routes.course_plan_repository.save", new_callable=AsyncMock
+    ) as mock_save:
+        mock_plan.return_value = (plan, {"chunks": []})
+        mock_save.return_value = saved
+
+        res = plan_client.post("/courses/plan", json={"question": "Q", "filename": "doc.pdf"})
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["plan_id"] == str(saved.id)
+    assert body["mode"] == "file_question"
+    assert [s["title"] for s in body["sections"]] == ["Section 1", "Section 2"]
+    assert mock_save.call_args.kwargs["retrieval_context"] == {"chunks": []}
+    assert mock_save.call_args.kwargs["filenames"] == ["doc.pdf"]
+
+
+def test_create_course_plan_question_too_long_rejected(plan_client):
+    res = plan_client.post("/courses/plan", json={"question": "a" * 3000})
+    assert res.status_code == 413
+
+
+def test_create_course_plan_gemini_invalid_response(plan_client):
+    with patch("app.api.routes.generate_course_plan", new_callable=AsyncMock) as mock_plan:
+        mock_plan.side_effect = GeminiInvalidResponseError("plan invalide")
+        res = plan_client.post("/courses/plan", json={"question": "Q"})
+    assert res.status_code == 502
+
+
+def _from_plan_payload(plan_id, sections) -> dict:
+    return {"plan_id": str(plan_id), "sections": sections}
+
+
+def test_generate_from_plan_success_uses_edited_sections(plan_client):
+    from app.api.schemas import CourseGenerationResponse
+
+    row = _plan_row()
+    edited = [_planned_json(1, "introduction", "Intro"), _planned_json(2, title="Titre modifié")]
+    with patch(
+        "app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row
+    ), patch(
+        "app.api.routes.course_plan_repository.mark_generated", new_callable=AsyncMock
+    ) as mock_mark, patch(
+        "app.api.routes.course_session_repository.save", new_callable=AsyncMock
+    ) as mock_session_save, patch(
+        "app.api.routes.generate_course_from_validated_plan", new_callable=AsyncMock
+    ) as mock_generate:
+        mock_generate.return_value = CourseGenerationResponse.model_validate(VALID_RESPONSE)
+
+        res = plan_client.post("/courses/generate/from-plan", json=_from_plan_payload(row.id, edited))
+
+    assert res.status_code == 200
+    assert res.json()["mode"] == "file_question"
+    sent = mock_generate.call_args.kwargs["edited_sections"]
+    assert [s.title for s in sent] == ["Intro", "Titre modifié"]
+    assert mock_generate.call_args.kwargs["plan_row"] is row
+    mock_session_save.assert_awaited_once()
+    mock_mark.assert_awaited_once()
+
+
+def test_generate_from_plan_unknown_plan_404(plan_client):
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=None):
+        res = plan_client.post(
+            "/courses/generate/from-plan", json=_from_plan_payload(uuid.uuid4(), [_planned_json(1)])
+        )
+    assert res.status_code == 404
+
+
+def test_generate_from_plan_expired_plan_410(plan_client):
+    row = _plan_row(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row):
+        res = plan_client.post("/courses/generate/from-plan", json=_from_plan_payload(row.id, [_planned_json(1)]))
+    assert res.status_code == 410
+
+
+def test_generate_from_plan_too_many_sections_422(plan_client):
+    sections = [_planned_json(i) for i in range(1, 82)]
+    res = plan_client.post("/courses/generate/from-plan", json=_from_plan_payload(uuid.uuid4(), sections))
+    assert res.status_code == 422
+
+
+@pytest.mark.parametrize("sections", [
+    [],
+    [_planned_json(1, "introduction")],  # aucune section development
+    [{**_planned_json(1), "title": "   "}],
+    [{**_planned_json(1), "type": "inconnu"}],
+    [{**_planned_json(1), "order": 0}],
+])
+def test_generate_from_plan_invalid_sections_422(plan_client, sections):
+    res = plan_client.post("/courses/generate/from-plan", json=_from_plan_payload(uuid.uuid4(), sections))
+    assert res.status_code == 422
+
+
+def test_generate_from_plan_invalid_uuid_422(plan_client):
+    res = plan_client.post("/courses/generate/from-plan", json={"plan_id": "pas-un-uuid", "sections": [_planned_json(1)]})
+    assert res.status_code == 422

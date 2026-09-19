@@ -35,6 +35,7 @@ services:
     ports:
       - "11435:11435"
     environment:
+      OLLAMA_HOST: 0.0.0.0:11435   # sinon Ollama écoute sur 11434 et l'API (11435) est injoignable
       OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-llama3.2}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
     command: ["serve"]

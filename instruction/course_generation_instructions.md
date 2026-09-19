@@ -39,12 +39,26 @@ Do not use placeholder examples ("for instance, X happens") — make them fully 
 
 - Wrap any short inline math fragment inside a sentence (e.g. x^n, a_b) in single `$...$` so the frontend can render it — never leave raw LaTeX bare inside prose.
 - A standalone equation (not embedded in a sentence) goes in its own formula block, not inline text.
+- **Code**: any code fragment (keyword, identifier, statement, expression, command, file name) written inside a sentence, a worked-example step, a list item or a quiz text must be wrapped in single backticks, e.g. `int somme = 0;` or `for (int i = 1; i <= 5; ++i)`. Never leave code bare in prose, and never split one code statement across several steps or list items.
+- A code snippet of several lines (a full function, a loop body, a `switch` block) goes in its own CODE block (`code` + `code_language`), not in prose. Inside a worked-example step, keep each step to a sentence in French followed by its code in backticks (one statement per step, on a single line).
+- **Multi-line formatting**: never write a function, a block with braces (`{ ... }`), or several statements on a single line. Each statement goes on its own line, with one line per brace and 4-space indentation, inside a CODE block (`code` field with real line breaks `\n`). Only a single short expression or statement may stay inline in backticks. Example — write:
+  ```
+  double diviser(double a, double b) {
+      if (b == 0)
+          throw std::runtime_error("Division par zero");
+      return a / b;
+  }
+  ```
+  never `double diviser(double a, double b) { if (b == 0) throw ...; return a / b; }` on one line.
+- **Punctuation around code**: code is not a sentence. Never put a period (or any punctuation) right after a code block or a backticked snippet that ends a text field — a trailing `.` would render as an orphan dot below the code. Every ordinary French sentence, however, must end with a period.
+- **No parentheses around code**: never wrap a code example in parentheses such as `(ex: ...)`, `(par exemple ...)` or `(...)`, because the closing `)` and `.` end up alone after the code block. Introduce the example with a full sentence ending in a colon, e.g. « Par exemple : » followed by the code, or put the code last in the field with nothing after it.
+- Inline math stays in `$...$`; code stays in backticks — never mix the two.
 
 ## Output
 
 Your raw answer will be reformatted into a strict JSON schema in a second pass.
 
-**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections is driven first by the need to **fully cover the topic** — every sub-topic, mechanism, or facet raised by the source material or the question must get its own section. Do not stop at a minimum count if the subject isn't fully covered yet. As a rough guide: a simple/narrow topic typically needs 6-8 sections, a complex/broad topic typically needs 10-12+ sections — but these are floors, not targets: if full coverage requires more sections than the guide suggests, add them.
+**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections is driven first by the need to **fully cover the topic** — every sub-topic, mechanism, or facet raised by the source material or the question must get its own section. Do not stop at a minimum count if the subject isn't fully covered yet. As a rough guide, a simple/narrow topic typically needs at least 10 sections and a complex/broad topic 15-20 or more — these figures are **floors, never ceilings** (no number, 12 included, is a maximum): if full coverage requires more sections than the guide suggests, add them.
 
 Pattern:
 - Section: Introduction (section type `introduction`) — context, prerequisites, overview
@@ -76,3 +90,12 @@ Do NOT collapse all content into a single section. Each distinct concept deserve
 - **Quiz distractors**: for each question, the incorrect options must be plausible and close to the correct answer (similar order of magnitude, same unit, a common misconception, an off-by-one/sign error, a confusion between two closely related concepts) rather than obviously wrong or unrelated values. This increases difficulty and forces genuine understanding rather than elimination by guesswork.
 - Aim for 2-3 COMMON_PITFALLS entries per course.
 - Include a SUMMARY section and NEXT_STEPS with 3-5 suggestions.
+
+## Alignment with a validated plan
+
+When the prompt provides a **validated course plan** (list of planned sections with `title`, `objective`, `subtopics`), the plan **overrides every minimum count above** and is binding:
+
+- Generate **exactly** the sections requested: same number, same titles, same order. No merging, no deletion, no extra section that is not in the plan.
+- Each section must develop the `objective` and cover **every** listed `subtopic`, with its own Quoi / Pourquoi / Comment and a fully worked example in Comment.
+- When only a **batch** of the plan is requested, generate only the sections of that batch: the other titles of the plan are given to avoid duplicates and keep the course coherent — do not develop them.
+- The plan is the learner's decision: never "improve" it by renaming, reordering or splitting its sections.

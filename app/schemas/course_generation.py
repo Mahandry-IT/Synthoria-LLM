@@ -83,7 +83,15 @@ class FormulaData(BaseModel):
 
 class WorkedExample(BaseModel):
     statement: str = Field(description="Concrete, non-placeholder statement of the example (with real numbers/data).")
-    steps: list[str] = Field(description="Explicit intermediate steps, in order. Never skip to the final result.")
+    steps: list[str] = Field(
+        description=(
+            "Explicit intermediate steps, in order. Never skip to the final result. "
+            "Any code inside a step must be wrapped in single backticks (`code`), "
+            "one whole statement per step — never split a statement across steps. "
+            "Sentences end with a period, but never add a period or a closing "
+            "parenthesis after code, and never wrap code in '(ex: ...)'."
+        )
+    )
     result: str = Field(description="Final result, commented — what it means, not just the raw value.")
 
 
@@ -104,7 +112,9 @@ class ContentBlock(BaseModel):
             "Set for TEXT, DEFINITION, CALLOUT. A standalone equation belongs in "
             "its own FORMULA block, never inline here — but a short inline math "
             "fragment inside a sentence (e.g. x^n, a_b) must be wrapped in single "
-            "$...$ so the frontend can render it."
+            "$...$ so the frontend can render it. Any inline code (identifier, "
+            "statement, command) must be wrapped in single backticks (`code`); "
+            "multi-line code belongs in its own CODE block."
         ),
     )
     callout_variant: CalloutVariant | None = Field(default=None, description="Set for CALLOUT only.")
@@ -113,7 +123,14 @@ class ContentBlock(BaseModel):
     table: TableData | None = Field(default=None, description="Set for TABLE.")
     formula: FormulaData | None = Field(default=None, description="Set for FORMULA.")
     code_language: str | None = Field(default=None, description="Set for CODE, e.g. 'python'.")
-    code: str | None = Field(default=None, description="Set for CODE.")
+    code: str | None = Field(
+        default=None,
+        description=(
+            "Set for CODE. Real multi-line source: one statement per line, one line "
+            "per brace, 4-space indentation, line breaks as actual newlines — never "
+            "a function or braced block collapsed on a single line."
+        ),
+    )
     worked_example: WorkedExample | None = Field(default=None, description="Set for WORKED_EXAMPLE.")
     image_caption: str | None = Field(default=None, description="Set for IMAGE.")
     image_reference: str | None = Field(default=None, description="Set for IMAGE — chunk/page reference of the source figure.")
@@ -201,6 +218,62 @@ class CoverageCompletionSchema(BaseModel):
             "'Pages non couvertes', 'Supplément' — donner un titre thématique réel."
         )
     )
+
+
+class SectionsBatchSchema(BaseModel):
+    """Schéma Gemini pour un lot de sections DEVELOPMENT générées à partir d'un plan validé."""
+
+    sections: list[Section] = Field(
+        description=(
+            "Exactement une section DEVELOPMENT par section planifiée du lot, dans "
+            "le même ordre et avec le même titre que dans le plan. Chaque section "
+            "contient les sous-sections Quoi / Pourquoi / Comment (toutes "
+            "obligatoires) et un exemple travaillé complet dans Comment."
+        )
+    )
+
+
+class PlanMeta(BaseModel):
+    title: str = Field(description="Titre du cours.")
+    subject: str = Field(description="Matière / domaine du cours.")
+    language: str = Field(default="fr")
+
+
+class PlannedSection(BaseModel):
+    """Section planifiée : structure uniquement, aucun contenu Quoi/Pourquoi/Comment rédigé."""
+
+    type: SectionType = Field(description="Rôle structurel de la section dans le cours.")
+    title: str = Field(description="Titre thématique réel et précis (jamais générique).")
+    objective: str = Field(description="Ce que l'apprenant doit savoir/savoir faire à l'issue de la section.")
+    subtopics: list[str] = Field(
+        default_factory=list,
+        description="Notions, mécanismes ou cas précis que la section devra développer.",
+    )
+    order: int = Field(description="Position 1-based dans le cours, respectant l'ordre de dépendance logique.")
+
+
+class CoursePlanSchema(BaseModel):
+    """Sortie structurée Gemini de l'étape de planification (structure du cours, sans contenu rédigé)."""
+
+    meta: PlanMeta
+    planned_sections: list[PlannedSection] = Field(
+        description=(
+            "Plan détaillé et complet, ordonné par dépendances logiques "
+            "(introduction → notions de base → notions dépendantes → pièges → "
+            "résumé → suite). Aucun plafond de sections : la couverture "
+            "exhaustive du sujet prime."
+        )
+    )
+    coverage_notes: str = Field(
+        default="",
+        description="Remarques sur la couverture : ce qui est volontairement exclu ou non confirmé par les sources.",
+    )
+
+    @model_validator(mode="after")
+    def _check_has_development_section(self) -> "CoursePlanSchema":
+        if not any(s.type is SectionType.DEVELOPMENT for s in self.planned_sections):
+            raise ValueError("Le plan doit contenir au moins une section 'development'")
+        return self
 
 
 class Meta(BaseModel):
