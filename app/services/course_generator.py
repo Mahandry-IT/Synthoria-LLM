@@ -184,7 +184,8 @@ def _block_to_text(block: Any) -> str:
     if block.list_items:
         return " ; ".join(block.list_items)
     if block.code:
-        return block.code
+        # Bloc fencé pour que le frontend l'affiche avec son composant de code.
+        return f"```{block.code_language or ''}\n{block.code}\n```"
     return ""
 
 
