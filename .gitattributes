@@ -1,0 +1,2 @@
+# Les scripts shell exécutés dans les conteneurs Linux doivent rester en LF.
+*.sh text eol=lf

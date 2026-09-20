@@ -26,9 +26,68 @@ services:
     restart: unless-stopped
     volumes:
       - chroma-data:/data
+      - podcast-data:/data/podcasts   # partagé avec le worker : l'API sert les MP3 produits par lui
     networks:
       - default
       - synthoria-net   # ajouté : accessible depuis Studio
+
+  worker:
+    build: ../Synthoria LLM
+    command: ["python", "-m", "app.workers.podcast_worker"]
+    env_file:
+    - .env
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    environment:
+      PYTHONUNBUFFERED: 1
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
+      PODCAST_TTS_BASE_URL: http://piper:5000
+      PODCAST_STORAGE_DIR: /data/podcasts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      piper:
+        condition: service_healthy
+    cpus: 1.5   # borne le CPU de la synthèse vocale pour préserver l'API
+    restart: unless-stopped
+    stop_grace_period: 60s   # laisse le worker finir son étape sur SIGTERM
+    volumes:
+      - podcast-data:/data/podcasts
+    networks:
+      - default
+
+  piper:
+    build:
+      context: .
+      dockerfile: docker/piper/Dockerfile
+    environment:
+      PIPER_DEFAULT_VOICE: ${PODCAST_VOICE_HOST:-fr_FR-siwis-medium}
+    # Aucun port publié : joignable uniquement depuis le réseau interne (api / worker).
+    expose:
+      - "5000"
+    depends_on:
+      piper-init:
+        condition: service_completed_successfully
+    volumes:
+      - piper-voices:/voices
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 5000), 2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  piper-init:
+    build:
+      context: .
+      dockerfile: docker/piper/Dockerfile
+    # Télécharge les voix FR (une femme, un homme) : vérifier la licence (MODEL_CARD) de chaque voix avant usage.
+    command: ["download", "${PODCAST_VOICE_HOST:-fr_FR-siwis-medium}", "${PODCAST_VOICE_EXPERT:-fr_FR-tom-medium}"]
+    volumes:
+      - piper-voices:/voices
 
   ollama:
     image: ollama/ollama:latest
@@ -104,3 +163,5 @@ volumes:
   ollama-data:
   chroma-data:
   postgres-data:
+  piper-voices:
+  podcast-data:
