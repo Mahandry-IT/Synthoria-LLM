@@ -503,7 +503,7 @@ async def test_more_sections_are_development_new_and_ordered_after_plan(gemini_c
         ]
     }
 
-    created = await generate_more_sections(_plan_row(), current, gemini_client)
+    created = (await generate_more_sections(_plan_row(), current, gemini_client)).sections
 
     assert [s.title for s in created] == ["Optimisation avancée", "Applications industrielles"]
     assert {s.type for s in created} == {"development"}
@@ -518,9 +518,79 @@ async def test_more_sections_capped(gemini_client):
         "planned_sections": [_planned(i, "development", f"Nouveau {i}") for i in range(1, 15)]
     }
 
-    created = await generate_more_sections(_plan_row(), _api_sections(["A"]), gemini_client)
+    created = (await generate_more_sections(_plan_row(), _api_sections(["A"]), gemini_client)).sections
 
     assert len(created) == 6
+
+
+def _plan_with_next_steps() -> list[ApiPlannedSection]:
+    return [
+        ApiPlannedSection(**_planned(1, "introduction", "Introduction")),
+        ApiPlannedSection(**_planned(2, "development", "Principe")),
+        ApiPlannedSection(
+            **{**_planned(3, "next_steps", "Mes pistes perso", ["Piste A", "Piste B"]), "objective": "Ancien objectif"}
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_more_sections_refresh_next_steps_with_new_leads_only(gemini_client):
+    current = _plan_with_next_steps()
+    gemini_client.format_structured.return_value = {
+        "planned_sections": [_planned(4, "development", "Applications industrielles")],
+        "next_steps": {
+            **_planned(9, "next_steps", "Titre proposé par le modèle"),
+            "objective": "Nouvel objectif",
+            "subtopics": ["piste a", "Applications industrielles", "Nouvelle piste 1", "Nouvelle piste 2"],
+        },
+    }
+
+    result = await generate_more_sections(_plan_row(), current, gemini_client)
+
+    assert [s.title for s in result.sections] == ["Applications industrielles"]
+    refreshed = result.next_steps
+    assert refreshed is not None
+    assert refreshed.type == "next_steps"
+    assert refreshed.title == "Mes pistes perso"      # titre de l'utilisateur conservé
+    assert refreshed.order == 3                        # même position que l'ancienne section
+    assert refreshed.objective == "Nouvel objectif"
+    # Ni les anciennes pistes (casse ignorée), ni un titre de section déjà présent ou créé
+    assert refreshed.subtopics == ["Nouvelle piste 1", "Nouvelle piste 2"]
+    prompt = gemini_client.format_structured.call_args.kwargs["raw_answer"]
+    assert "next_steps" in prompt and "NOUVELLES pistes" in prompt
+
+
+@pytest.mark.asyncio
+async def test_more_sections_next_steps_none_without_existing_section(gemini_client):
+    gemini_client.format_structured.return_value = {
+        "planned_sections": [_planned(3, "development", "Nouveau")],
+        "next_steps": _planned(9, "next_steps", "Suite", ["Autre piste"]),
+    }
+
+    result = await generate_more_sections(_plan_row(), _api_sections(["A"])[:2], gemini_client)
+
+    assert [s.title for s in result.sections] == ["Nouveau"] and result.next_steps is None
+
+
+@pytest.mark.asyncio
+async def test_more_sections_next_steps_none_when_model_omits_it(gemini_client):
+    gemini_client.format_structured.return_value = {"planned_sections": [_planned(4, "development", "Nouveau")]}
+
+    result = await generate_more_sections(_plan_row(), _plan_with_next_steps(), gemini_client)
+
+    assert len(result.sections) == 1 and result.next_steps is None
+
+
+@pytest.mark.asyncio
+async def test_more_sections_next_steps_none_when_all_leads_already_covered(gemini_client):
+    gemini_client.format_structured.return_value = {
+        "planned_sections": [_planned(4, "development", "Nouveau")],
+        "next_steps": _planned(9, "next_steps", "Suite", ["Piste A", "Nouveau", "Principe"]),
+    }
+
+    result = await generate_more_sections(_plan_row(), _plan_with_next_steps(), gemini_client)
+
+    assert result.next_steps is None
 
 
 @pytest.mark.asyncio

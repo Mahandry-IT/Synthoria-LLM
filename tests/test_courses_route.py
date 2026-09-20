@@ -9,6 +9,7 @@ from app.core.exceptions import (
     GeminiUnavailableError,
 )
 from app.main import app
+from app.services.course_plan_generator import MoreSectionsResult
 
 VALID_RESPONSE = {
     "mode": "file_question",
@@ -414,7 +415,7 @@ def test_refine_section_gemini_quota_429(plan_client):
 
 def test_more_sections_success(plan_client):
     row = _plan_row()
-    created = [ApiPlannedSection(**_planned_json(3, title="Nouveau"))]
+    created = MoreSectionsResult(sections=[ApiPlannedSection(**_planned_json(3, title="Nouveau"))])
     with patch(
         "app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row
     ), patch("app.api.routes.generate_more_sections", new_callable=AsyncMock, return_value=created) as mock_more:
