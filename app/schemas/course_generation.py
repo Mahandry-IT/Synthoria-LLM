@@ -86,7 +86,8 @@ class WorkedExample(BaseModel):
     steps: list[str] = Field(
         description=(
             "Explicit intermediate steps, in order. Never skip to the final result. "
-            "Any code inside a step must be wrapped in single backticks (`code`), "
+            "Programming code (only when the subject is programming) must be wrapped in single backticks (`code`); "
+            "math and numbers are never in backticks — use $...$ for math, plain text for numbers, "
             "one whole statement per step — never split a statement across steps. "
             "Sentences end with a period, but never add a period or a closing "
             "parenthesis after code, and never wrap code in '(ex: ...)'."
