@@ -10,7 +10,7 @@ from app.core.config import get_settings
 from app.core.rate_limit import RateLimitMiddleware
 from app.db.base import Base
 from app.db.session import create_engine
-from app.db.models import CoursePlan, CourseSession  # noqa: F401 — ensure Base.metadata knows the models
+from app.db.models import CoursePlan, CourseSession, PodcastJob  # noqa: F401 — ensure Base.metadata knows the models
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.vector_store import NumpyVectorStore

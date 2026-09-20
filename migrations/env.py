@@ -8,7 +8,7 @@ from alembic import context
 from app.db.base import Base
 
 # Import all models so Alembic can detect them for autogenerate
-from app.db.models import CoursePlan, CourseSession  # noqa: F401
+from app.db.models import CoursePlan, CourseSession, PodcastJob  # noqa: F401
 
 config = context.config
 
