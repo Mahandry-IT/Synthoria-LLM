@@ -93,7 +93,7 @@ course_sessions.gemini_response
 - **File de jobs en base** (`podcast_jobs`, réclamation `FOR UPDATE SKIP LOCKED`) : le conteneur `worker` survit aux redémarrages, isole le CPU de l'API et peut être multiplié (`docker compose up -d --scale worker=2`).
 - **Reprise** : un job en échec est remis en file (jusqu'à `PODCAST_MAX_ATTEMPTS`) et repart de son dernier checkpoint : le script n'est pas régénéré, les WAV en cache ne sont pas resynthétisés. Un job dont le worker a disparu est libéré après `PODCAST_JOB_STALE_MINUTES`.
 - **Déclenchement automatique** : `generate_podcast: true` dans le body de `/courses/generate` ou `/courses/generate/from-plan` (défaut : `PODCAST_AUTO_GENERATE`). La réponse contient alors `session_id` et `podcast_job_id`. Un échec de mise en file ne fait jamais échouer la génération du cours.
-- **Moteur TTS** : Piper dans un conteneur séparé, appelé en HTTP (interface `TTSEngine`, remplaçable). Le moteur est sous licence GPL-3.0 et chaque voix a sa propre licence : **vérifier le `MODEL_CARD` de chaque voix** (`PODCAST_VOICE_HOST` / `PODCAST_VOICE_EXPERT`) avant tout usage.
+- **Moteur TTS** : Piper dans un conteneur séparé, appelé en HTTP (interface `TTSEngine`, remplaçable). Le moteur est sous licence GPL-3.0 et chaque voix a sa propre licence : **vérifier le `MODEL_CARD` de chaque voix** avant tout usage. Les voix se règlent avec `PODCAST_VOICE_HOST` / `PODCAST_VOICE_EXPERT` au format `modèle[:locuteur]` (défaut : `fr_FR-upmc-medium:0` et `:1`, deux locuteurs d'un même modèle) ; le modèle téléchargé au démarrage est `PODCAST_TTS_MODEL`.
 
 ### CLI
 

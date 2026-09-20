@@ -65,7 +65,7 @@ services:
       context: .
       dockerfile: docker/piper/Dockerfile
     environment:
-      PIPER_DEFAULT_VOICE: ${PODCAST_VOICE_HOST:-fr_FR-siwis-medium}
+      PIPER_DEFAULT_VOICE: ${PODCAST_TTS_MODEL:-fr_FR-upmc-medium}
     # Aucun port publié : joignable uniquement depuis le réseau interne (api / worker).
     expose:
       - "5000"
@@ -86,8 +86,9 @@ services:
     build:
       context: .
       dockerfile: docker/piper/Dockerfile
-    # Télécharge les voix FR (une femme, un homme) : vérifier la licence (MODEL_CARD) de chaque voix avant usage.
-    command: ["download", "${PODCAST_VOICE_HOST:-fr_FR-siwis-medium}", "${PODCAST_VOICE_EXPERT:-fr_FR-tom-medium}"]
+    # Télécharge le modèle de voix (upmc : 2 locuteurs, utilisés comme HOST et EXPERT via PODCAST_VOICE_*).
+    # Pour un second modèle, ajouter son nom à la liste. Vérifier la licence (MODEL_CARD) avant usage.
+    command: ["download", "${PODCAST_TTS_MODEL:-fr_FR-upmc-medium}"]
     volumes:
       - piper-voices:/voices
 

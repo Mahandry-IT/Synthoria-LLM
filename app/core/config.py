@@ -45,8 +45,8 @@ class Settings(BaseSettings):
     podcast_tts_timeout_seconds: float = 60.0
     podcast_tts_max_retries: int = 3
     podcast_tts_max_chars: int = 400
-    podcast_voice_host: str = "fr_FR-siwis-medium"
-    podcast_voice_expert: str = "fr_FR-tom-medium"
+    podcast_voice_host: str = "fr_FR-upmc-medium:0"      # « modèle[:locuteur] »
+    podcast_voice_expert: str = "fr_FR-upmc-medium:1"
     podcast_default_target_minutes: int = 10
     podcast_max_minutes: int = 60
     podcast_max_segments: int = 40
