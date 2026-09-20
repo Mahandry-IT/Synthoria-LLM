@@ -473,15 +473,18 @@ async def add_more_plan_sections(
 ) -> MoreSectionsResponse:
     """Crée de nouvelles sections de développement à partir de « Pour aller plus loin ».
 
+    La réponse contient aussi `next_steps` : la section « Pour aller plus loin » actualisée avec de
+    nouvelles pistes, que le client doit substituer à l'ancienne.
+
     404 si `plan_id` inconnu, 410 si le plan a expiré.
     """
     plan_row = await _get_active_plan(request, body.plan_id)
 
     with _gemini_http_errors():
-        sections = await generate_more_sections(
+        result = await generate_more_sections(
             plan_row=plan_row, current_sections=body.sections, gemini_client=gemini_client
         )
-    return MoreSectionsResponse(sections=sections)
+    return MoreSectionsResponse(sections=result.sections, next_steps=result.next_steps)
 
 
 @router.get("/courses/plans", response_model=PaginatedResponse[PendingPlanItem])
