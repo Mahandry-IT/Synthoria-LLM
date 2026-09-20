@@ -37,6 +37,28 @@ class Settings(BaseSettings):
     gemini_use_search_grounding: bool = True
     database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
 
+    # Podcast (génération audio à partir d'un cours)
+    podcast_enabled: bool = True
+    podcast_auto_generate: bool = False
+    podcast_storage_dir: str = "/data/podcasts"
+    podcast_tts_base_url: str = "http://piper:5000"
+    podcast_tts_timeout_seconds: float = 60.0
+    podcast_tts_max_retries: int = 3
+    podcast_tts_max_chars: int = 400
+    podcast_voice_host: str = "fr_FR-siwis-medium"
+    podcast_voice_expert: str = "fr_FR-tom-medium"
+    podcast_default_target_minutes: int = 10
+    podcast_max_minutes: int = 60
+    podcast_max_segments: int = 40
+    podcast_script_batch_size: int = 4
+    podcast_tts_concurrency: int = 2
+    podcast_worker_poll_seconds: float = 5.0
+    podcast_job_stale_minutes: int = 20
+    podcast_max_attempts: int = 3
+    podcast_audio_bitrate: str = "96k"
+    podcast_retention_days: int = 30
+    podcast_generate_rate_limit_per_minute: int = 5
+
 
 @lru_cache
 def get_settings() -> Settings:

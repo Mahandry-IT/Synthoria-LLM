@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Any, Generic, Literal, TypeVar
 from uuid import UUID
 
@@ -393,3 +394,37 @@ class CourseHistoryDetail(BaseModel):
     filenames: list[str]
     mode: str
     gemini_response: CourseGenerationResponse
+
+# ─── Podcast ────────────────────────────────────────────────
+
+PodcastStyle = Literal["conversational", "educational", "concise"]
+PodcastJobState = Literal["pending", "scripting", "synthesizing", "mixing", "done", "failed"]
+
+
+class PodcastGenerationRequest(BaseModel):
+    style: PodcastStyle = Field("conversational", description="Ton du podcast.")
+    target_minutes: int | None = Field(
+        None, ge=3, le=60, description="Durée cible en minutes (défaut : configuration serveur)."
+    )
+    force: bool = Field(False, description="Crée un nouveau job même s'il en existe un équivalent non échoué.")
+
+
+class PodcastJobResponse(BaseModel):
+    job_id: UUID
+    status: PodcastJobState
+
+
+class PodcastJobStatus(BaseModel):
+    job_id: UUID
+    course_session_id: UUID
+    status: PodcastJobState
+    stage: str | None = None
+    progress: int = Field(0, ge=0, le=100)
+    error_message: str | None = None
+    duration_seconds: float | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PodcastJobList(BaseModel):
+    data: list[PodcastJobStatus]
