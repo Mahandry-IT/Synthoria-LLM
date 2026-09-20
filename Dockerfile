@@ -30,7 +30,7 @@ COPY --from=builder /root/.local /home/appuser/.local
 COPY instruction ./instruction
 COPY app ./app
 
-RUN mkdir -p /data/chroma /data/videos && chown -R appuser:appuser /data /app /home/appuser/.local
+RUN mkdir -p /data/chroma /data/videos /data/podcasts && chown -R appuser:appuser /data /app /home/appuser/.local
 USER appuser
 
 EXPOSE 8000

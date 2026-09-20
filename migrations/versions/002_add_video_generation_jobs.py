@@ -1,7 +1,7 @@
 """Add video_generation_jobs table for course video generation.
 
 Revision ID: 002_add_video_generation_jobs
-Revises: None
+Revises: 003
 Create Date: 2026-08-25
 """
 
@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 # revision identifiers
 revision = "002_add_video_generation_jobs"
-down_revision = None
+down_revision = "003"
 branch_labels = None
 depends_on = None
 

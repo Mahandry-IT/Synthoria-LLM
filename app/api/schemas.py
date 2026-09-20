@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated, Any, Generic, Literal, TypeVar
 from uuid import UUID
 
@@ -233,6 +234,11 @@ class CourseGenerationRequest(BaseModel):
         ),
     )
 
+    generate_podcast: bool | None = Field(
+        None,
+        description="Lance la génération d'un podcast après le cours. Défaut : PODCAST_AUTO_GENERATE.",
+    )
+
 
 class CourseGenerationResponse(BaseModel):
     mode: Literal["file_only", "file_question", "question_only"]
@@ -253,6 +259,10 @@ class CourseGenerationResponse(BaseModel):
 
     summary: str
     next_steps: list[str] = Field(default_factory=list)
+
+    # Renseignés par les routes après persistance (jamais stockés dans `gemini_response`).
+    session_id: UUID | None = Field(None, description="Id de la session persistée (None si la persistance a échoué).")
+    podcast_job_id: UUID | None = Field(None, description="Id du job podcast créé automatiquement, le cas échéant.")
 
     @model_validator(mode="after")
     def check_format_consistency(self) -> "CourseGenerationResponse":
@@ -361,6 +371,10 @@ class CourseFromPlanRequest(BaseModel):
 
     plan_id: UUID
     sections: list[ApiPlannedSection] = Field(..., min_length=1, max_length=COURSE_PLAN_MAX_SECTIONS)
+    generate_podcast: bool | None = Field(
+        None,
+        description="Lance la génération d'un podcast après le cours. Défaut : PODCAST_AUTO_GENERATE.",
+    )
 
     @model_validator(mode="after")
     def _check_has_development_section(self) -> "CourseFromPlanRequest":
@@ -389,3 +403,37 @@ class CourseHistoryDetail(BaseModel):
     filenames: list[str]
     mode: str
     gemini_response: CourseGenerationResponse
+
+# ─── Podcast ────────────────────────────────────────────────
+
+PodcastStyle = Literal["conversational", "educational", "concise"]
+PodcastJobState = Literal["pending", "scripting", "synthesizing", "mixing", "done", "failed"]
+
+
+class PodcastGenerationRequest(BaseModel):
+    style: PodcastStyle = Field("conversational", description="Ton du podcast.")
+    target_minutes: int | None = Field(
+        None, ge=3, le=60, description="Durée cible en minutes (défaut : configuration serveur)."
+    )
+    force: bool = Field(False, description="Crée un nouveau job même s'il en existe un équivalent non échoué.")
+
+
+class PodcastJobResponse(BaseModel):
+    job_id: UUID
+    status: PodcastJobState
+
+
+class PodcastJobStatus(BaseModel):
+    job_id: UUID
+    course_session_id: UUID
+    status: PodcastJobState
+    stage: str | None = None
+    progress: int = Field(0, ge=0, le=100)
+    error_message: str | None = None
+    duration_seconds: float | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PodcastJobList(BaseModel):
+    data: list[PodcastJobStatus]

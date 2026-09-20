@@ -52,6 +52,7 @@ from app.services.course_plan_generator import (
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
+from app.services.podcast.jobs import enqueue_podcast_job
 
 logger = logging.getLogger(__name__)
 
@@ -287,16 +288,42 @@ async def _persist_course_session(
     filenames: list[str],
     mode: str,
     response: CourseGenerationResponse,
-) -> None:
-    """Best-effort : persistance de la session en PostgreSQL (ne fait jamais échouer la requête)."""
+) -> UUID | None:
+    """Best-effort : persistance de la session en PostgreSQL (ne fait jamais échouer la requête).
+
+    Retourne l'id de la session persistée, ou None si la persistance a échoué.
+    """
     try:
         session_factory: async_sessionmaker = request.app.state.db_session_factory
         async with session_factory() as db:
-            await course_session_repository.save(
+            row = await course_session_repository.save(
                 db, question=question, filenames=filenames, mode=mode, response=response,
             )
+        return row.id if isinstance(row.id, UUID) else None
     except Exception:
         logger.error("course_session_persist_failed", exc_info=True)
+        return None
+
+
+async def _maybe_enqueue_podcast(
+    request: Request,
+    session_id: UUID | None,
+    requested: bool | None,
+    settings: Settings,
+) -> UUID | None:
+    """Met en file un podcast après la génération du cours, si demandé (ou activé par défaut).
+
+    Best-effort : un échec est journalisé et renvoie None, jamais d'échec de la génération du cours.
+    """
+    wanted = settings.podcast_auto_generate if requested is None else requested
+    if not (wanted and settings.podcast_enabled and session_id is not None):
+        return None
+    try:
+        job, _ = await enqueue_podcast_job(request.app.state.db_session_factory, session_id, None, settings)
+        return job.id
+    except Exception:
+        logger.error("podcast_auto_enqueue_failed", exc_info=True)
+        return None
 
 
 @router.post("/courses/generate", response_model=CourseGenerationResponse)
@@ -327,11 +354,12 @@ async def generate_course(
             full_document=body.full_document,
         )
 
-    await _persist_course_session(
+    session_id = await _persist_course_session(
         request, question=question, filenames=_filenames_list(body.filename),
         mode=resolved_mode, response=course_response,
     )
-    return course_response
+    podcast_job_id = await _maybe_enqueue_podcast(request, session_id, body.generate_podcast, settings)
+    return course_response.model_copy(update={"session_id": session_id, "podcast_job_id": podcast_job_id})
 
 
 @router.post("/courses/plan", response_model=CoursePlanResponse)
@@ -483,10 +511,12 @@ async def generate_course_from_plan(
             settings=settings,
         )
 
-    await _persist_course_session(
+    session_id = await _persist_course_session(
         request, question=plan_row.question, filenames=list(plan_row.filenames),
         mode=plan_row.mode, response=course_response,
     )
+    podcast_job_id = await _maybe_enqueue_podcast(request, session_id, body.generate_podcast, settings)
+    course_response = course_response.model_copy(update={"session_id": session_id, "podcast_job_id": podcast_job_id})
     try:
         async with session_factory() as db:
             await course_plan_repository.mark_generated(db, plan_row.id)

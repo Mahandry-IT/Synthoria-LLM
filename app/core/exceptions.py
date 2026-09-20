@@ -29,3 +29,19 @@ class GeminiQuotaExceededError(GeminiServiceError):
 
 class GeminiInvalidResponseError(GeminiServiceError):
     """La réponse de Gemini n'a pas pu être interprétée comme un JSON structuré valide."""
+
+
+class TTSError(Exception):
+    """Erreur générique de synthèse vocale."""
+
+
+class TTSUnavailableError(TTSError):
+    """Le moteur TTS est injoignable ou renvoie une erreur serveur après retries."""
+
+
+class TTSInvalidVoiceError(TTSError):
+    """Le moteur TTS a rejeté la requête (voix inconnue, texte invalide) : inutile de réessayer."""
+
+
+class AudioAssemblyError(Exception):
+    """L'assemblage audio (ffmpeg) a échoué."""

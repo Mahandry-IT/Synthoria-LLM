@@ -37,6 +37,7 @@ Le docker compose démarre :
 - l'API FastAPI sur `http://localhost:8000`
 - Ollama sur `http://localhost:11435`
 - PostgreSQL sur `localhost:5432`
+- `piper` (synthèse vocale, réseau interne uniquement) et `worker` (génération des podcasts)
 - un conteneur d'initialisation qui télécharge les modèles nécessaires
 
 Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama :
@@ -56,6 +57,12 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | POST | `/courses/generate/from-plan` | **Étape 2** : génère le cours complet à partir de `plan_id` + `sections` (plan validé ou édité par l'utilisateur). Génération par lots de sections DEVELOPMENT, sans plafond de sections. `404` plan inconnu, `410` plan expiré, `422` plan invalide (max 80 sections, au moins une `development`). Réponse identique à `/courses/generate`. |
 | GET | `/courses/history?page=1&limit=20` | Historique paginé des sessions de cours (UUID, date, question, fichiers, mode) |
 | GET | `/courses/history/{id}` | Détail d'une session avec la réponse Gemini complète |
+| POST | `/podcasts/generate/{session_id}` | Met en file la génération d'un podcast à partir d'un cours persisté (`202` + `job_id`). Body optionnel `{style, target_minutes, force}`. `404` session inconnue, `422` cours sans contenu exploitable, `429` trop de demandes, `503` fonctionnalité désactivée. Idempotent : un job non échoué équivalent est renvoyé sauf `force=true`. |
+| GET | `/podcasts/jobs/{job_id}` | État du job : `pending → scripting → synthesizing → mixing → done \| failed`, `stage`, `progress` (0-100), `error_message`, `duration_seconds` |
+| GET | `/podcasts/{job_id}/audio` | MP3 (support `Range` pour le seek du lecteur). `409` si le job n'est pas `done`, `410` si le fichier a expiré |
+| GET | `/podcasts/{job_id}/transcript` | Transcript WebVTT synchronisé (une réplique par cue) |
+| GET | `/podcasts/{job_id}/script` | Script JSON du podcast (dès l'étape de scriptage) |
+| GET | `/courses/history/{session_id}/podcasts` | Jobs podcast liés à une session |
 
 ### Tester l'API
 
@@ -66,6 +73,40 @@ Une collection Postman pré-configurée est disponible dans [`docs/Synthoria-LLM
 > **Génération en deux temps** : `POST /courses/plan` → l'utilisateur valide ou modifie le plan → `POST /courses/generate/from-plan`. `/courses/generate` (génération directe en un appel) reste disponible. Le nombre de sections du cours final suit exactement le plan validé ; le plafond de 80 sections n'est qu'une protection anti-abus (coût Gemini), pas une limite pédagogique.
 >
 > **Quiz** : les questions supportent les réponses multiples (QCM). Chaque question a un niveau de difficulté (`facile`/`normale`/`difficile`) et des points calculés côté serveur pour un total de 20/20. Le frontend doit lire `correct_option_indices` (liste d'indices 0-based) au lieu de `correct_option_index` unique.
+
+## Podcast
+
+Un cours persisté peut être transformé en podcast audio français à deux voix (`HOST` / `EXPERT`). L'audio est produit localement (TTS CPU) ; seul le script passe par Gemini.
+
+```text
+course_sessions.gemini_response
+  └─ A. Sérialisation déterministe du cours → sections sources
+      └─ B. Script (Gemini, structuré, par lots) → PodcastScript JSON   [checkpoint en base]
+          └─ C. Normalisation TTS (LaTeX, €, %, CIDR, sigles, code)
+              └─ D. Synthèse Piper, un WAV par réplique (cache par hash)  [checkpoint disque]
+                  └─ E. Assemblage ffmpeg : silences + loudnorm → MP3 + chapitres + VTT
+```
+
+- **File de jobs en base** (`podcast_jobs`, réclamation `FOR UPDATE SKIP LOCKED`) : le conteneur `worker` survit aux redémarrages, isole le CPU de l'API et peut être multiplié (`docker compose up -d --scale worker=2`).
+- **Reprise** : un job en échec est remis en file (jusqu'à `PODCAST_MAX_ATTEMPTS`) et repart de son dernier checkpoint : le script n'est pas régénéré, les WAV en cache ne sont pas resynthétisés. Un job dont le worker a disparu est libéré après `PODCAST_JOB_STALE_MINUTES`.
+- **Déclenchement automatique** : `generate_podcast: true` dans le body de `/courses/generate` ou `/courses/generate/from-plan` (défaut : `PODCAST_AUTO_GENERATE`). La réponse contient alors `session_id` et `podcast_job_id`. Un échec de mise en file ne fait jamais échouer la génération du cours.
+- **Moteur TTS** : Piper dans un conteneur séparé, appelé en HTTP (interface `TTSEngine`, remplaçable). Le moteur est sous licence GPL-3.0 et chaque voix a sa propre licence : **vérifier le `MODEL_CARD` de chaque voix** (`PODCAST_VOICE_HOST` / `PODCAST_VOICE_EXPERT`) avant tout usage.
+
+### CLI
+
+```bash
+docker compose exec api python -m app.cli podcast enqueue <session_id> [--force] [--style concise] [--minutes 8]
+docker compose exec api python -m app.cli podcast run <job_id>      # synchrone, sans worker
+docker compose exec api python -m app.cli podcast status <job_id>   # JSON
+```
+
+Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scriptable (cron, traitement en lot de l'historique).
+
+### Variables
+
+`PODCAST_ENABLED`, `PODCAST_AUTO_GENERATE`, `PODCAST_STORAGE_DIR`, `PODCAST_TTS_BASE_URL`, `PODCAST_VOICE_HOST`, `PODCAST_VOICE_EXPERT`, `PODCAST_DEFAULT_TARGET_MINUTES`, `PODCAST_MAX_MINUTES`, `PODCAST_MAX_SEGMENTS`, `PODCAST_SCRIPT_BATCH_SIZE`, `PODCAST_TTS_CONCURRENCY`, `PODCAST_TTS_MAX_CHARS`, `PODCAST_WORKER_POLL_SECONDS`, `PODCAST_JOB_STALE_MINUTES`, `PODCAST_MAX_ATTEMPTS`, `PODCAST_AUDIO_BITRATE`, `PODCAST_RETENTION_DAYS`, `PODCAST_GENERATE_RATE_LIMIT_PER_MINUTE` — valeurs par défaut dans `.env.example`. Les dossiers de jobs plus vieux que `PODCAST_RETENTION_DAYS` sont supprimés par le worker (l'audio renvoie alors `410`).
+
+> **Sécurité** : l'API n'a pas d'authentification — toute personne connaissant l'UUID d'un job peut lire son audio. Acceptable en local, à traiter avant toute exposition. Le conteneur `piper` ne publie aucun port.
 
 ## Variables d'environnement
 
@@ -118,6 +159,9 @@ app/
 ├── db/               # SQLAlchemy models + session async
 ├── repositories/     # accès aux données (course sessions, course plans)
 ├── services/         # Ollama, chunking, extraction PDF, vector store, Gemini Vision
+│   └── podcast/      # sérialisation du cours, script, normalisation TTS, client Piper, assemblage ffmpeg, pipeline
+├── workers/          # worker de jobs podcast (python -m app.workers.podcast_worker)
+├── cli.py            # CLI (python -m app.cli podcast ...)
 ├── main.py           # bootstrap FastAPI
 ├── __init__.py
 docs/
@@ -126,6 +170,9 @@ instruction/
 ├── course_generation_instructions.md  # instructions LLM (quiz, cours)
 ├── course_plan_instructions.md  # instructions LLM (plan de cours)
 ├── vision_instructions.md  # instructions système Gemini
+├── podcast_script_instructions.md  # instructions LLM (script de podcast)
+docker/
+├── piper/            # image du serveur TTS Piper
 migrations/
 ├── versions/         # migrations Alembic (PostgreSQL)
 └── ...

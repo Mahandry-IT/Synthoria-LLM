@@ -5,12 +5,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.podcast_routes import router as podcast_router
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.rate_limit import RateLimitMiddleware
 from app.db.base import Base
 from app.db.session import create_engine
-from app.db.models import CoursePlan, CourseSession  # noqa: F401 — ensure Base.metadata knows the models
+from app.db.models import CoursePlan, CourseSession, PodcastJob  # noqa: F401 — ensure Base.metadata knows the models
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.vector_store import NumpyVectorStore
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_per_minute)
 
     app.include_router(router)
+    app.include_router(podcast_router)
     return app
 
 
