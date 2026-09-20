@@ -11,6 +11,8 @@ from app.core.exceptions import GeminiInvalidResponseError, GeminiUnavailableErr
 from app.schemas.course_generation import (
     CoursePlanSchema,
     CourseGenerationSchema,
+    MoreSectionsSchema,
+    PlannedSection,
     SectionsBatchSchema,
 )
 from app.services.course_plan_generator import (
@@ -18,6 +20,8 @@ from app.services.course_plan_generator import (
     _incomplete_section,
     generate_course_from_validated_plan,
     generate_course_plan,
+    generate_more_sections,
+    refine_planned_section,
 )
 
 CHUNK = {"content": "extrait", "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.1}
@@ -318,3 +322,147 @@ def test_align_batch_sections_pads_missing_with_incomplete_placeholder():
 
     assert [s.title for s in aligned] == ["A", "B"]
     assert aligned[1] == _incomplete_section(planned[1])
+
+
+# ─── refine_planned_section / generate_more_sections ─────────
+
+
+def _refine_gemini(client, **overrides):
+    client.format_structured.return_value = {
+        "type": "development",
+        "title": "Principe",
+        "objective": "Objectif enrichi",
+        "subtopics": ["notion a", "notion b", "notion manquante"],
+        "order": 99,
+        **overrides,
+    }
+
+
+@pytest.mark.asyncio
+async def test_refine_section_keeps_type_and_order_and_adds_missing(settings, vector_store, gemini_client):
+    section = ApiPlannedSection(**_planned(3, "development", "Principe"))
+    _refine_gemini(gemini_client, type="summary")
+
+    refined = await refine_planned_section(
+        _plan_row(), section, _api_sections(["Principe", "Rendement"]), None, vector_store, gemini_client, settings
+    )
+
+    assert (refined.type, refined.order) == ("development", 3)
+    assert refined.subtopics == ["notion a", "notion b", "notion manquante"]
+    assert gemini_client.format_structured.call_args.kwargs["response_schema"] is PlannedSection
+    prompt = gemini_client.format_structured.call_args.kwargs["raw_answer"]
+    assert "n'a rien précisé" in prompt
+    vector_store.search.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refine_section_includes_user_instructions_in_prompt(settings, vector_store, gemini_client):
+    section = ApiPlannedSection(**_planned(2, "development", "Principe"))
+    _refine_gemini(gemini_client)
+
+    await refine_planned_section(
+        _plan_row(), section, [section], "ajoute le cas du transformateur triphasé", vector_store, gemini_client, settings
+    )
+
+    prompt = gemini_client.format_structured.call_args.kwargs["raw_answer"]
+    assert "transformateur triphasé" in prompt
+    assert "n'a rien précisé" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_refine_section_question_only_uses_targeted_web_search(settings, vector_store, gemini_client):
+    row = _plan_row()
+    row.mode = "question_only"
+    section = ApiPlannedSection(**_planned(2, "development", "Principe"))
+    _refine_gemini(gemini_client)
+
+    await refine_planned_section(row, section, [section], None, vector_store, gemini_client, settings)
+
+    gemini_client.search_grounded.assert_awaited_once()
+    vector_store.search.assert_not_awaited()
+    assert "synthèse web" in gemini_client.format_structured.call_args.kwargs["raw_answer"]
+
+
+@pytest.mark.asyncio
+async def test_refine_section_search_failure_is_not_fatal(settings, vector_store, gemini_client):
+    vector_store.search.side_effect = GeminiUnavailableError("embedding indisponible")
+    section = ApiPlannedSection(**_planned(2, "development", "Principe"))
+    _refine_gemini(gemini_client)
+
+    refined = await refine_planned_section(_plan_row(), section, [section], None, vector_store, gemini_client, settings)
+
+    assert refined.objective == "Objectif enrichi"
+
+
+@pytest.mark.asyncio
+async def test_refine_section_clips_to_contract_limits(settings, vector_store, gemini_client):
+    section = ApiPlannedSection(**_planned(2, "development", "Principe"))
+    _refine_gemini(
+        gemini_client, title="T" * 500, objective="O" * 2000, subtopics=["s" * 400] + [f"n{i}" for i in range(40)]
+    )
+
+    refined = await refine_planned_section(_plan_row(), section, [section], None, vector_store, gemini_client, settings)
+
+    assert len(refined.title) == 200
+    assert len(refined.objective) == 1000
+    assert len(refined.subtopics) == 20
+    assert len(refined.subtopics[0]) == 300
+
+
+@pytest.mark.asyncio
+async def test_refine_section_empty_subtopics_fall_back_to_previous(settings, vector_store, gemini_client):
+    section = ApiPlannedSection(**_planned(2, "development", "Principe", ["ancien"]))
+    _refine_gemini(gemini_client, subtopics=[])
+
+    refined = await refine_planned_section(_plan_row(), section, [section], None, vector_store, gemini_client, settings)
+
+    assert refined.subtopics == ["ancien"]
+
+
+@pytest.mark.asyncio
+async def test_refine_section_invalid_response_raises(settings, vector_store, gemini_client):
+    section = ApiPlannedSection(**_planned(2, "development", "Principe"))
+    gemini_client.format_structured.return_value = {"titre": "mauvais schéma"}
+
+    with pytest.raises(GeminiInvalidResponseError):
+        await refine_planned_section(_plan_row(), section, [section], None, vector_store, gemini_client, settings)
+
+
+@pytest.mark.asyncio
+async def test_more_sections_are_development_new_and_ordered_after_plan(gemini_client):
+    current = _api_sections(["Principe", "Rendement"])
+    gemini_client.format_structured.return_value = {
+        "planned_sections": [
+            _planned(2, "summary", "Optimisation avancée"),
+            _planned(1, "development", "principe"),  # doublon d'un titre existant : ignoré
+            _planned(3, "development", "Applications industrielles"),
+        ]
+    }
+
+    created = await generate_more_sections(_plan_row(), current, gemini_client)
+
+    assert [s.title for s in created] == ["Optimisation avancée", "Applications industrielles"]
+    assert {s.type for s in created} == {"development"}
+    assert [s.order for s in created] == [len(current) + 1, len(current) + 2]
+    assert gemini_client.format_structured.call_args.kwargs["response_schema"] is MoreSectionsSchema
+    assert "Suite" in gemini_client.format_structured.call_args.kwargs["raw_answer"]
+
+
+@pytest.mark.asyncio
+async def test_more_sections_capped(gemini_client):
+    gemini_client.format_structured.return_value = {
+        "planned_sections": [_planned(i, "development", f"Nouveau {i}") for i in range(1, 15)]
+    }
+
+    created = await generate_more_sections(_plan_row(), _api_sections(["A"]), gemini_client)
+
+    assert len(created) == 6
+
+
+@pytest.mark.asyncio
+async def test_more_sections_without_new_section_raises(gemini_client):
+    current = _api_sections(["Principe"])
+    gemini_client.format_structured.return_value = {"planned_sections": [_planned(1, "development", "Principe")]}
+
+    with pytest.raises(GeminiInvalidResponseError):
+        await generate_more_sections(_plan_row(), current, gemini_client)

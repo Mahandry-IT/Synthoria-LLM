@@ -317,6 +317,40 @@ class CoursePlanResponse(BaseModel):
     coverage_notes: str = ""
 
 
+_PLAN_INSTRUCTIONS_MAX = 1000
+
+
+class RefineSectionRequest(BaseModel):
+    """Demande de complétion d'une section de plan jugée incomplète par l'utilisateur.
+
+    `sections` est le plan complet courant (contexte anti-doublon, facultatif) ;
+    `instructions` est ce que l'utilisateur souhaite voir ajouté (facultatif :
+    sans précision, le modèle détermine lui-même ce qui manque).
+    """
+
+    plan_id: UUID
+    section: ApiPlannedSection
+    sections: list[ApiPlannedSection] = Field(default_factory=list, max_length=COURSE_PLAN_MAX_SECTIONS)
+    instructions: str | None = Field(None, max_length=_PLAN_INSTRUCTIONS_MAX)
+
+    @field_validator("instructions")
+    @classmethod
+    def _blank_instructions_to_none(cls, v: str | None) -> str | None:
+        v = (v or "").strip()
+        return v or None
+
+
+class MoreSectionsRequest(BaseModel):
+    """Demande de nouvelles sections de développement à partir de « Pour aller plus loin »."""
+
+    plan_id: UUID
+    sections: list[ApiPlannedSection] = Field(..., min_length=1, max_length=COURSE_PLAN_MAX_SECTIONS)
+
+
+class MoreSectionsResponse(BaseModel):
+    sections: list[ApiPlannedSection]
+
+
 class CourseFromPlanRequest(BaseModel):
     """Plan (éventuellement édité par l'utilisateur) à transformer en cours complet.
 

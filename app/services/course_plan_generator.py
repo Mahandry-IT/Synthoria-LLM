@@ -15,7 +15,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.api.schemas import ApiPlannedSection, CourseGenerationResponse
+from app.api.schemas import (
+    _PLAN_OBJECTIVE_MAX,
+    _PLAN_SUBTOPIC_MAX,
+    _PLAN_SUBTOPICS_MAX_ITEMS,
+    _PLAN_TITLE_MAX,
+    ApiPlannedSection,
+    CourseGenerationResponse,
+)
 from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiServiceError
 from app.db.models import CoursePlan
@@ -24,6 +31,8 @@ from app.schemas.course_generation import (
     ContentBlock,
     CourseGenerationSchema,
     CoursePlanSchema,
+    MoreSectionsSchema,
+    PlannedSection,
     Section,
     SectionsBatchSchema,
     SectionType,
@@ -415,3 +424,207 @@ async def generate_course_from_validated_plan(
         "unconfirmed_points": wrap_up.unconfirmed_points if wrap_up else [_WRAP_UP_FAILED_NOTE],
     }
     return _validate_and_map(structured, mode)
+
+
+# ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────
+
+# Extraits ciblés récupérés par fichier lors de la complétion d'une section.
+_REFINE_TOP_K_PER_FILE = 4
+# Plafond de sécurité du nombre de sections créées par « Ajouter plus de sections ».
+_MORE_SECTIONS_MAX = 6
+
+
+def _clip(text: str, limit: int) -> str:
+    return text.strip()[:limit].strip()
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        cleaned = _clip(item, _PLAN_SUBTOPIC_MAX)
+        if cleaned and cleaned.casefold() not in seen:
+            seen.add(cleaned.casefold())
+            result.append(cleaned)
+    return result[:_PLAN_SUBTOPICS_MAX_ITEMS]
+
+
+def _to_api_section(section: PlannedSection, *, type_: str, order: int, fallback_title: str = "") -> ApiPlannedSection:
+    """Convertit une section produite par Gemini en section d'API, bornée aux limites du contrat."""
+    return ApiPlannedSection(
+        type=type_,
+        title=_clip(section.title, _PLAN_TITLE_MAX) or fallback_title,
+        objective=_clip(section.objective, _PLAN_OBJECTIVE_MAX),
+        subtopics=_dedupe(section.subtopics),
+        order=order,
+    )
+
+
+async def _targeted_context(
+    plan_row: CoursePlan,
+    section: ApiPlannedSection,
+    *,
+    vector_store: NumpyVectorStore,
+    gemini_client: GeminiClient,
+    settings: Settings,
+) -> str:
+    """Contexte figé du plan + recherche complémentaire ciblée sur la section.
+
+    Fichiers : extraits les plus proches du titre/objectif de la section.
+    Question seule avec grounding : recherche web ciblée. Best-effort : en cas
+    d'échec de la recherche, on garde le contexte figé (la complétion reste possible).
+    """
+    base = _render_context(plan_row.retrieval_context)
+    topic = f"{section.title}. {section.objective}".strip()
+    extras: list[str] = []
+    try:
+        if plan_row.mode == "question_only":
+            if settings.gemini_use_search_grounding:
+                raw_answer, _ = await gemini_client.search_grounded(
+                    prompt=(
+                        "Recherche les informations précises, mécanismes, formules et cas d'usage à "
+                        f"couvrir pour la section de cours suivante.\nSujet du cours : {plan_row.question}\n"
+                        f"Section : {topic}"
+                    ),
+                    system_instruction=_get_plan_instructions(),
+                )
+                extras.append(f"Recherche complémentaire ciblée :\n{raw_answer}")
+        else:
+            chunks: list[dict[str, Any]] = []
+            for filename in list(plan_row.filenames) or [None]:
+                chunks.extend(
+                    await vector_store.search(topic, top_k=_REFINE_TOP_K_PER_FILE, filename_filter=filename)
+                )
+            if chunks:
+                extras.append(f"Extraits complémentaires ciblés :\n{_build_context_block(chunks)}")
+    except GeminiServiceError as exc:
+        logger.warning("course_plan_refine_search_failed", extra={"error": str(exc)})
+    return "\n\n".join([base, *extras])
+
+
+def _user_request_clause(instructions: str | None) -> str:
+    if instructions:
+        return (
+            "Demande de l'utilisateur — informations à ajouter à cette section (à intégrer en priorité) :\n"
+            f"{instructions}"
+        )
+    return (
+        "L'utilisateur n'a rien précisé : détermine toi-même, à partir du contexte, ce qui manque à cette "
+        "section (notions, mécanismes, formules, cas) et ajoute-le, sans rien lui demander."
+    )
+
+
+async def refine_planned_section(
+    plan_row: CoursePlan,
+    section: ApiPlannedSection,
+    outline: list[ApiPlannedSection],
+    instructions: str | None,
+    vector_store: NumpyVectorStore,
+    gemini_client: GeminiClient,
+    settings: Settings,
+) -> ApiPlannedSection:
+    """Complète une section de plan jugée incomplète (titre, objectif, sous-thèmes).
+
+    Paramètres:
+        plan_row: plan persisté (question, mode, contexte figé, fichiers).
+        section: section actuelle, telle qu'éditée par l'utilisateur (l'« ancienne » section).
+        outline: plan complet courant, pour éviter les doublons avec les autres sections.
+        instructions: précisions de l'utilisateur sur ce qu'il faut ajouter (None = automatique).
+
+    Retour: la section enrichie ; `type` et `order` sont conservés à l'identique.
+
+    Fonctionnement: contexte figé + recherche ciblée (extraits fichiers ou recherche web),
+    puis 1 appel `format_structured`. Le contenu existant est conservé, les éléments
+    manquants sont ajoutés.
+
+    Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
+    """
+    context_block = await _targeted_context(
+        plan_row, section, vector_store=vector_store, gemini_client=gemini_client, settings=settings
+    )
+    others = [s for s in outline if s.order != section.order]
+    prompt = (
+        f'mode="{plan_row.mode}"\n'
+        f"Question de l'utilisateur : {plan_row.question}\n\n"
+        f"Contexte :\n{context_block}\n\n"
+        "--- Autres sections du plan (pour éviter les doublons) ---\n"
+        f"{_format_sections(others, detailed=False) or '(aucune)'}\n\n"
+        "--- Section à compléter (version actuelle, jugée incomplète) ---\n"
+        f"{_format_section(section, detailed=True)}\n\n"
+        f"{_user_request_clause(instructions)}\n\n"
+        "Retourne UNE seule section, en JSON selon le schéma fourni : conserve tout ce qui est correct "
+        "dans la version actuelle, précise l'objectif si besoin et ajoute les sous-thèmes manquants "
+        "(structure uniquement, aucun contenu rédigé). Garde le même rôle et, sauf titre trop vague, le "
+        "même titre. Ne recopie pas le contenu des autres sections."
+    )
+    structured = await gemini_client.format_structured(
+        raw_answer=prompt,
+        system_instruction=_get_plan_instructions(),
+        response_schema=PlannedSection,
+    )
+    try:
+        refined = PlannedSection.model_validate(structured)
+        result = _to_api_section(refined, type_=section.type, order=section.order, fallback_title=section.title)
+    except ValidationError as exc:
+        raise GeminiInvalidResponseError(f"Section complétée invalide: {exc}") from exc
+
+    if not result.subtopics:
+        result = result.model_copy(update={"subtopics": section.subtopics})
+    return result
+
+
+async def generate_more_sections(
+    plan_row: CoursePlan,
+    current_sections: list[ApiPlannedSection],
+    gemini_client: GeminiClient,
+) -> list[ApiPlannedSection]:
+    """Crée de nouvelles sections de développement à partir de « Pour aller plus loin ».
+
+    Paramètres:
+        plan_row: plan persisté (question, mode, contexte figé).
+        current_sections: plan complet courant (tel qu'édité) ; la ou les sections
+            `next_steps` fournissent les pistes à développer.
+
+    Retour: 1 à `_MORE_SECTIONS_MAX` sections `development` inédites (titres absents du plan),
+    `order` à la suite du plan courant (le client choisit l'emplacement d'insertion).
+
+    Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError
+    (y compris quand le modèle ne retourne aucune section inédite).
+    """
+    next_steps = [s for s in current_sections if s.type == "next_steps"]
+    leads = _format_sections(next_steps, detailed=True) or (
+        "(aucune section « Pour aller plus loin » : propose des prolongements naturels du sujet)"
+    )
+    prompt = (
+        f'mode="{plan_row.mode}"\n'
+        f"Question de l'utilisateur : {plan_row.question}\n\n"
+        f"Contexte source (figé lors de la planification) :\n{_render_context(plan_row.retrieval_context)}\n\n"
+        f"--- Plan actuel (ne PAS répéter ces sections) ---\n{_format_sections(current_sections, detailed=False)}\n\n"
+        f"--- Pistes « Pour aller plus loin » à développer ---\n{leads}\n\n"
+        f"Crée de 3 à {_MORE_SECTIONS_MAX} NOUVELLES sections de type development qui développent ces pistes : "
+        "titres thématiques précis (jamais génériques), objectif, 3 à 8 sous-thèmes chacune, ordonnées par "
+        "dépendances logiques. Structure uniquement, aucun contenu rédigé. Retourne le JSON selon le schéma fourni."
+    )
+    structured = await gemini_client.format_structured(
+        raw_answer=prompt,
+        system_instruction=_get_plan_instructions(),
+        response_schema=MoreSectionsSchema,
+    )
+    try:
+        generated = MoreSectionsSchema.model_validate(structured).planned_sections
+    except ValidationError as exc:
+        raise GeminiInvalidResponseError(f"Nouvelles sections invalides: {exc}") from exc
+
+    known_titles = {s.title.strip().casefold() for s in current_sections}
+    next_order = max((s.order for s in current_sections), default=0) + 1
+    created: list[ApiPlannedSection] = []
+    for candidate in sorted(generated, key=lambda s: s.order):
+        title = _clip(candidate.title, _PLAN_TITLE_MAX)
+        if not title or title.casefold() in known_titles or len(created) >= _MORE_SECTIONS_MAX:
+            continue
+        known_titles.add(title.casefold())
+        created.append(_to_api_section(candidate, type_="development", order=next_order + len(created)))
+
+    if not created:
+        raise GeminiInvalidResponseError("Aucune nouvelle section exploitable n'a été générée")
+    return created
