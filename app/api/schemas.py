@@ -234,6 +234,11 @@ class CourseGenerationRequest(BaseModel):
         ),
     )
 
+    generate_podcast: bool | None = Field(
+        None,
+        description="Lance la génération d'un podcast après le cours. Défaut : PODCAST_AUTO_GENERATE.",
+    )
+
 
 class CourseGenerationResponse(BaseModel):
     mode: Literal["file_only", "file_question", "question_only"]
@@ -366,6 +371,10 @@ class CourseFromPlanRequest(BaseModel):
 
     plan_id: UUID
     sections: list[ApiPlannedSection] = Field(..., min_length=1, max_length=COURSE_PLAN_MAX_SECTIONS)
+    generate_podcast: bool | None = Field(
+        None,
+        description="Lance la génération d'un podcast après le cours. Défaut : PODCAST_AUTO_GENERATE.",
+    )
 
     @model_validator(mode="after")
     def _check_has_development_section(self) -> "CourseFromPlanRequest":

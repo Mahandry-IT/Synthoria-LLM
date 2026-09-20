@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.podcast_routes import router as podcast_router
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.rate_limit import RateLimitMiddleware
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_per_minute)
 
     app.include_router(router)
+    app.include_router(podcast_router)
     return app
 
 
