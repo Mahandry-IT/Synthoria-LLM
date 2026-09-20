@@ -63,6 +63,9 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | GET | `/podcasts/{job_id}/transcript` | Transcript WebVTT synchronisé (une réplique par cue) |
 | GET | `/podcasts/{job_id}/script` | Script JSON du podcast (dès l'étape de scriptage) |
 | GET | `/courses/history/{session_id}/podcasts` | Jobs podcast liés à une session |
+| GET | `/podcasts?limit=3` | Podcasts les plus récents (tous statuts, `limit` 1-20, défaut 3) : état du job + `title` (script, sinon titre du cours, sinon question). Sert le dashboard |
+| GET | `/courses/plans?page&limit` | Plans en cours : `pending`, non expirés, pas encore transformés en cours (`plan_id`, `question`, `title`, `subject`, `sections_count`, `created_at`, `expires_at`), paginés |
+| GET | `/courses/plans/{plan_id}` | Plan proposé relu tel quel, avec la `question` et les `filenames` d'origine (reprise). `404` inconnu, `410` expiré |
 
 ### Tester l'API
 

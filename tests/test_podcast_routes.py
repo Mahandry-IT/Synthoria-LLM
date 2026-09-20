@@ -282,3 +282,40 @@ def test_course_requests_accept_optional_generate_podcast():
     plan = {"plan_id": str(uuid.uuid4()), "sections": [{"type": "development", "title": "A", "order": 1}]}
     assert CourseFromPlanRequest.model_validate(plan).generate_podcast is None
     assert CourseFromPlanRequest.model_validate({**plan, "generate_podcast": False}).generate_podcast is False
+
+
+# ─── GET /podcasts (récents, dashboard) ──────────────────────
+
+
+def test_recent_podcasts_titles_fall_back_from_script_to_course_to_question(env):
+    def course(meta_title=None):
+        meta = {"title": meta_title} if meta_title else {}
+        return SimpleNamespace(gemini_response={"meta": meta}, question="Une très longue question ?")
+
+    rows = [
+        (make_job("done", script={"title": "Titre du script"}), course("Titre du cours")),
+        (make_job("done"), course("Titre du cours")),
+        (make_job("pending"), course()),
+    ]
+    mock = AsyncMock(return_value=rows)
+    env.monkeypatch.setattr(podcast_routes.podcast_job_repository, "list_recent", mock)
+
+    res = env.client.get("/podcasts?limit=3")
+
+    assert res.status_code == 200
+    assert [p["title"] for p in res.json()["data"]] == ["Titre du script", "Titre du cours", "Une très longue question ?"]
+    assert res.json()["data"][0]["status"] == "done"
+    assert mock.call_args.args[1] == 3
+
+
+def test_recent_podcasts_default_limit_is_3(env):
+    mock = AsyncMock(return_value=[])
+    env.monkeypatch.setattr(podcast_routes.podcast_job_repository, "list_recent", mock)
+
+    assert env.client.get("/podcasts").json() == {"data": []}
+    assert mock.call_args.args[1] == 3
+
+
+@pytest.mark.parametrize("limit", [0, 21, "abc"])
+def test_recent_podcasts_validates_limit(env, limit):
+    assert env.client.get(f"/podcasts?limit={limit}").status_code == 422

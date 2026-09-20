@@ -81,3 +81,20 @@ async def test_find_reusable_ignores_failed_jobs_in_query():
     assert await repo.find_reusable(session, uuid.uuid4(), "h") is None
     stmt = str(session.execute.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "podcast_jobs.status !=" in stmt
+
+
+@pytest.mark.asyncio
+async def test_list_recent_joins_session_newest_first_with_limit():
+    session = AsyncMock()
+    job, course = MagicMock(), MagicMock()
+    result = MagicMock()
+    result.all.return_value = [(job, course)]
+    session.execute.return_value = result
+
+    rows = await repo.list_recent(session, 3)
+
+    assert rows == [(job, course)]
+    query = str(session.execute.await_args.args[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "JOIN course_sessions" in query
+    assert "ORDER BY podcast_jobs.created_at DESC" in query
+    assert "LIMIT 3" in query

@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import PodcastJob
+from app.db.models import CourseSession, PodcastJob
 
 ACTIVE_STATUSES = ("scripting", "synthesizing", "mixing")
 
@@ -65,6 +65,17 @@ async def list_by_session(session: AsyncSession, course_session_id: uuid.UUID) -
         .order_by(PodcastJob.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def list_recent(session: AsyncSession, limit: int) -> list[tuple[PodcastJob, CourseSession]]:
+    """Podcasts les plus récents (tous statuts), avec la session de cours associée."""
+    result = await session.execute(
+        select(PodcastJob, CourseSession)
+        .join(CourseSession, CourseSession.id == PodcastJob.course_session_id)
+        .order_by(PodcastJob.created_at.desc())
+        .limit(limit)
+    )
+    return [(job, course) for job, course in result.all()]
 
 
 def claim_statement() -> Select:

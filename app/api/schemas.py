@@ -361,6 +361,25 @@ class MoreSectionsResponse(BaseModel):
     sections: list[ApiPlannedSection]
 
 
+class PendingPlanItem(BaseModel):
+    """Plan non expiré, pas encore transformé en cours (liste du dashboard)."""
+
+    plan_id: UUID
+    question: str
+    title: str
+    subject: str
+    sections_count: int
+    created_at: str
+    expires_at: str
+
+
+class CoursePlanDetail(CoursePlanResponse):
+    """Plan persisté relu tel que proposé (reprise depuis le dashboard), avec la requête d'origine."""
+
+    question: str
+    filenames: list[str] = Field(default_factory=list)
+
+
 class CourseFromPlanRequest(BaseModel):
     """Plan (éventuellement édité par l'utilisateur) à transformer en cours complet.
 
@@ -437,3 +456,13 @@ class PodcastJobStatus(BaseModel):
 
 class PodcastJobList(BaseModel):
     data: list[PodcastJobStatus]
+
+
+class PodcastSummary(PodcastJobStatus):
+    """Podcast d'un cours pour les listes (dashboard) : statut du job + titre affichable."""
+
+    title: str
+
+
+class PodcastSummaryList(BaseModel):
+    data: list[PodcastSummary]
