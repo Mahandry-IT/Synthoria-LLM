@@ -19,6 +19,8 @@ from app.core.exceptions import TTSInvalidVoiceError, TTSUnavailableError
 
 logger = logging.getLogger(__name__)
 
+SYNTHESIZE_PATH = "/synthesize"
+
 
 class TTSEngine(Protocol):
     name: str
@@ -31,7 +33,7 @@ class TTSEngine(Protocol):
 
 
 class PiperHTTPEngine:
-    """Moteur Piper via son serveur HTTP (POST / {"text", "voice"} → audio/wav)."""
+    """Moteur Piper via son serveur HTTP (POST /synthesize {"text", "voice"} → audio/wav)."""
 
     name = "piper"
 
@@ -60,14 +62,15 @@ class PiperHTTPEngine:
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                response = await self._client.post("/", json={"text": text, "voice": voice})
+                response = await self._client.post(SYNTHESIZE_PATH, json={"text": text, "voice": voice})
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = exc
                 logger.warning("tts_call_failed", extra={"attempt": attempt + 1, "error": type(exc).__name__})
             else:
                 if 400 <= response.status_code < 500:
                     raise TTSInvalidVoiceError(
-                        f"Requête TTS rejetée ({response.status_code}) pour la voix « {voice} »"
+                        f"Requête TTS rejetée (HTTP {response.status_code}) sur {SYNTHESIZE_PATH} "
+                        f"avec la voix « {voice} » : {response.text[:200]}"
                     )
                 if response.status_code >= 500:
                     last_error = RuntimeError(f"HTTP {response.status_code}")

@@ -61,10 +61,11 @@ async def test_piper_returns_wav_and_sends_text_and_voice(tmp_path):
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.update(json.loads(request.content))
+        seen["method_path"] = f"{request.method} {request.url.path}"
         return httpx.Response(200, content=audio)
 
     assert await _engine(handler).synthesize("Bonjour", "fr_FR-siwis-medium") == audio
-    assert seen == {"text": "Bonjour", "voice": "fr_FR-siwis-medium"}
+    assert seen == {"text": "Bonjour", "voice": "fr_FR-siwis-medium", "method_path": "POST /synthesize"}
 
 
 @pytest.mark.asyncio
@@ -99,9 +100,9 @@ async def test_piper_4xx_is_not_retried():
 
     def handler(request):
         calls["n"] += 1
-        return httpx.Response(404)
+        return httpx.Response(405, text="Method Not Allowed")
 
-    with pytest.raises(TTSInvalidVoiceError):
+    with pytest.raises(TTSInvalidVoiceError, match=r"HTTP 405.*/synthesize.*Method Not Allowed"):
         await _engine(handler).synthesize("x", "voix-inconnue")
     assert calls["n"] == 1
 
