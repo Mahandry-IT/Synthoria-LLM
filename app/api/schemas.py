@@ -254,6 +254,10 @@ class CourseGenerationResponse(BaseModel):
     summary: str
     next_steps: list[str] = Field(default_factory=list)
 
+    # Renseignés par les routes après persistance (jamais stockés dans `gemini_response`).
+    session_id: UUID | None = Field(None, description="Id de la session persistée (None si la persistance a échoué).")
+    podcast_job_id: UUID | None = Field(None, description="Id du job podcast créé automatiquement, le cas échéant.")
+
     @model_validator(mode="after")
     def check_format_consistency(self) -> "CourseGenerationResponse":
         if self.format == "full_course" and (self.introduction is None or self.sections is None):

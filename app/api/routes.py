@@ -287,16 +287,21 @@ async def _persist_course_session(
     filenames: list[str],
     mode: str,
     response: CourseGenerationResponse,
-) -> None:
-    """Best-effort : persistance de la session en PostgreSQL (ne fait jamais échouer la requête)."""
+) -> UUID | None:
+    """Best-effort : persistance de la session en PostgreSQL (ne fait jamais échouer la requête).
+
+    Retourne l'id de la session persistée, ou None si la persistance a échoué.
+    """
     try:
         session_factory: async_sessionmaker = request.app.state.db_session_factory
         async with session_factory() as db:
-            await course_session_repository.save(
+            row = await course_session_repository.save(
                 db, question=question, filenames=filenames, mode=mode, response=response,
             )
+        return row.id if isinstance(row.id, UUID) else None
     except Exception:
         logger.error("course_session_persist_failed", exc_info=True)
+        return None
 
 
 @router.post("/courses/generate", response_model=CourseGenerationResponse)
@@ -327,11 +332,11 @@ async def generate_course(
             full_document=body.full_document,
         )
 
-    await _persist_course_session(
+    session_id = await _persist_course_session(
         request, question=question, filenames=_filenames_list(body.filename),
         mode=resolved_mode, response=course_response,
     )
-    return course_response
+    return course_response.model_copy(update={"session_id": session_id})
 
 
 @router.post("/courses/plan", response_model=CoursePlanResponse)
@@ -483,10 +488,11 @@ async def generate_course_from_plan(
             settings=settings,
         )
 
-    await _persist_course_session(
+    session_id = await _persist_course_session(
         request, question=plan_row.question, filenames=list(plan_row.filenames),
         mode=plan_row.mode, response=course_response,
     )
+    course_response = course_response.model_copy(update={"session_id": session_id})
     try:
         async with session_factory() as db:
             await course_plan_repository.mark_generated(db, plan_row.id)

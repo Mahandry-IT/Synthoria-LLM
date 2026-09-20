@@ -21,7 +21,7 @@ async def save(
         question=question,
         filenames=filenames,
         mode=mode,
-        gemini_response=response.model_dump(),
+        gemini_response=response.model_dump(exclude={"session_id", "podcast_job_id"}),
     )
     session.add(course_session)
     await session.commit()
