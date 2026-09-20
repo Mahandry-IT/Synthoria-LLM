@@ -76,3 +76,23 @@ async def test_mark_generated_is_noop_for_unknown_plan():
     await course_plan_repository.mark_generated(session, uuid.uuid4())
 
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_pending_filters_pending_non_expired_newest_first_and_paginates():
+    session = _session()
+    plans = [MagicMock(), MagicMock()]
+    count_result, rows_result = MagicMock(), MagicMock()
+    count_result.scalar_one.return_value = 12
+    rows_result.scalars.return_value.all.return_value = plans
+    session.execute.side_effect = [count_result, rows_result]
+    now = datetime.now(timezone.utc)
+
+    rows, total = await course_plan_repository.list_pending(session, page=3, limit=5, now=now)
+
+    assert (rows, total) == (plans, 12)
+    query = str(session.execute.await_args_list[1].args[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "course_plans.status = 'pending'" in query
+    assert "course_plans.expires_at >" in query
+    assert "ORDER BY course_plans.created_at DESC" in query
+    assert "LIMIT 5 OFFSET 10" in query

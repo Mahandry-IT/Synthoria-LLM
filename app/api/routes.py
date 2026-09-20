@@ -15,6 +15,7 @@ from app.api.schemas import (
     CourseGenerationResponse,
     CourseHistoryDetail,
     CourseHistoryItem,
+    CoursePlanDetail,
     CoursePlanMeta,
     CoursePlanRequest,
     CoursePlanResponse,
@@ -31,6 +32,7 @@ from app.api.schemas import (
     PaginationMeta,
     PDFIngestMultiResponse,
     PDFIngestResponse,
+    PendingPlanItem,
     RefineSectionRequest,
 )
 from app.core.config import Settings, get_settings
@@ -42,6 +44,7 @@ from app.core.exceptions import (
     OllamaUnavailableError,
 )
 from app.repositories import course_plan_repository, course_session_repository
+from app.schemas.course_generation import CoursePlanSchema
 from app.services.course_generator import generate_course_from_question
 from app.services.course_plan_generator import (
     generate_course_from_validated_plan,
@@ -479,6 +482,59 @@ async def add_more_plan_sections(
             plan_row=plan_row, current_sections=body.sections, gemini_client=gemini_client
         )
     return MoreSectionsResponse(sections=sections)
+
+
+@router.get("/courses/plans", response_model=PaginatedResponse[PendingPlanItem])
+async def list_pending_course_plans(
+    request: Request,
+    pagination: PageParams = Depends(),
+) -> PaginatedResponse[PendingPlanItem]:
+    """Plans en cours : proposés, non expirés et pas encore transformés en cours."""
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        rows, total = await course_plan_repository.list_pending(
+            db, page=pagination.page, limit=pagination.limit, now=datetime.now(timezone.utc)
+        )
+
+    total_pages = max(1, (total + pagination.limit - 1) // pagination.limit)
+    items = [
+        PendingPlanItem(
+            plan_id=row.id,
+            question=row.question,
+            title=row.plan["meta"]["title"],
+            subject=row.plan["meta"].get("subject", ""),
+            sections_count=len(row.plan["planned_sections"]),
+            created_at=row.created_at.isoformat(),
+            expires_at=row.expires_at.isoformat(),
+        )
+        for row in rows
+    ]
+    return PaginatedResponse(
+        data=items,
+        meta=PaginationMeta(
+            page=min(pagination.page, total_pages) if total > 0 else 1,
+            limit=pagination.limit,
+            total=total,
+            totalPages=total_pages,
+        ),
+    )
+
+
+@router.get("/courses/plans/{plan_id}", response_model=CoursePlanDetail)
+async def get_course_plan(request: Request, plan_id: UUID) -> CoursePlanDetail:
+    """Plan proposé, relu tel quel (reprise depuis le dashboard). 404 inconnu, 410 expiré."""
+    plan_row = await _get_active_plan(request, plan_id)
+    plan = CoursePlanSchema.model_validate(plan_row.plan)
+    return CoursePlanDetail(
+        plan_id=plan_row.id,
+        expires_at=plan_row.expires_at.isoformat(),
+        mode=plan_row.mode,
+        meta=CoursePlanMeta(**plan.meta.model_dump()),
+        sections=[ApiPlannedSection(**s.model_dump(mode="json")) for s in plan.planned_sections],
+        coverage_notes=plan.coverage_notes,
+        question=plan_row.question,
+        filenames=list(plan_row.filenames),
+    )
 
 
 @router.post("/courses/generate/from-plan", response_model=CourseGenerationResponse)

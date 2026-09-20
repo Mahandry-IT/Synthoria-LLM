@@ -452,3 +452,76 @@ def test_more_sections_unknown_plan_404(plan_client):
 def test_more_sections_empty_sections_422(plan_client):
     res = plan_client.post("/courses/plan/more-sections", json={"plan_id": str(uuid.uuid4()), "sections": []})
     assert res.status_code == 422
+
+
+# ─── GET /courses/plans (plans en cours) et GET /courses/plans/{plan_id} ───
+
+
+def _stored_plan(**overrides) -> SimpleNamespace:
+    plan = {
+        "meta": {"title": "Transformateurs", "subject": "Électrotechnique", "language": "fr"},
+        "planned_sections": [_planned_json(1, "introduction", "Intro"), _planned_json(2, title="Principe")],
+        "coverage_notes": "RAS",
+    }
+    row = dict(
+        id=uuid.uuid4(), question="Explique les transformateurs", mode="file_question", filenames=["doc.pdf"],
+        plan=plan, created_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    row.update(overrides)
+    return SimpleNamespace(**row)
+
+
+def test_list_pending_plans_maps_rows_and_pagination(plan_client):
+    row = _stored_plan()
+    with patch(
+        "app.api.routes.course_plan_repository.list_pending", new_callable=AsyncMock, return_value=([row], 25)
+    ) as mock_list:
+        res = plan_client.get("/courses/plans?page=2&limit=10")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["data"][0]["plan_id"] == str(row.id)
+    assert body["data"][0]["title"] == "Transformateurs"
+    assert body["data"][0]["sections_count"] == 2
+    assert body["meta"] == {"page": 2, "limit": 10, "total": 25, "totalPages": 3}
+    assert mock_list.call_args.kwargs["page"] == 2
+    assert mock_list.call_args.kwargs["limit"] == 10
+
+
+def test_list_pending_plans_empty(plan_client):
+    with patch("app.api.routes.course_plan_repository.list_pending", new_callable=AsyncMock, return_value=([], 0)):
+        res = plan_client.get("/courses/plans")
+
+    assert res.status_code == 200
+    assert res.json()["data"] == []
+    assert res.json()["meta"]["total"] == 0
+
+
+def test_get_plan_detail_returns_sections_and_original_request(plan_client):
+    row = _stored_plan()
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row):
+        res = plan_client.get(f"/courses/plans/{row.id}")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["plan_id"] == str(row.id)
+    assert [s["title"] for s in body["sections"]] == ["Intro", "Principe"]
+    assert body["question"] == "Explique les transformateurs"
+    assert body["filenames"] == ["doc.pdf"]
+    assert body["mode"] == "file_question"
+
+
+def test_get_plan_detail_unknown_404(plan_client):
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=None):
+        assert plan_client.get(f"/courses/plans/{uuid.uuid4()}").status_code == 404
+
+
+def test_get_plan_detail_expired_410(plan_client):
+    row = _stored_plan(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row):
+        assert plan_client.get(f"/courses/plans/{row.id}").status_code == 410
+
+
+def test_get_plan_detail_invalid_uuid_422(plan_client):
+    assert plan_client.get("/courses/plans/pas-un-uuid").status_code == 422

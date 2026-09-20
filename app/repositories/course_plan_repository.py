@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CoursePlan
@@ -50,3 +50,20 @@ async def mark_generated(session: AsyncSession, plan_id: uuid.UUID) -> None:
         return
     course_plan.status = "generated"
     await session.commit()
+
+
+async def list_pending(
+    session: AsyncSession, *, page: int, limit: int, now: datetime
+) -> tuple[list[CoursePlan], int]:
+    """Plans `pending` non expirés (plus récents d'abord), paginés."""
+    condition = (CoursePlan.status == "pending", CoursePlan.expires_at > now)
+
+    total = (await session.execute(select(func.count(CoursePlan.id)).where(*condition))).scalar_one()
+    result = await session.execute(
+        select(CoursePlan)
+        .where(*condition)
+        .order_by(CoursePlan.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+    )
+    return list(result.scalars().all()), total

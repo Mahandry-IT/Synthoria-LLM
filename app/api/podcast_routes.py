@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -17,6 +17,8 @@ from app.api.schemas import (
     PodcastJobList,
     PodcastJobResponse,
     PodcastJobStatus,
+    PodcastSummary,
+    PodcastSummaryList,
 )
 from app.core.config import Settings, get_settings
 from app.repositories import course_session_repository, podcast_job_repository
@@ -74,6 +76,13 @@ def _job_status(job) -> PodcastJobStatus:
         progress=job.progress, error_message=job.error_message, duration_seconds=job.duration_seconds,
         created_at=job.created_at, updated_at=job.updated_at,
     )
+
+
+def _podcast_title(job, course) -> str:
+    """Titre affichable : celui du script, sinon celui du cours, sinon la question."""
+    script_title = (job.script or {}).get("title")
+    course_title = ((course.gemini_response or {}).get("meta") or {}).get("title")
+    return script_title or course_title or course.question[:120]
 
 
 async def _get_job_or_404(request: Request, job_id: UUID):
@@ -171,6 +180,16 @@ async def generate_podcast(
     except CourseSessionNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session de cours introuvable") from exc
     return PodcastJobResponse(job_id=job.id, status=job.status)
+
+
+@router.get("/podcasts", response_model=PodcastSummaryList)
+async def list_recent_podcasts(request: Request, limit: int = Query(3, ge=1, le=20)) -> PodcastSummaryList:
+    """Podcasts les plus récents (dashboard), tous statuts confondus."""
+    async with _session_factory(request)() as db:
+        rows = await podcast_job_repository.list_recent(db, limit)
+    return PodcastSummaryList(
+        data=[PodcastSummary(**_job_status(job).model_dump(), title=_podcast_title(job, course)) for job, course in rows]
+    )
 
 
 @router.get("/podcasts/jobs/{job_id}", response_model=PodcastJobStatus)
