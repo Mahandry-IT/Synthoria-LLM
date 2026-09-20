@@ -789,6 +789,31 @@ async def test_map_sections_to_course_sections_non_regression():
     assert api_sections[1].quoi == "intro text"
 
 
+def test_map_sections_keeps_content_with_nonstandard_subsection_titles():
+    """Une section dont les sous-sections n'ont pas les titres Quoi/Pourquoi/Comment n'est plus supprimée."""
+    from app.schemas.course_generation import ContentBlock, Section, SectionType, Subsection
+
+    sections = [
+        Section(
+            type=SectionType.DEVELOPMENT,
+            title="Les pointeurs",
+            subsections=[
+                Subsection(title="Définition", blocks=[ContentBlock(type="text", text="un pointeur")]),
+                Subsection(title="Intérêt", blocks=[ContentBlock(type="text", text="accès indirect")]),
+                Subsection(title="Mécanisme", blocks=[ContentBlock(type="text", text="déréférencement")]),
+            ],
+        ),
+    ]
+    api_sections = _map_sections_to_course_sections(sections)
+    assert len(api_sections) == 1
+    assert api_sections[0].title == "Les pointeurs"
+    assert (api_sections[0].quoi, api_sections[0].pourquoi, api_sections[0].comment) == (
+        "un pointeur",
+        "accès indirect",
+        "déréférencement",
+    )
+
+
 def test_quiz_question_correct_indices_multiple():
     q = QuizQuestion(
         question="Q",

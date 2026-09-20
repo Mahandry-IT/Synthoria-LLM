@@ -256,6 +256,25 @@ def _align_batch_sections(returned: list[Section], planned: list[ApiPlannedSecti
     return aligned
 
 
+def _align_wrap_up_titles(returned: list[Section], planned: list[ApiPlannedSection]) -> list[Section]:
+    """Impose les titres du plan aux sections hors développement.
+
+    Chaque section planifiée (introduction, pièges, résumé, suite) reprend le titre
+    validé par l'utilisateur ; les sections en trop ou de type absent du plan sont
+    écartées (le plan fait foi), et un manque est journalisé.
+    """
+    remaining = list(returned)
+    aligned: list[Section] = []
+    for plan_section in planned:
+        match = next((s for s in remaining if s.type.value == plan_section.type), None)
+        if match is None:
+            logger.warning("course_plan_wrap_up_section_missing", extra={"type": plan_section.type})
+            continue
+        remaining.remove(match)
+        aligned.append(match.model_copy(update={"title": plan_section.title}))
+    return aligned
+
+
 async def _generate_batch(
     batch: list[ApiPlannedSection],
     *,
@@ -407,7 +426,10 @@ async def generate_course_from_validated_plan(
         meta=meta, sources=sources, gemini_client=gemini_client,
     )
 
-    wrap_sections = [s for s in (wrap_up.sections if wrap_up else []) if s.type is not SectionType.DEVELOPMENT]
+    wrap_sections = _align_wrap_up_titles(
+        [s for s in (wrap_up.sections if wrap_up else []) if s.type is not SectionType.DEVELOPMENT],
+        [s for s in sections if s.type != "development"],
+    )
     ordered_sections = (
         [s for s in wrap_sections if s.type is SectionType.INTRODUCTION]
         + generated

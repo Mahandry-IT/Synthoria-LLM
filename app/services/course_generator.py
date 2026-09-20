@@ -219,6 +219,7 @@ def _map_sections_to_course_sections(
         comment_text = ""
         worked_ex = None
 
+        unmatched: list[str] = []
         for sub in section.subsections:
             sub_text = " ".join(_block_to_text(b) for b in sub.blocks if _block_to_text(b))
             title_lower = sub.title.lower()
@@ -228,6 +229,8 @@ def _map_sections_to_course_sections(
                 quoi_text = sub_text
             elif "comment" in title_lower:
                 comment_text = sub_text
+            elif sub_text:
+                unmatched.append(sub_text)
             for b in sub.blocks:
                 if b.worked_example:
                     worked_ex = WorkedExample(
@@ -235,6 +238,19 @@ def _map_sections_to_course_sections(
                         steps=[Step(id=str(idx + 1), content=s) for idx, s in enumerate(b.worked_example.steps)],
                         result=b.worked_example.result,
                     )
+
+        # Sous-sections au titre non standard : le contenu ne doit pas disparaître
+        # (une section entière était sinon supprimée de la réponse). Repli positionnel
+        # sur les champs encore vides, le reste est ajouté à `comment`.
+        for text in unmatched:
+            if not quoi_text:
+                quoi_text = text
+            elif not pourquoi_text:
+                pourquoi_text = text
+            elif not comment_text:
+                comment_text = text
+            else:
+                comment_text = f"{comment_text} {text}"
 
         # Si pas de sous-sections, extraire depuis les blocks directs
         if not section.subsections and section.blocks:
