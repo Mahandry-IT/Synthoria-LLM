@@ -21,7 +21,13 @@ from app.services.podcast.audio_assembler import (
     render_vtt,
     wav_duration,
 )
-from app.services.podcast.tts_client import PiperHTTPEngine, cache_key, synthesize_cached, synthesize_many
+from app.services.podcast.tts_client import (
+    PiperHTTPEngine,
+    cache_key,
+    parse_voice_spec,
+    synthesize_cached,
+    synthesize_many,
+)
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg absent")
 
@@ -66,6 +72,56 @@ async def test_piper_returns_wav_and_sends_text_and_voice(tmp_path):
 
     assert await _engine(handler).synthesize("Bonjour", "fr_FR-siwis-medium") == audio
     assert seen == {"text": "Bonjour", "voice": "fr_FR-siwis-medium", "method_path": "POST /synthesize"}
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        ("fr_FR-siwis-medium", ("fr_FR-siwis-medium", None)),
+        ("fr_FR-upmc-medium:0", ("fr_FR-upmc-medium", 0)),
+        ("fr_FR-upmc-medium:12", ("fr_FR-upmc-medium", 12)),
+    ],
+)
+def test_parse_voice_spec(spec, expected):
+    assert parse_voice_spec(spec) == expected
+
+
+@pytest.mark.parametrize("spec", ["fr_FR-upmc-medium:", "fr_FR-upmc-medium:x", ":1", "a:-1"])
+def test_parse_voice_spec_rejects_malformed(spec):
+    with pytest.raises(TTSInvalidVoiceError):
+        parse_voice_spec(spec)
+
+
+@pytest.mark.asyncio
+async def test_piper_sends_speaker_id_for_multi_speaker_voice(tmp_path):
+    audio = wav_bytes(tmp_path)
+    sent = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=audio)
+
+    engine = _engine(handler)
+    await engine.synthesize("Bonjour", "fr_FR-upmc-medium:1")
+    await engine.synthesize("Bonjour", "fr_FR-siwis-medium")
+
+    assert sent[0] == {"text": "Bonjour", "voice": "fr_FR-upmc-medium", "speaker_id": 1}
+    assert sent[1] == {"text": "Bonjour", "voice": "fr_FR-siwis-medium"}   # pas de speaker_id sans « :n »
+
+
+@pytest.mark.asyncio
+async def test_cache_distinguishes_speakers_of_the_same_model(tmp_path):
+    audio = wav_bytes(tmp_path)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(200, content=audio)
+
+    engine = _engine(handler)
+    a = await synthesize_cached(engine, tmp_path / "c", "fr_FR-upmc-medium:0", "Bonjour")
+    b = await synthesize_cached(engine, tmp_path / "c", "fr_FR-upmc-medium:1", "Bonjour")
+    assert a != b and calls["n"] == 2
 
 
 @pytest.mark.asyncio

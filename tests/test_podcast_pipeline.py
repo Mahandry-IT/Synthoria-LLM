@@ -162,10 +162,12 @@ def fake_gemini() -> AsyncMock:
 
 
 def settings_for(tmp_path: Path, **overrides) -> Settings:
-    return Settings(
+    # _env_file=None : les tests ne doivent pas dépendre du .env local du développeur.
+    options = dict(
         gemini_api_key="k", podcast_storage_dir=str(tmp_path / "podcasts"), podcast_tts_concurrency=2,
-        podcast_max_attempts=3, **overrides,
+        podcast_max_attempts=3, podcast_voice_host="fr_FR-upmc-medium:0", podcast_voice_expert="fr_FR-upmc-medium:1",
     )
+    return Settings(_env_file=None, **{**options, **overrides})
 
 
 async def fake_assemble(timeline, *, title, output_path, work_dir, bitrate="96k", ffmpeg="ffmpeg"):
@@ -203,7 +205,7 @@ async def test_pipeline_pending_to_done(monkeypatch, tmp_path):
     assert "WEBVTT" in (directory / "transcript.vtt").read_text(encoding="utf-8")
     assert not (directory / "cache").exists()                              # WAV intermédiaires nettoyés
     voices = {v for v, _ in tts.calls}
-    assert voices == {"fr_FR-siwis-medium", "fr_FR-tom-medium"}            # une voix par locuteur
+    assert voices == {"fr_FR-upmc-medium:0", "fr_FR-upmc-medium:1"}        # une voix (locuteur) par rôle
     spoken = " ".join(text for _, text in tts.calls)
     assert "€" not in spoken and "%" not in spoken and "euros" in spoken and "pour cent" in spoken  # normalisé
 
@@ -326,6 +328,15 @@ def test_spoken_turns_open_a_chapter_per_block():
 
 
 # ─── Jobs : paramètres, idempotence, chemins ─────────────────
+
+
+def test_default_voices_are_the_two_upmc_speakers():
+    settings = Settings(_env_file=None, gemini_api_key="k")
+    assert (settings.podcast_voice_host, settings.podcast_voice_expert) == (
+        "fr_FR-upmc-medium:0",
+        "fr_FR-upmc-medium:1",
+    )
+    assert pipeline.voices_for(settings) == {"HOST": "fr_FR-upmc-medium:0", "EXPERT": "fr_FR-upmc-medium:1"}
 
 
 def test_params_hash_is_stable_and_sensitive():

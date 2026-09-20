@@ -22,6 +22,19 @@ logger = logging.getLogger(__name__)
 SYNTHESIZE_PATH = "/synthesize"
 
 
+def parse_voice_spec(spec: str) -> tuple[str, int | None]:
+    """« fr_FR-upmc-medium:1 » → (« fr_FR-upmc-medium », 1) ; sans « :n », pas de locuteur imposé.
+
+    Permet d'utiliser deux locuteurs d'un même modèle multi-locuteurs (ex. upmc) comme deux voix.
+    """
+    model, separator, speaker = spec.partition(":")
+    if not separator:
+        return model, None
+    if not model or not speaker.isdigit():
+        raise TTSInvalidVoiceError(f"Voix invalide « {spec} » : format attendu « modèle » ou « modèle:numéro »")
+    return model, int(speaker)
+
+
 class TTSEngine(Protocol):
     name: str
 
@@ -33,7 +46,7 @@ class TTSEngine(Protocol):
 
 
 class PiperHTTPEngine:
-    """Moteur Piper via son serveur HTTP (POST /synthesize {"text", "voice"} → audio/wav)."""
+    """Moteur Piper via son serveur HTTP (POST /synthesize {"text", "voice", "speaker_id"?} → audio/wav)."""
 
     name = "piper"
 
@@ -59,10 +72,14 @@ class PiperHTTPEngine:
         )
 
     async def synthesize(self, text: str, voice: str) -> bytes:
+        model, speaker_id = parse_voice_spec(voice)
+        payload: dict[str, object] = {"text": text, "voice": model}
+        if speaker_id is not None:
+            payload["speaker_id"] = speaker_id
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                response = await self._client.post(SYNTHESIZE_PATH, json={"text": text, "voice": voice})
+                response = await self._client.post(SYNTHESIZE_PATH, json=payload)
             except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = exc
                 logger.warning("tts_call_failed", extra={"attempt": attempt + 1, "error": type(exc).__name__})
