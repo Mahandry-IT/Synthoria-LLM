@@ -156,6 +156,15 @@ class Section(BaseModel):
     title: str = Field(description="Section heading shown to the learner.")
     blocks: list[ContentBlock] = Field(default_factory=list, description="Content directly in the section (no subsection needed).")
     subsections: list[Subsection] = Field(default_factory=list, description="Subsections, e.g. Quoi/Pourquoi/Comment under 'development'.")
+    covered_subtopics: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Only when generating from a validated plan: the planned subtopics this "
+            "section really explains, each copied VERBATIM from the plan. List a "
+            "subtopic only if the text above develops it (definition/mechanism and "
+            "concrete items), never if it is merely mentioned."
+        ),
+    )
 
 
 class QuizDifficulty(str, Enum):

@@ -189,6 +189,11 @@ def _block_to_text(block: Any) -> str:
     return ""
 
 
+def _all_blocks(section: Section) -> list[Any]:
+    """Blocs directs d'une section puis ceux de ses sous-sections, dans l'ordre."""
+    return [*section.blocks, *(b for sub in section.subsections for b in sub.blocks)]
+
+
 def _map_sections_to_course_sections(
     sections: list[Section],
     start_index: int = 0,
@@ -293,20 +298,20 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
         for s in schema.sources
     ]
 
-    # Extraire summary et next_steps depuis les sections
+    # Extraire summary et next_steps depuis les sections (blocs directs ET sous-sections :
+    # Gemini range parfois le contenu dans une sous-section, ce qui laissait `summary` vide).
     summary = ""
     next_steps: list[str] = []
     for section in schema.sections:
         if section.type.value == "summary":
-            for block in section.blocks:
-                if block.text:
-                    summary = block.text
-                    break
+            summary = " ".join(t for t in (_block_to_text(b) for b in _all_blocks(section)) if t)
         elif section.type.value == "next_steps":
-            for block in section.blocks:
+            for block in _all_blocks(section):
                 if block.list_items:
                     next_steps = block.list_items
                     break
+            if not next_steps:
+                next_steps = [t for t in (_block_to_text(b) for b in _all_blocks(section)) if t]
 
     # Mapper les sections block-based vers CourseSection (format API)
     from app.api.schemas import CoursePitfall
@@ -314,7 +319,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
     pitfalls: list[CoursePitfall] = []
     for section in schema.sections:
         if section.type.value == "common_pitfalls":
-            for block in section.blocks:
+            for block in _all_blocks(section):
                 if block.pitfall:
                     pitfalls.append(CoursePitfall(
                         description=block.pitfall.description,
@@ -368,7 +373,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
         sections=api_sections or None,
         common_pitfalls=pitfalls or None,
         quiz=quiz_items or None,
-        summary=summary or (schema.sections[0].title if schema.sections else ""),
+        summary=summary,
         next_steps=next_steps or schema.unconfirmed_points,
     )
 

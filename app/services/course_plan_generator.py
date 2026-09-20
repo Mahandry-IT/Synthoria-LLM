@@ -291,14 +291,104 @@ async def _generate_batch(
         f"--- Plan complet validé (pour éviter les doublons et garder la cohérence ; ne développe PAS les sections hors lot) ---\n{outline}\n\n"
         f"--- Sections à générer dans CE lot, et seulement celles-ci ---\n{_format_sections(batch, detailed=True)}\n\n"
         f"Génère exactement {len(batch)} section(s) DEVELOPMENT, dans cet ordre et avec ces titres, "
-        "en JSON selon le schéma fourni."
+        "en JSON selon le schéma fourni. Chaque sous-thème listé doit être EXPLIQUÉ (pas seulement cité) ; "
+        "renseigne `covered_subtopics` avec les sous-thèmes réellement développés, recopiés à l'identique."
     )
     structured = await gemini_client.format_structured(
         raw_answer=prompt,
         system_instruction=_get_teacher_instructions(),
         response_schema=SectionsBatchSchema,
     )
-    return _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, batch)
+    aligned = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, batch)
+    return await _fill_subtopic_gaps(
+        aligned, batch, question=question, mode=mode, context_block=context_block,
+        outline=outline, gemini_client=gemini_client,
+    )
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def _missing_subtopics(section: Section, planned: ApiPlannedSection) -> list[str]:
+    """Sous-thèmes du plan que la section ne déclare pas avoir développés.
+
+    Renvoie [] quand la section ne déclare rien (section « incomplète » de repli, ou
+    modèle n'ayant pas rempli `covered_subtopics`) : sans information, on ne
+    déclenche pas de régénération coûteuse.
+    """
+    declared = [_norm(s) for s in section.covered_subtopics if s.strip()]
+    if not declared:
+        return []
+    return [
+        topic
+        for topic in planned.subtopics
+        if not any(_norm(topic) in d or d in _norm(topic) for d in declared)
+    ]
+
+
+async def _fill_subtopic_gaps(
+    aligned: list[Section],
+    batch: list[ApiPlannedSection],
+    *,
+    question: str,
+    mode: str,
+    context_block: str,
+    outline: str,
+    gemini_client: GeminiClient,
+) -> list[Section]:
+    """Régénère UNE fois les sections dont des sous-thèmes du plan ne sont pas traités.
+
+    Un seul appel Gemini par lot, limité aux sections incomplètes. Le remplaçant n'est
+    retenu que s'il manque strictement moins de sous-thèmes ; en cas d'échec, la
+    section d'origine est conservée (la génération ne doit jamais échouer ici).
+    """
+    gaps = {
+        i: missing
+        for i, (section, planned) in enumerate(zip(aligned, batch))
+        if (missing := _missing_subtopics(section, planned))
+    }
+    if not gaps:
+        return aligned
+
+    logger.info(
+        "course_plan_subtopic_gaps",
+        extra={"sections": {batch[i].title: len(m) for i, m in gaps.items()}},
+    )
+    targets = [batch[i] for i in gaps]
+    requirements = "\n".join(
+        f"- « {batch[i].title} » — sous-thèmes NON traités à développer explicitement : " + " ; ".join(missing)
+        for i, missing in gaps.items()
+    )
+    prompt = (
+        f'mode="{mode}"\n'
+        f"Question de l'utilisateur : {question}\n\n"
+        f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
+        f"--- Plan complet validé (ne développe PAS les sections hors lot) ---\n{outline}\n\n"
+        f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True)}\n\n"
+        "Une première version de ces sections omettait ou survolait certains sous-thèmes :\n"
+        f"{requirements}\n\n"
+        f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre, couvrant "
+        "TOUS les sous-thèmes listés (y compris ceux ci-dessus, expliqués en détail avec éléments concrets), "
+        "et renseigne `covered_subtopics`."
+    )
+    try:
+        structured = await gemini_client.format_structured(
+            raw_answer=prompt,
+            system_instruction=_get_teacher_instructions(),
+            response_schema=SectionsBatchSchema,
+        )
+        replacements = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, targets)
+    except (GeminiServiceError, ValidationError) as exc:
+        logger.warning("course_plan_subtopic_regen_failed", extra={"error": str(exc)})
+        return aligned
+
+    result = list(aligned)
+    for (index, missing), new in zip(gaps.items(), replacements):
+        still_missing = _missing_subtopics(new, batch[index])
+        if _has_content(new) and len(still_missing) < len(missing):
+            result[index] = new
+    return result
 
 
 async def _generate_wrap_up(

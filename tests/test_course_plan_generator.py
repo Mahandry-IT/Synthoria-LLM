@@ -314,6 +314,70 @@ async def test_from_plan_wrap_up_failure_degrades_gracefully(settings):
     assert "relancez" in result.next_steps[0]
 
 
+@pytest.mark.asyncio
+async def test_from_plan_regenerates_section_with_uncovered_subtopics(settings):
+    sections = [
+        ApiPlannedSection(**_planned(1, "introduction", "Introduction")),
+        ApiPlannedSection(**_planned(2, "development", "Normes", ["ISO 14001", "ISO 50001"])),
+        ApiPlannedSection(**_planned(3, "common_pitfalls", "Pièges")),
+        ApiPlannedSection(**_planned(4, "summary", "Résumé")),
+        ApiPlannedSection(**_planned(5, "next_steps", "Suite")),
+    ]
+    base = _fake_gemini()
+    batch_prompts: list[str] = []
+
+    async def format_structured(raw_answer, system_instruction, *, response_schema=None):
+        if response_schema is not SectionsBatchSchema:
+            return await base.format_structured(
+                raw_answer=raw_answer, system_instruction=system_instruction, response_schema=response_schema
+            )
+        batch_prompts.append(raw_answer)
+        if len(batch_prompts) == 1:  # 1er jet : n'explique que ISO 14001
+            return {"sections": [{**_dev_section("Normes"), "covered_subtopics": ["ISO 14001"]}]}
+        return {"sections": [{**_dev_section("Normes v2"), "covered_subtopics": ["ISO 14001", "ISO 50001"]}]}
+
+    client = AsyncMock()
+    client.format_structured.side_effect = format_structured
+
+    result = await generate_course_from_validated_plan(_plan_row(), sections, client, settings)
+
+    assert len(batch_prompts) == 2
+    assert "ISO 50001" in batch_prompts[1].split("RÉGÉNÉRER")[1]
+    normes = next(s for s in result.sections if s.title == "Normes")
+    assert normes.quoi == "quoi Normes v2"  # le remplaçant complet est retenu, sous le titre du plan
+
+
+@pytest.mark.asyncio
+async def test_from_plan_keeps_original_when_regeneration_fails(settings):
+    sections = [
+        ApiPlannedSection(**_planned(1, "introduction", "Introduction")),
+        ApiPlannedSection(**_planned(2, "development", "Normes", ["ISO 14001", "ISO 50001"])),
+        ApiPlannedSection(**_planned(3, "common_pitfalls", "Pièges")),
+        ApiPlannedSection(**_planned(4, "summary", "Résumé")),
+        ApiPlannedSection(**_planned(5, "next_steps", "Suite")),
+    ]
+    base = _fake_gemini()
+    calls = {"batch": 0}
+
+    async def format_structured(raw_answer, system_instruction, *, response_schema=None):
+        if response_schema is not SectionsBatchSchema:
+            return await base.format_structured(
+                raw_answer=raw_answer, system_instruction=system_instruction, response_schema=response_schema
+            )
+        calls["batch"] += 1
+        if calls["batch"] == 2:
+            raise GeminiUnavailableError("indisponible")
+        return {"sections": [{**_dev_section("Normes"), "covered_subtopics": ["ISO 14001"]}]}
+
+    client = AsyncMock()
+    client.format_structured.side_effect = format_structured
+
+    result = await generate_course_from_validated_plan(_plan_row(), sections, client, settings)
+
+    normes = next(s for s in result.sections if s.title == "Normes")
+    assert normes.quoi == "quoi Normes"
+
+
 def test_align_batch_sections_pads_missing_with_incomplete_placeholder():
     planned = _api_sections(["A", "B"])[1:3]
     returned = SectionsBatchSchema.model_validate({"sections": [_dev_section("A")]}).sections

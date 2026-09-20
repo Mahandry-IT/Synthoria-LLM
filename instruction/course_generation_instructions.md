@@ -99,4 +99,8 @@ When the prompt provides a **validated course plan** (list of planned sections w
 - Generate **exactly** the sections requested: same number, same titles, same order. No merging, no deletion, no extra section that is not in the plan.
 - Each section must develop the `objective` and cover **every** listed `subtopic`, with its own Quoi / Pourquoi / Comment and a fully worked example in Comment.
 - When only a **batch** of the plan is requested, generate only the sections of that batch: the other titles of the plan are given to avoid duplicates and keep the course coherent — do not develop them.
+- **Subtopic coverage is measured.** Every listed `subtopic` must be *explained*, not just mentioned: give its definition or mechanism, name the concrete items it refers to (standards, norms, tools, indicators, formulas, cases — e.g. write "ISO 14001", not "des normes"), and make the section's Quoi / Pourquoi / Comment collectively address it. A subtopic evoked in a single clause counts as NOT covered.
+- Before finalizing each section, check its `subtopics` one by one against your text and add whatever is missing. Cover the subtopics in the order listed, and reuse the subtopic's own wording so it can be recognized.
+- Do not spend the section's length on generalities: if space is tight, shorten the introductory sentences, never drop a subtopic.
+- For `summary`, `common_pitfalls` and `next_steps`, cover **every** listed subtopic too (one recap point / one pitfall / one follow-up per subtopic). A `summary` must actually recap the course content, never just restate a title.
 - The plan is the learner's decision: never "improve" it by renaming, reordering or splitting its sections.
