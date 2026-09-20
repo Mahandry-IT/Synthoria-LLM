@@ -276,6 +276,17 @@ class CoursePlanSchema(BaseModel):
         return self
 
 
+class MoreSectionsSchema(BaseModel):
+    """Sortie structurée Gemini : nouvelles sections de développement d'un plan existant."""
+
+    planned_sections: list[PlannedSection] = Field(
+        description=(
+            "Nouvelles sections DEVELOPMENT (structure uniquement), distinctes des sections "
+            "déjà présentes dans le plan, qui développent les pistes « pour aller plus loin »."
+        )
+    )
+
+
 class Meta(BaseModel):
     title: str
     subject: str

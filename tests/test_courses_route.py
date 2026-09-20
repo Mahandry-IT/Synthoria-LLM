@@ -195,6 +195,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from app.api.schemas import ApiPlannedSection
 from app.schemas.course_generation import CoursePlanSchema
 
 
@@ -335,4 +336,119 @@ def test_generate_from_plan_invalid_sections_422(plan_client, sections):
 
 def test_generate_from_plan_invalid_uuid_422(plan_client):
     res = plan_client.post("/courses/generate/from-plan", json={"plan_id": "pas-un-uuid", "sections": [_planned_json(1)]})
+    assert res.status_code == 422
+
+
+# ─── Assistance IA sur le plan : /courses/plan/refine-section et /courses/plan/more-sections ───
+
+
+def _refine_payload(plan_id, **overrides) -> dict:
+    payload = {
+        "plan_id": str(plan_id),
+        "section": _planned_json(2, title="Principe"),
+        "sections": [_planned_json(1, "introduction", "Intro"), _planned_json(2, title="Principe")],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_refine_section_success_passes_instructions(plan_client):
+    row = _plan_row()
+    refined = ApiPlannedSection(**_planned_json(2, title="Principe"))
+    with patch(
+        "app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row
+    ), patch("app.api.routes.refine_planned_section", new_callable=AsyncMock, return_value=refined) as mock_refine:
+        res = plan_client.post(
+            "/courses/plan/refine-section", json=_refine_payload(row.id, instructions="  ajoute X  ")
+        )
+
+    assert res.status_code == 200
+    assert res.json()["title"] == "Principe"
+    assert mock_refine.call_args.kwargs["instructions"] == "ajoute X"
+    assert mock_refine.call_args.kwargs["plan_row"] is row
+    assert len(mock_refine.call_args.kwargs["outline"]) == 2
+
+
+def test_refine_section_blank_instructions_become_none(plan_client):
+    row = _plan_row()
+    refined = ApiPlannedSection(**_planned_json(2))
+    with patch(
+        "app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row
+    ), patch("app.api.routes.refine_planned_section", new_callable=AsyncMock, return_value=refined) as mock_refine:
+        res = plan_client.post("/courses/plan/refine-section", json=_refine_payload(row.id, instructions="   "))
+
+    assert res.status_code == 200
+    assert mock_refine.call_args.kwargs["instructions"] is None
+
+
+def test_refine_section_unknown_plan_404(plan_client):
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=None):
+        res = plan_client.post("/courses/plan/refine-section", json=_refine_payload(uuid.uuid4()))
+    assert res.status_code == 404
+
+
+def test_refine_section_expired_plan_410(plan_client):
+    row = _plan_row(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row):
+        res = plan_client.post("/courses/plan/refine-section", json=_refine_payload(row.id))
+    assert res.status_code == 410
+
+
+def test_refine_section_instructions_too_long_422(plan_client):
+    res = plan_client.post(
+        "/courses/plan/refine-section", json=_refine_payload(uuid.uuid4(), instructions="a" * 1001)
+    )
+    assert res.status_code == 422
+
+
+def test_refine_section_gemini_quota_429(plan_client):
+    row = _plan_row()
+    with patch(
+        "app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row
+    ), patch(
+        "app.api.routes.refine_planned_section", new_callable=AsyncMock, side_effect=GeminiQuotaExceededError("quota")
+    ):
+        res = plan_client.post("/courses/plan/refine-section", json=_refine_payload(row.id))
+    assert res.status_code == 429
+
+
+def test_more_sections_success(plan_client):
+    row = _plan_row()
+    created = [ApiPlannedSection(**_planned_json(3, title="Nouveau"))]
+    with patch(
+        "app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row
+    ), patch("app.api.routes.generate_more_sections", new_callable=AsyncMock, return_value=created) as mock_more:
+        res = plan_client.post(
+            "/courses/plan/more-sections",
+            json={"plan_id": str(row.id), "sections": [_planned_json(1), _planned_json(2, "next_steps", "Suite")]},
+        )
+
+    assert res.status_code == 200
+    assert [s["title"] for s in res.json()["sections"]] == ["Nouveau"]
+    assert len(mock_more.call_args.kwargs["current_sections"]) == 2
+
+
+def test_more_sections_gemini_invalid_response_502(plan_client):
+    row = _plan_row()
+    with patch(
+        "app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=row
+    ), patch(
+        "app.api.routes.generate_more_sections", new_callable=AsyncMock, side_effect=GeminiInvalidResponseError("x")
+    ):
+        res = plan_client.post(
+            "/courses/plan/more-sections", json={"plan_id": str(row.id), "sections": [_planned_json(1)]}
+        )
+    assert res.status_code == 502
+
+
+def test_more_sections_unknown_plan_404(plan_client):
+    with patch("app.api.routes.course_plan_repository.get_by_id", new_callable=AsyncMock, return_value=None):
+        res = plan_client.post(
+            "/courses/plan/more-sections", json={"plan_id": str(uuid.uuid4()), "sections": [_planned_json(1)]}
+        )
+    assert res.status_code == 404
+
+
+def test_more_sections_empty_sections_422(plan_client):
+    res = plan_client.post("/courses/plan/more-sections", json={"plan_id": str(uuid.uuid4()), "sections": []})
     assert res.status_code == 422

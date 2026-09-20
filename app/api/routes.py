@@ -24,11 +24,14 @@ from app.api.schemas import (
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
+    MoreSectionsRequest,
+    MoreSectionsResponse,
     PageParams,
     PaginatedResponse,
     PaginationMeta,
     PDFIngestMultiResponse,
     PDFIngestResponse,
+    RefineSectionRequest,
 )
 from app.core.config import Settings, get_settings
 from app.core.exceptions import (
@@ -43,6 +46,8 @@ from app.services.course_generator import generate_course_from_question
 from app.services.course_plan_generator import (
     generate_course_from_validated_plan,
     generate_course_plan,
+    generate_more_sections,
+    refine_planned_section,
 )
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
@@ -387,6 +392,65 @@ async def create_course_plan(
         sections=[ApiPlannedSection(**s.model_dump(mode="json")) for s in plan.planned_sections],
         coverage_notes=plan.coverage_notes,
     )
+
+
+async def _get_active_plan(request: Request, plan_id: UUID):
+    """Plan persisté non expiré, sinon 404 (inconnu) / 410 (expiré)."""
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        plan_row = await course_plan_repository.get_by_id(db, plan_id)
+
+    if plan_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan introuvable")
+    if plan_row.expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Plan expiré, régénérez-le")
+    return plan_row
+
+
+@router.post("/courses/plan/refine-section", response_model=ApiPlannedSection)
+async def refine_plan_section(
+    request: Request,
+    body: RefineSectionRequest,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
+) -> ApiPlannedSection:
+    """Complète une section de plan incomplète (bouton « étoiles » d'une section).
+
+    Reçoit la section actuelle et, facultativement, ce que l'utilisateur veut y
+    ajouter ; sans précision, le modèle détermine seul ce qui manque.
+    404 si `plan_id` inconnu, 410 si le plan a expiré.
+    """
+    plan_row = await _get_active_plan(request, body.plan_id)
+
+    with _gemini_http_errors():
+        return await refine_planned_section(
+            plan_row=plan_row,
+            section=body.section,
+            outline=body.sections,
+            instructions=body.instructions,
+            vector_store=request.app.state.vector_store,
+            gemini_client=gemini_client,
+            settings=settings,
+        )
+
+
+@router.post("/courses/plan/more-sections", response_model=MoreSectionsResponse)
+async def add_more_plan_sections(
+    request: Request,
+    body: MoreSectionsRequest,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+) -> MoreSectionsResponse:
+    """Crée de nouvelles sections de développement à partir de « Pour aller plus loin ».
+
+    404 si `plan_id` inconnu, 410 si le plan a expiré.
+    """
+    plan_row = await _get_active_plan(request, body.plan_id)
+
+    with _gemini_http_errors():
+        sections = await generate_more_sections(
+            plan_row=plan_row, current_sections=body.sections, gemini_client=gemini_client
+        )
+    return MoreSectionsResponse(sections=sections)
 
 
 @router.post("/courses/generate/from-plan", response_model=CourseGenerationResponse)
