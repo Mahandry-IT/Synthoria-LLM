@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import PodcastJob
@@ -162,4 +162,24 @@ async def mark_failed(session: AsyncSession, job_id: uuid.UUID, error_message: s
         .where(PodcastJob.id == job_id)
         .values(status="failed", error_message=error_message[:2000], locked_at=None)
     )
+    await session.commit()
+
+
+async def requeue(
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    *,
+    error_message: str | None = None,
+    refund_attempt: bool = False,
+) -> None:
+    """Remet un job en file (pending) pour reprise depuis son dernier checkpoint.
+
+    refund_attempt : ne compte pas la tentative (arrêt propre du worker, pas un échec).
+    """
+    values: dict[str, Any] = {"status": "pending", "locked_at": None}
+    if error_message is not None:
+        values["error_message"] = error_message[:2000]
+    if refund_attempt:
+        values["attempts"] = func.greatest(PodcastJob.attempts - 1, 0)
+    await session.execute(update(PodcastJob).where(PodcastJob.id == job_id).values(**values))
     await session.commit()
