@@ -130,6 +130,23 @@ class CourseSource(BaseModel):
     reference: str
 
 
+class CourseTable(BaseModel):
+    """Tableau structuré (rendu graphique côté front, plutôt que du texte aplati)."""
+    caption: str = ""
+    headers: list[str]
+    rows: list[list[str]]
+
+
+class CourseVideo(BaseModel):
+    """Vidéo YouTube vérifiée, affichée en carte au-dessus du podcast."""
+    video_id: str
+    url: str
+    embed_url: str
+    thumbnail_url: str
+    title: str
+    channel: str = ""
+
+
 class CourseSection(BaseModel):
     id: str
     title: str
@@ -138,6 +155,7 @@ class CourseSection(BaseModel):
     comment: str
     worked_example: WorkedExample
     key_points: list[str] = Field(default_factory=list)
+    tables: list[CourseTable] = Field(default_factory=list, description="Tableaux de la section (hors texte quoi/pourquoi/comment).")
 
 
 class CoursePitfall(BaseModel):
@@ -259,6 +277,7 @@ class CourseGenerationResponse(BaseModel):
 
     summary: str
     next_steps: list[str] = Field(default_factory=list)
+    videos: list[CourseVideo] = Field(default_factory=list, description="Vidéos YouTube vérifiées expliquant le cours.")
 
     # Renseignés par les routes après persistance (jamais stockés dans `gemini_response`).
     session_id: UUID | None = Field(None, description="Id de la session persistée (None si la persistance a échoué).")
