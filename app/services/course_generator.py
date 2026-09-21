@@ -5,12 +5,18 @@ from pathlib import Path
 from typing import Any
 
 from app.api.schemas import CourseGenerationResponse, CourseMeta, CourseSource, CourseTable, CourseVideo
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import (
     GeminiInvalidResponseError,
     GeminiUnavailableError,
 )
-from app.schemas.course_generation import CoverageCompletionSchema, CourseGenerationSchema, QuizDifficulty, Section
+from app.schemas.course_generation import (
+    CoverageCompletionSchema,
+    CourseGenerationSchema,
+    DirectAnswer,
+    QuizDifficulty,
+    Section,
+)
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
 from app.services.youtube import candidate_video, verify_videos
@@ -299,6 +305,75 @@ def _map_sections_to_course_sections(
     return api_sections
 
 
+_SHINGLE_SIZE = 3
+
+
+def _shingles(text: str) -> set[tuple[str, ...]]:
+    words = re.findall(r"\w+", text.casefold())
+    return {tuple(words[i : i + _SHINGLE_SIZE]) for i in range(max(0, len(words) - _SHINGLE_SIZE + 1))}
+
+
+def _direct_answer_text(direct: DirectAnswer) -> str:
+    return " ".join(
+        [direct.summary, *direct.key_points, *(t for t in (_block_to_text(b) for b in direct.blocks) if t)]
+    )
+
+
+def answer_intro_overlap(schema: CourseGenerationSchema) -> float:
+    """Part (0-1) de la réponse directe recopiée mot à mot (3-grammes) de l'introduction."""
+    if schema.direct_answer is None:
+        return 0.0
+    intro = _intro_text(schema)
+    answer = _shingles(_direct_answer_text(schema.direct_answer))
+    return len(answer & _shingles(intro)) / len(answer) if answer else 0.0
+
+
+async def ensure_distinct_direct_answer(
+    structured: dict[str, Any],
+    *,
+    mode: str,
+    gemini_client: GeminiClient,
+    system_instruction: str,
+    context_prompt: str,
+    max_overlap: float,
+) -> dict[str, Any]:
+    """Relance ciblée du seul `direct_answer` s'il reprend le texte de l'introduction.
+
+    Best-effort : toute erreur (validation, Gemini) laisse `structured` inchangé.
+    """
+    try:
+        schema = CourseGenerationSchema.model_validate(_coerce_known_format(dict(structured), mode))
+    except Exception:
+        return structured
+    overlap = answer_intro_overlap(schema)
+    if overlap <= max_overlap:
+        return structured
+
+    logger.warning("course_answer_duplicates_intro", extra={"overlap": round(overlap, 2)})
+    try:
+        retried = await gemini_client.format_structured(
+            raw_answer=(
+                f"{context_prompt}\n\n"
+                "La réponse directe précédente recopiait l'introduction. Régénère UNIQUEMENT la réponse directe : "
+                "réponds à la question en 2-3 phrases, 3 à 5 points clés et 1 visuel récapitulatif, sans reprendre "
+                "le contexte, les prérequis ni la vue d'ensemble de l'introduction.\n\n"
+                f"Introduction à NE PAS reprendre :\n{_intro_text(schema)}"
+            ),
+            system_instruction=system_instruction,
+            response_schema=DirectAnswer,
+        )
+        return {**structured, "direct_answer": DirectAnswer.model_validate(retried).model_dump(mode="json")}
+    except Exception:
+        logger.warning("course_answer_regeneration_failed", exc_info=True)
+        return structured
+
+
+def _intro_text(schema: CourseGenerationSchema) -> str:
+    return " ".join(
+        _block_to_text(b) for s in schema.sections if s.type.value == "introduction" for b in _all_blocks(s)
+    )
+
+
 def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationResponse:
     """Convertit la réponse Gemini (CourseGenerationSchema) en CourseGenerationResponse API.
 
@@ -346,21 +421,13 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
                 elif block.text:
                     pitfalls.append(CoursePitfall(description=block.text, why_it_happens="", how_to_avoid=""))
 
-    # Construire answer depuis la première section avec Quoi/Pourquoi/Comment
-    answer = None
-    if api_sections:
-        first = api_sections[0]
-        answer = {
-            "quoi": first.quoi,
-            "pourquoi": first.pourquoi,
-            "comment": first.comment,
-            "worked_example": {
-                "statement": first.worked_example.statement,
-                "steps": first.worked_example.steps,
-                "result": first.worked_example.result,
-            },
-            "key_points": schema.unconfirmed_points,
-        }
+    # Réponse directe : générée à part, jamais recopiée d'une section du cours.
+    direct = schema.direct_answer
+    answer = {
+        "summary": direct.summary if direct else summary,
+        "blocks": [b.model_dump(mode="json", exclude_none=True) for b in direct.blocks] if direct else [],
+        "key_points": direct.key_points if direct else schema.unconfirmed_points,
+    }
 
     # Calculer les points du quiz (déterministe, source de vérité côté serveur)
     quiz_points = compute_quiz_points(schema.quiz) if schema.quiz else []
@@ -534,6 +601,10 @@ async def _validate_and_map_with_retry(
          le champ difficulty.
       3. Si le retry échoue aussi → fallback déterministe garanti.
     """
+    structured = await ensure_distinct_direct_answer(
+        structured, mode=mode, gemini_client=gemini_client, system_instruction=system_instruction,
+        context_prompt=raw_answer_for_retry, max_overlap=get_settings().course_answer_intro_similarity_max,
+    )
     try:
         return _validate_and_map(structured, mode)
     except GeminiInvalidResponseError as exc:

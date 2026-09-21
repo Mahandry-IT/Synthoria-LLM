@@ -26,7 +26,7 @@ from app.api.schemas import (
     ApiPlannedSection,
     CourseGenerationResponse,
 )
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiServiceError
 from app.db.models import CoursePlan
 from app.schemas.course_generation import (
@@ -47,6 +47,7 @@ from app.schemas.course_generation import (
 from app.services.course_generator import (
     _build_context_block,
     _coerce_known_format,
+    ensure_distinct_direct_answer,
     _file_sources_from_chunks,
     _get_plan_instructions,
     _get_teacher_instructions,
@@ -422,6 +423,8 @@ async def _generate_wrap_up(
         f"{_format_sections(wanted, detailed=True) or '(aucune section hors développement)'}\n\n"
         "Génère ces sections (mêmes titres, même ordre) ainsi que le quiz couvrant l'ensemble des sections "
         "DEVELOPMENT. N'inclus AUCUNE section de type development. Laisse `sources` vide. "
+        "Renseigne `direct_answer` : la réponse directe à la question (2-3 phrases, points clés, 1 visuel "
+        "récapitulatif), distincte de l'introduction dont elle ne reprend aucun texte. "
         "Propose dans `video_suggestions` 1 à 3 vidéos YouTube réelles qui expliquent bien le sujet. "
         "Retourne le JSON selon le schéma fourni."
     )
@@ -435,6 +438,10 @@ async def _generate_wrap_up(
         # Champs dérivés du plan/contexte : écrasés côté code plutôt que confiés au modèle.
         structured["meta"] = meta
         structured["sources"] = [s.model_dump(mode="json") for s in sources]
+        structured = await ensure_distinct_direct_answer(
+            structured, mode=mode, gemini_client=gemini_client, system_instruction=_get_teacher_instructions(),
+            context_prompt=prompt, max_overlap=get_settings().course_answer_intro_similarity_max,
+        )
         try:
             return CourseGenerationSchema.model_validate(structured)
         except ValidationError as exc:
@@ -540,6 +547,7 @@ async def generate_course_from_validated_plan(
         "meta": meta,
         "sources": [s.model_dump(mode="json") for s in sources],
         "sections": [s.model_dump(mode="json") for s in ordered_sections],
+        "direct_answer": wrap_up.direct_answer.model_dump(mode="json") if wrap_up and wrap_up.direct_answer else None,
         "quiz": [q.model_dump(mode="json") for q in wrap_up.quiz] if wrap_up else [],
         "confidence": wrap_up.confidence.value if wrap_up else "medium",
         "unconfirmed_points": wrap_up.unconfirmed_points if wrap_up else [_WRAP_UP_FAILED_NOTE],

@@ -325,6 +325,26 @@ class Meta(BaseModel):
     generated_at: datetime
 
 
+class DirectAnswer(BaseModel):
+    """Réponse directe à la question posée : synthèse autonome, distincte de l'introduction."""
+
+    summary: str = Field(
+        description=(
+            "Direct answer to the user's question in 2-3 sentences. Answers the question itself; "
+            "NEVER reuse or paraphrase the introduction (context, prerequisites and course overview "
+            "belong to the introduction only)."
+        )
+    )
+    key_points: list[str] = Field(
+        default_factory=list,
+        description="3 to 5 key takeaways of the answer, each one short. Not copied from the introduction.",
+    )
+    blocks: list[ContentBlock] = Field(
+        default_factory=list,
+        description="One recap visual (TABLE preferably, or LIST) that summarizes the answer at a glance.",
+    )
+
+
 class CourseGenerationSchema(BaseModel):
     """Unified structured output for Mode 2 and Mode 3.
 
@@ -347,6 +367,13 @@ class CourseGenerationSchema(BaseModel):
             "Section 'Estimateur', Section 'Métriques d'évaluation'. "
             "Optionally add INTRODUCTION, COMMON_PITFALLS, SUMMARY, NEXT_STEPS."
         )
+    )
+    direct_answer: DirectAnswer | None = Field(
+        default=None,
+        description=(
+            "Direct answer to the user's question (short summary, key points, one recap visual). "
+            "Distinct from the introduction: never copy its text."
+        ),
     )
     quiz: list[QuizQuestion] = Field(
         default_factory=list,
