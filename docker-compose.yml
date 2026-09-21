@@ -19,6 +19,8 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully   # modèles (llm + embedding) présents avant le démarrage
       chroma:
         condition: service_started
       postgres:
@@ -125,14 +127,23 @@ services:
       ollama:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
+    # Chaque modèle est téléchargé indépendamment (un échec sur l'un n'empêche plus l'autre)
+    # avec quelques retries ; le conteneur échoue si un modèle reste absent (voir restart).
     command:
-      - >
-        ollama pull ${OLLAMA_DEFAULT_MODEL:-llama3.2} &&
-        ollama pull ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      - |
+        for model in ${OLLAMA_DEFAULT_MODEL:-llama3.2} ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}; do
+          ok=0
+          for i in 1 2 3 4 5; do
+            ollama pull "$$model" && ok=1 && break
+            echo "pull $$model échoué (tentative $$i/5)"; sleep 5
+          done
+          [ "$$ok" = 1 ] || exit 1
+        done
     environment:
       OLLAMA_HOST: http://ollama:11435
     volumes:
       - ollama-data:/root/.ollama
+    restart: on-failure
 
   postgres:
     image: postgres:16-alpine
