@@ -23,6 +23,16 @@
       "key": "planId",
       "value": "",
       "description": "UUID d'un plan de cours (remplir après POST /courses/plan)"
+    },
+    {
+      "key": "sectionId",
+      "value": "",
+      "description": "Id d'une section du cours (champ sections[].id de la réponse de génération)"
+    },
+    {
+      "key": "cardId",
+      "value": "",
+      "description": "Id d'une flashcard (champ flashcards[].card_id, ex. 1-0)"
     }
   ],
   "item": [
@@ -570,6 +580,106 @@
               ]
             },
             "description": "Télécharge le fichier vidéo généré (MP4). Protégé contre path traversal.\n\nPrérequis : status = \"succeeded\" (video_url disponible via polling).\n\nCodes: 200 fichier MP4, 404 job introuvable ou vidéo non disponible."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Learning",
+      "item": [
+        {
+          "name": "POST /courses/{session_id}/sections/{section_id}/recall",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/sections/{{sectionId}}/recall",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "sections",
+                "{{sectionId}}",
+                "recall"
+              ]
+            },
+            "description": "Évalue la reformulation de l'apprenant. La section (consigne + points attendus) est lue en base. Réponse : {verdict: correct|partiel|incorrect, feedback, missing_points}. 404 session/section inconnue ou sans recall_prompt, 422 réponse vide ou > 1000 caractères, 429 rate limit (10/min).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answer\": \"Le rapport du nombre de spires fixe le rapport des tensions, grâce à l'induction.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "GET /reviews/due",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reviews/due?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reviews",
+                "due"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Flashcards à réviser aujourd'hui (jamais révisées ou échues), dérivées des questions « Vérifie » des cours récents."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /reviews/{session_id}/{card_id}",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reviews/{{sessionId}}/{{cardId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reviews",
+                "{{sessionId}}",
+                "{{cardId}}"
+              ]
+            },
+            "description": "Enregistre le résultat (correct|incorrect) et planifie la prochaine révision (Leitner : J+1, J+3, J+7, J+21). Réponse : {box, due_at}. 404 si la carte n'existe pas.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"result\": \"correct\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         }

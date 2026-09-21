@@ -57,6 +57,9 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | POST | `/courses/generate/from-plan` | **Étape 2** : génère le cours complet à partir de `plan_id` + `sections` (plan validé ou édité par l'utilisateur). Génération par lots de sections DEVELOPMENT, sans plafond de sections. `404` plan inconnu, `410` plan expiré, `422` plan invalide (max 80 sections, au moins une `development`). Réponse identique à `/courses/generate`. |
 | GET | `/courses/history?page=1&limit=20` | Historique paginé des sessions de cours (UUID, date, question, fichiers, mode) |
 | GET | `/courses/history/{id}` | Détail d'une session avec la réponse Gemini complète |
+| POST | `/courses/{session_id}/sections/{section_id}/recall` | Évalue la reformulation (« explique avec tes mots ») d'une section : body `{answer}` (≤ 1000 caractères) → `{verdict: correct\|partiel\|incorrect, feedback, missing_points}`. La section est lue en base ; la réponse est traitée comme une donnée. `404` session/section inconnue, `422` réponse vide ou trop longue, `429` (10/min). |
+| GET | `/reviews/due?limit=20` | Flashcards à réviser aujourd'hui (jamais révisées ou échues), dérivées des questions « Vérifie » des cours récents |
+| POST | `/reviews/{session_id}/{card_id}` | Enregistre `{result: correct\|incorrect}` et planifie la suite (Leitner J+1, J+3, J+7, J+21) → `{box, due_at}`. `404` carte inconnue |
 | POST | `/podcasts/generate/{session_id}` | Met en file la génération d'un podcast à partir d'un cours persisté (`202` + `job_id`). Body optionnel `{style, target_minutes, force}`. `404` session inconnue, `422` cours sans contenu exploitable, `429` trop de demandes, `503` fonctionnalité désactivée. Idempotent : un job non échoué équivalent est renvoyé sauf `force=true`. |
 | GET | `/podcasts/jobs/{job_id}` | État du job : `pending → scripting → synthesizing → mixing → done \| failed`, `stage`, `progress` (0-100), `error_message`, `duration_seconds` |
 | GET | `/podcasts/{job_id}/audio` | MP3 (support `Range` pour le seek du lecteur). `409` si le job n'est pas `done`, `410` si le fichier a expiré |
@@ -111,6 +114,16 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 
 > **Sécurité** : l'API n'a pas d'authentification — toute personne connaissant l'UUID d'un job peut lire son audio. Acceptable en local, à traiter avant toute exposition. Le conteneur `piper` ne publie aucun port.
 
+## Format du cours (pédagogie active)
+
+- **Blocs typés** : chaque section expose `subsections[].blocks[]` (`text`, `definition`, `list`, `table`, `formula`, `code`, `worked_example`, `callout`, `pitfall`, `diagram` Mermaid, `chart`). `quoi/pourquoi/comment/tables` sont **dépréciés** (historique, podcast) et seront retirés dans une version ultérieure. Les diagrammes (≤ 4000 caractères) et graphiques (≤ 12 libellés, 4 séries) sont bornés.
+- **Réponse directe** : `answer` = `summary` + `key_points` + `blocks`, distincte de l'introduction (garde-fou de similarité, `COURSE_ANSWER_INTRO_SIMILARITY_MAX`). L'ancien format `quoi/pourquoi/comment/worked_example` reste lisible.
+- **Cycle par section** (développement) : `challenge` → Pourquoi → Quoi → Comment → `faded_example` (À toi) → `check_questions` (Vérifie, feedback par choix) → `recall_prompt` (reformulation). Aucun plancher de sections : la couverture décide.
+- **Quiz final** : majorité de questions normale/difficile (`COURSE_QUIZ_MIN_HARD_SHARE`, 0.6), `section_refs` pour les questions mêlant plusieurs sections.
+- **Pré-test** : `POST /courses/plan` renvoie `pretest` (1 question par section) ; une section envoyée à `/courses/generate/from-plan` avec `mastery: "known"` est générée en version condensée.
+- **Flashcards** : `flashcards[]` dérivées des questions « Vérifie ». Migration `005_add_flashcard_reviews` (table `flashcard_reviews`) : `docker compose exec api alembic upgrade head` (la table est aussi créée au démarrage). Intervalles : `REVIEW_INTERVALS_DAYS`.
+- **Podcast actif** : l'hôte pose une question de rappel par segment (`think_pause`) suivie d'un silence de 5 s avant la réponse.
+
 ## Variables d'environnement
 
 Voir `.env.example`.
@@ -130,7 +143,7 @@ GEMINI_MAX_RETRIES=3
 GEMINI_TIMEOUT_SECONDS=30
 COURSE_TOP_K_DEFAULT=6
 COURSE_QUESTION_MAX_LENGTH=2000
-COURSE_PLAN_BATCH_SIZE=4
+COURSE_PLAN_BATCH_SIZE=2
 COURSE_PLAN_TTL_MINUTES=120
 DATABASE_URL=postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
 ```

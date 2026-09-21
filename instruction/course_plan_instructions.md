@@ -26,6 +26,10 @@ Order the sections as follows:
 4. `summary` — key takeaways (one section).
 5. `next_steps` — suggested follow-up topics (one section).
 
+## Diagnostic pre-test
+
+Fill `pretest` with **exactly one question per `development` section**, using the same title as in `planned_sections` (`section_title`). Each question checks **prior knowledge** of that section's topic (difficulty `normale`, single correct answer, plausible distractors, short explanation). The learner may skip sections they already master.
+
 ## Number of sections — driven by coverage
 
 - The number of `development` sections is driven by **full coverage of the topic**. Never stop at a target count while a sub-topic is still uncovered.

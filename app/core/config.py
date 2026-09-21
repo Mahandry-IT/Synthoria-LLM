@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     recall_answer_max_length: int = 1000
     recall_rate_limit_per_minute: int = 10
 
+    # Répétition espacée (Leitner) : intervalles en jours par boîte, cours analysés pour « à réviser »
+    review_intervals_days: list[int] = [1, 3, 7, 21]
+    review_sessions_scan_limit: int = 50
+    review_rate_limit_per_minute: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:

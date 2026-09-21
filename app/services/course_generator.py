@@ -31,6 +31,7 @@ from app.schemas.course_generation import (
     Section,
 )
 from app.services.gemini_client import GeminiClient
+from app.services.leitner import flashcards_from_course
 from app.services.vector_store import NumpyVectorStore
 from app.services.youtube import candidate_video, verify_videos
 
@@ -505,6 +506,8 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
     quiz_points = compute_quiz_points(schema.quiz) if schema.quiz else []
     quiz_items = [_map_quiz_question(q, pts) for q, pts in zip(schema.quiz, quiz_points)]
 
+    flashcards = flashcards_from_course({"sections": [s.model_dump(mode="json") for s in api_sections]})
+
     return CourseGenerationResponse(
         mode=schema.mode.value,
         format=schema.format.value,
@@ -522,6 +525,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
         summary=summary,
         next_steps=next_steps or schema.unconfirmed_points,
         videos=[v for v in (candidate_video(s.url, s.title) for s in schema.video_suggestions) if v],
+        flashcards=flashcards,
     )
 
 

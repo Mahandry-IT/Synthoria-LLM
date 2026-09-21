@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.schemas import (
     COURSE_DEFAULT_QUESTION,
     ApiPlannedSection,
+    ApiPretestItem,
     CourseFromPlanRequest,
     CourseGenerationRequest,
     CourseGenerationResponse,
@@ -47,8 +48,8 @@ from app.core.exceptions import (
     OllamaUnavailableError,
 )
 from app.repositories import course_plan_repository, course_session_repository
-from app.schemas.course_generation import CoursePlanSchema
-from app.services.course_generator import generate_course_from_question
+from app.schemas.course_generation import CoursePlanSchema, SectionType
+from app.services.course_generator import _map_quiz_question, generate_course_from_question
 from app.services.course_plan_generator import (
     generate_course_from_validated_plan,
     generate_course_plan,
@@ -425,8 +426,22 @@ async def create_course_plan(
         mode=resolved_mode,
         meta=CoursePlanMeta(**plan.meta.model_dump()),
         sections=[ApiPlannedSection(**s.model_dump(mode="json")) for s in plan.planned_sections],
+        pretest=_api_pretest(plan),
         coverage_notes=plan.coverage_notes,
     )
+
+
+def _api_pretest(plan: CoursePlanSchema) -> list[ApiPretestItem]:
+    """Pré-test du plan côté API : 1 question par section de développement existante (le reste est ignoré)."""
+    titles = {s.title.strip().casefold() for s in plan.planned_sections if s.type is SectionType.DEVELOPMENT}
+    seen: set[str] = set()
+    items: list[ApiPretestItem] = []
+    for item in plan.pretest:
+        key = item.section_title.strip().casefold()
+        if key in titles and key not in seen:
+            seen.add(key)
+            items.append(ApiPretestItem(section_title=item.section_title, question=_map_quiz_question(item.question)))
+    return items
 
 
 async def _get_active_plan(request: Request, plan_id: UUID):
@@ -538,6 +553,7 @@ async def get_course_plan(request: Request, plan_id: UUID) -> CoursePlanDetail:
         mode=plan_row.mode,
         meta=CoursePlanMeta(**plan.meta.model_dump()),
         sections=[ApiPlannedSection(**s.model_dump(mode="json")) for s in plan.planned_sections],
+        pretest=_api_pretest(plan),
         coverage_notes=plan.coverage_notes,
         question=plan_row.question,
         filenames=list(plan_row.filenames),

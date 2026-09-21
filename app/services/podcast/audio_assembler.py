@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 PAUSE_TURN_SECONDS = 0.35
 PAUSE_CHAPTER_SECONDS = 0.9
+THINK_PAUSE_SECONDS = 5.0  # silence de réflexion après une question de rappel
 FFMPEG_TIMEOUT_SECONDS = 900
 
 
@@ -31,6 +32,7 @@ class TimedTurn:
     text: str
     wav_paths: list[Path]
     chapter: str | None = None
+    think_pause: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,7 @@ def build_timeline(
     duration_of: Callable[[Path], float] = wav_duration,
     pause_turn: float = PAUSE_TURN_SECONDS,
     pause_chapter: float = PAUSE_CHAPTER_SECONDS,
+    pause_think: float = THINK_PAUSE_SECONDS,
 ) -> Timeline:
     """Calcule cues, chapitres et ordre de concaténation (silences inclus)."""
     timeline = Timeline()
@@ -91,6 +94,9 @@ def build_timeline(
             timeline.items.append(("wav", path))
             clock += duration_of(path)
         timeline.cues.append(Cue(start, clock, turn.speaker, turn.text))
+        if turn.think_pause and index < len(turns) - 1:
+            timeline.items.append(("silence", pause_think))
+            clock += pause_think
 
     if open_chapter is not None:
         timeline.chapters.append(Chapter(open_chapter[1], clock, open_chapter[0]))

@@ -359,6 +359,15 @@ class CourseGenerationRequest(BaseModel):
     )
 
 
+class Flashcard(BaseModel):
+    """Carte de révision dérivée d'une question « Vérifie » (recto/verso)."""
+
+    card_id: str
+    front: str
+    back: str
+    section_ref: str | None = None
+
+
 class CourseGenerationResponse(BaseModel):
     mode: Literal["file_only", "file_question", "question_only"]
     format: Literal["full_course", "focused_answer"]
@@ -379,6 +388,9 @@ class CourseGenerationResponse(BaseModel):
     summary: str
     next_steps: list[str] = Field(default_factory=list)
     videos: list[CourseVideo] = Field(default_factory=list, description="Vidéos YouTube vérifiées expliquant le cours.")
+    flashcards: list[Flashcard] = Field(
+        default_factory=list, description="Flashcards dérivées des questions « Vérifie » (répétition espacée)."
+    )
 
     # Renseignés par les routes après persistance (jamais stockés dans `gemini_response`).
     session_id: UUID | None = Field(None, description="Id de la session persistée (None si la persistance a échoué).")
@@ -418,6 +430,9 @@ class ApiPlannedSection(BaseModel):
         default_factory=list, max_length=_PLAN_SUBTOPICS_MAX_ITEMS
     )
     order: int = Field(..., ge=1)
+    mastery: Literal["known"] | None = Field(
+        None, description="« known » : l'apprenant maîtrise déjà cette section (pré-test réussi) → version condensée."
+    )
 
     @field_validator("title", "objective")
     @classmethod
@@ -438,12 +453,18 @@ class CoursePlanMeta(BaseModel):
     language: str = "fr"
 
 
+class ApiPretestItem(BaseModel):
+    section_title: str
+    question: QuizQuestion
+
+
 class CoursePlanResponse(BaseModel):
     plan_id: UUID
     expires_at: str
     mode: Literal["file_question", "question_only"]
     meta: CoursePlanMeta
     sections: list[ApiPlannedSection]
+    pretest: list[ApiPretestItem] = Field(default_factory=list, description="Pré-test diagnostique (1 question par section).")
     coverage_notes: str = ""
 
 

@@ -60,6 +60,7 @@ def _development_text(section: CourseSection | CourseAnswer) -> str:
             part for part in (_clean(example.statement), steps, _clean(example.result)) if part
         )
     return _join(
+        ("Défi", getattr(section, "challenge", "") or ""),
         ("Réponse", getattr(section, "summary", "") or ""),
         ("Quoi", section.quoi or ""),
         ("Pourquoi", section.pourquoi or ""),

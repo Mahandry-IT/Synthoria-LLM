@@ -367,6 +367,15 @@ class PlannedSection(BaseModel):
     order: int = Field(description="Position 1-based dans le cours, respectant l'ordre de dépendance logique.")
 
 
+class PretestItem(BaseModel):
+    """Question diagnostique posée avant le cours sur une section de développement."""
+
+    section_title: str = Field(description="Exact title of the DEVELOPMENT section this question checks.")
+    question: QuizQuestion = Field(
+        description="One question of difficulty normale testing prior knowledge of that section's topic."
+    )
+
+
 class CoursePlanSchema(BaseModel):
     """Sortie structurée Gemini de l'étape de planification (structure du cours, sans contenu rédigé)."""
 
@@ -378,6 +387,13 @@ class CoursePlanSchema(BaseModel):
             "résumé → suite). Aucun plafond de sections : la couverture "
             "exhaustive du sujet prime."
         )
+    )
+    pretest: list[PretestItem] = Field(
+        default_factory=list,
+        description=(
+            "Diagnostic pre-test: exactly ONE question per `development` section (same titles as in "
+            "planned_sections). Lets the learner skip what they already master."
+        ),
     )
     coverage_notes: str = Field(
         default="",
