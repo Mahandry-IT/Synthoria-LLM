@@ -59,6 +59,7 @@ from app.services.course_generator import (
 )
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
+from app.services.visual_validation import visual_issues
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,13 @@ def _incomplete_section(planned: ApiPlannedSection) -> Section:
     return Section(type=SectionType.DEVELOPMENT, title=planned.title, subsections=subsections)
 
 
+def _is_incomplete(section: Section) -> bool:
+    """Section de repli (génération en échec) : inutile de la régénérer pour son aspect visuel."""
+    return any(
+        b.text == _INCOMPLETE_NOTICE for sub in section.subsections for b in sub.blocks
+    )
+
+
 def _align_batch_sections(returned: list[Section], planned: list[ApiPlannedSection]) -> list[Section]:
     """Force la correspondance exacte avec le plan : même nombre, mêmes titres, même ordre.
 
@@ -306,10 +314,72 @@ async def _generate_batch(
         response_schema=SectionsBatchSchema,
     )
     aligned = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, batch)
-    return await _fill_subtopic_gaps(
+    filled = await _fill_subtopic_gaps(
         aligned, batch, question=question, mode=mode, context_block=context_block,
         outline=outline, gemini_client=gemini_client,
     )
+    return await _enforce_visual_first(
+        filled, batch, question=question, mode=mode, context_block=context_block,
+        outline=outline, gemini_client=gemini_client,
+    )
+
+
+async def _enforce_visual_first(
+    sections: list[Section],
+    batch: list[ApiPlannedSection],
+    *,
+    question: str,
+    mode: str,
+    context_block: str,
+    outline: str,
+    gemini_client: GeminiClient,
+) -> list[Section]:
+    """Régénère UNE fois les seules sections peu visuelles du lot (jamais le cours entier).
+
+    Le remplaçant n'est retenu que s'il a strictement moins de problèmes ; en cas d'échec,
+    la section d'origine est conservée.
+    """
+    flagged = {
+        i: issues
+        for i, s in enumerate(sections)
+        if not _is_incomplete(s) and (issues := visual_issues(s))
+    }
+    if not flagged:
+        return sections
+
+    logger.info(
+        "course_section_not_visual",
+        extra={"sections": {batch[i].title: issues for i, issues in flagged.items()}},
+    )
+    targets = [batch[i] for i in flagged]
+    requirements = "\n".join(f"- « {batch[i].title} » : {' ; '.join(issues)}" for i, issues in flagged.items())
+    prompt = (
+        f'mode="{mode}"\n'
+        f"Question de l'utilisateur : {question}\n\n"
+        f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
+        f"--- Plan complet validé (ne développe PAS les sections hors lot) ---\n{outline}\n\n"
+        f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True)}\n\n"
+        "Une première version de ces sections était trop textuelle :\n"
+        f"{requirements}\n\n"
+        f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre, avec au moins un "
+        "bloc visuel (TABLE, LIST, DIAGRAM, CHART ou FORMULA) par section et des blocs TEXT de 3 phrases maximum."
+    )
+    try:
+        structured = await gemini_client.format_structured(
+            raw_answer=prompt,
+            system_instruction=_get_teacher_instructions(),
+            response_schema=SectionsBatchSchema,
+        )
+        replacements = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, targets)
+    except (GeminiServiceError, ValidationError) as exc:
+        logger.warning("course_section_visual_regen_failed", extra={"error": str(exc)})
+        return sections
+
+    result = list(sections)
+    for (index, issues), new in zip(flagged.items(), replacements):
+        if _has_content(new) and len(visual_issues(new)) < len(issues):
+            result[index] = new
+    return result
 
 
 def _norm(text: str) -> str:

@@ -4,7 +4,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.api.schemas import CourseGenerationResponse, CourseMeta, CourseSource, CourseTable, CourseVideo
+from pydantic import ValidationError
+
+from app.api.schemas import (
+    CHART_LABELS_MAX,
+    CHART_SERIES_MAX,
+    ApiContentBlock,
+    CourseGenerationResponse,
+    CourseMeta,
+    CourseSource,
+    CourseSubsection,
+    CourseTable,
+    CourseVideo,
+)
 from app.core.config import Settings, get_settings
 from app.core.exceptions import (
     GeminiInvalidResponseError,
@@ -196,6 +208,44 @@ def _block_to_text(block: Any) -> str:
     return ""
 
 
+def _map_block(block: Any) -> ApiContentBlock | None:
+    """ContentBlock Gemini → bloc d'API. None si le bloc est vide ou dépasse les limites de rendu."""
+    data = block.model_dump(mode="json", exclude_none=True)
+    data["type"] = block.type.value
+    if block.formula:
+        data["formula"] = {"latex": block.formula.latex, "description": block.formula.description}
+    if block.worked_example:
+        data["worked_example"] = block.worked_example.model_dump(mode="json")
+    if block.image_caption is not None:
+        data["image_caption"] = block.image_caption
+    data.pop("image_reference", None)
+    if block.chart:
+        # Séries tronquées à la longueur des libellés : un décalage rendrait le graphique faux.
+        n = min(len(block.chart.labels), CHART_LABELS_MAX)
+        data["chart"]["labels"] = block.chart.labels[:n]
+        data["chart"]["series"] = [
+            {"name": s.name, "values": s.values[:n]} for s in block.chart.series[:CHART_SERIES_MAX]
+        ]
+    try:
+        return ApiContentBlock.model_validate(data)
+    except ValidationError:
+        logger.warning("course_block_dropped", extra={"type": block.type.value})
+        return None
+
+
+def _map_blocks(blocks: list[Any]) -> list[ApiContentBlock]:
+    return [mapped for b in blocks if (mapped := _map_block(b)) is not None]
+
+
+def _map_subsections(section: Section) -> list[CourseSubsection]:
+    """Sous-sections d'API : blocs directs (titre vide) puis chaque sous-section, ordre conservé."""
+    result: list[CourseSubsection] = []
+    if section.blocks:
+        result.append(CourseSubsection(title="", blocks=_map_blocks(section.blocks)))
+    result.extend(CourseSubsection(title=sub.title, blocks=_map_blocks(sub.blocks)) for sub in section.subsections)
+    return [s for s in result if s.blocks]
+
+
 def _text_of(blocks: list[Any]) -> str:
     """Texte aplati des blocs, tableaux exclus (exposés à part sous forme structurée)."""
     return " ".join(t for t in (_block_to_text(b) for b in blocks if not b.table) if t)
@@ -287,7 +337,8 @@ def _map_sections_to_course_sections(
 
         tables = _tables_of(_all_blocks(section))
 
-        if quoi_text or pourquoi_text or comment_text or tables:
+        subsections = _map_subsections(section)
+        if quoi_text or pourquoi_text or comment_text or tables or subsections:
             api_sections.append(CourseSection(
                 id=str(start_index + i),
                 title=section.title,
@@ -300,6 +351,7 @@ def _map_sections_to_course_sections(
                     result=worked_ex.result if worked_ex else "",
                 ),
                 tables=tables,
+                subsections=subsections,
             ))
 
     return api_sections
