@@ -508,8 +508,8 @@ async def test_more_sections_are_development_new_and_ordered_after_plan(gemini_c
     assert [s.title for s in created] == ["Optimisation avancée", "Applications industrielles"]
     assert {s.type for s in created} == {"development"}
     assert [s.order for s in created] == [len(current) + 1, len(current) + 2]
-    assert gemini_client.format_structured.call_args.kwargs["response_schema"] is MoreSectionsSchema
-    assert "Suite" in gemini_client.format_structured.call_args.kwargs["raw_answer"]
+    assert gemini_client.format_structured.call_args_list[0].kwargs["response_schema"] is MoreSectionsSchema
+    assert "Suite" in gemini_client.format_structured.call_args_list[0].kwargs["raw_answer"]
 
 
 @pytest.mark.asyncio
@@ -573,24 +573,66 @@ async def test_more_sections_next_steps_none_without_existing_section(gemini_cli
 
 
 @pytest.mark.asyncio
-async def test_more_sections_next_steps_none_when_model_omits_it(gemini_client):
-    gemini_client.format_structured.return_value = {"planned_sections": [_planned(4, "development", "Nouveau")]}
+async def test_more_sections_retries_when_model_repeats_same_leads(gemini_client):
+    """Pistes identiques (accents/casse/ponctuation ignorés) → relance ciblée, jamais l'ancienne section."""
+    gemini_client.format_structured.side_effect = [
+        {
+            "planned_sections": [_planned(4, "development", "Nouveau")],
+            "next_steps": _planned(9, "next_steps", "Suite", ["PISTE  a.", "Piste B !"]),
+        },
+        {"next_steps": _planned(9, "next_steps", "Suite", ["Piste inédite 1", "Piste inédite 2"])},
+    ]
 
     result = await generate_more_sections(_plan_row(), _plan_with_next_steps(), gemini_client)
 
-    assert len(result.sections) == 1 and result.next_steps is None
+    assert gemini_client.format_structured.await_count == 2
+    assert result.next_steps is not None
+    assert result.next_steps.subtopics == ["Piste inédite 1", "Piste inédite 2"]
+    assert result.next_steps.title == "Mes pistes perso" and result.next_steps.order == 3
 
 
 @pytest.mark.asyncio
-async def test_more_sections_next_steps_none_when_all_leads_already_covered(gemini_client):
-    gemini_client.format_structured.return_value = {
-        "planned_sections": [_planned(4, "development", "Nouveau")],
-        "next_steps": _planned(9, "next_steps", "Suite", ["Piste A", "Nouveau", "Principe"]),
-    }
+async def test_more_sections_retry_then_fallback_drops_developed_leads(gemini_client):
+    current = _plan_with_next_steps()
+    current[2] = current[2].model_copy(update={"subtopics": ["Nouveau", "Piste B"]})
+    same = {"next_steps": _planned(9, "next_steps", "Suite", ["Nouveau", "Piste B"])}
+    gemini_client.format_structured.side_effect = [
+        {"planned_sections": [_planned(4, "development", "Nouveau")], **same},
+        same,
+    ]
+
+    result = await generate_more_sections(_plan_row(), current, gemini_client)
+
+    assert result.next_steps is not None
+    assert result.next_steps.subtopics == ["Piste B"]   # « Nouveau » vient d'être développée
+
+
+@pytest.mark.asyncio
+async def test_more_sections_next_steps_missing_falls_back_after_retry_failure(gemini_client):
+    gemini_client.format_structured.side_effect = [
+        {"planned_sections": [_planned(4, "development", "Nouveau")]},   # next_steps absent
+        GeminiInvalidResponseError("x"),
+    ]
 
     result = await generate_more_sections(_plan_row(), _plan_with_next_steps(), gemini_client)
 
-    assert result.next_steps is None
+    assert len(result.sections) == 1
+    assert result.next_steps is not None and result.next_steps.type == "next_steps"
+
+
+@pytest.mark.asyncio
+async def test_more_sections_all_leads_covered_uses_retry(gemini_client):
+    gemini_client.format_structured.side_effect = [
+        {
+            "planned_sections": [_planned(4, "development", "Nouveau")],
+            "next_steps": _planned(9, "next_steps", "Suite", ["Piste A", "Nouveau", "Principe"]),
+        },
+        {"next_steps": _planned(9, "next_steps", "Suite", ["Autre piste"])},
+    ]
+
+    result = await generate_more_sections(_plan_row(), _plan_with_next_steps(), gemini_client)
+
+    assert result.next_steps is not None and result.next_steps.subtopics == ["Autre piste"]
 
 
 @pytest.mark.asyncio

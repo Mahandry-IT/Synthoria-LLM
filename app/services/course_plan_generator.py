@@ -10,6 +10,8 @@ Réutilise les helpers de `course_generator` (retrieval, mapping, quiz).
 """
 
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -33,6 +35,7 @@ from app.schemas.course_generation import (
     CourseGenerationSchema,
     CoursePlanSchema,
     MoreSectionsSchema,
+    NextStepsSchema,
     PlannedSection,
     Section,
     SectionsBatchSchema,
@@ -309,7 +312,10 @@ async def _generate_batch(
 
 
 def _norm(text: str) -> str:
-    return " ".join(text.casefold().split())
+    """Forme comparable : sans accents, casse ni ponctuation."""
+    stripped = unicodedata.normalize("NFKD", text.casefold())
+    stripped = "".join(c for c in stripped if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^\w\s]", " ", stripped).split())
 
 
 def _missing_subtopics(section: Section, planned: ApiPlannedSection) -> list[str]:
@@ -689,32 +695,37 @@ async def refine_planned_section(
     return result
 
 
+class _LenientMoreSections(MoreSectionsSchema):
+    """Exigé par le schéma Gemini, mais son absence n'invalide pas les sections créées (relance ensuite)."""
+
+    next_steps: PlannedSection | None = None
+
+
 @dataclass(frozen=True)
 class MoreSectionsResult:
     sections: list[ApiPlannedSection]
     next_steps: ApiPlannedSection | None = None
 
 
-def _refreshed_next_steps(
+def _is_covered(topic: str, covered: set[str]) -> bool:
+    key = _norm(topic)
+    return not key or any(key == c or key in c or c in key for c in covered if c)
+
+
+def _fresh_next_steps(
     candidate: PlannedSection | None,
+    existing: ApiPlannedSection,
     current_sections: list[ApiPlannedSection],
     created: list[ApiPlannedSection],
 ) -> ApiPlannedSection | None:
-    """« Pour aller plus loin » actualisée : nouvelles pistes uniquement, titre et position conservés.
-
-    None si le plan n'a pas de section next_steps, si le modèle n'en a pas proposé, ou si toutes ses
-    pistes sont déjà couvertes (l'ancienne section reste alors inchangée côté client).
-    """
-    existing = next((s for s in current_sections if s.type == "next_steps"), None)
-    if existing is None or candidate is None:
+    """Section « Pour aller plus loin » du modèle privée des pistes déjà couvertes ; None si aucune piste inédite."""
+    if candidate is None:
         return None
-
-    covered = {s.title.strip().casefold() for s in [*current_sections, *created]}
-    covered |= {topic.strip().casefold() for topic in existing.subtopics}
+    covered = {_norm(s.title) for s in [*current_sections, *created]}
+    covered |= {_norm(topic) for topic in existing.subtopics}
     refreshed = _to_api_section(candidate, type_="next_steps", order=existing.order, fallback_title=existing.title)
-    fresh = [topic for topic in refreshed.subtopics if topic.strip().casefold() not in covered]
+    fresh = [topic for topic in refreshed.subtopics if not _is_covered(topic, covered)]
     if not fresh:
-        logger.info("course_plan_next_steps_not_refreshed")
         return None
     return refreshed.model_copy(
         update={
@@ -723,6 +734,62 @@ def _refreshed_next_steps(
             "subtopics": fresh,
         }
     )
+
+
+def _without_developed(existing: ApiPlannedSection, created: list[ApiPlannedSection]) -> ApiPlannedSection:
+    """Dernier recours : l'ancienne section privée des pistes qui viennent de devenir des sections."""
+    developed = {_norm(s.title) for s in created}
+    remaining = [t for t in existing.subtopics if not _is_covered(t, developed)]
+    return existing.model_copy(update={"subtopics": remaining})
+
+
+async def _refreshed_next_steps(
+    candidate: PlannedSection | None,
+    current_sections: list[ApiPlannedSection],
+    created: list[ApiPlannedSection],
+    *,
+    question: str,
+    gemini_client: GeminiClient,
+) -> ApiPlannedSection | None:
+    """« Pour aller plus loin » actualisée : nouvelles pistes uniquement, titre et position conservés.
+
+    None uniquement si le plan n'a pas de section next_steps. Sinon : pistes du modèle, à défaut
+    une relance ciblée, à défaut l'ancienne section privée des pistes développées (jamais inchangée).
+    """
+    existing = next((s for s in current_sections if s.type == "next_steps"), None)
+    if existing is None:
+        return None
+
+    refreshed = _fresh_next_steps(candidate, existing, current_sections, created)
+    if refreshed is None:
+        logger.info("course_plan_next_steps_retry")
+        try:
+            retry = await gemini_client.format_structured(
+                raw_answer=(
+                    f"Question de l'utilisateur : {question}\n\n"
+                    f"Plan courant :\n{_format_sections([*current_sections, *created], detailed=False)}\n\n"
+                    "Propose 3 à 5 pistes « Pour aller plus loin » NOUVELLES uniquement : aucune ne doit reprendre "
+                    "un sujet déjà présent dans ce plan. Retourne le JSON selon le schéma fourni."
+                ),
+                system_instruction=_get_plan_instructions(),
+                response_schema=NextStepsSchema,
+            )
+            refreshed = _fresh_next_steps(
+                NextStepsSchema.model_validate(structured_or_raise(retry)).next_steps,
+                existing, current_sections, created,
+            )
+        except (GeminiServiceError, ValidationError, ValueError):
+            logger.warning("course_plan_next_steps_retry_failed", exc_info=True)
+    if refreshed is None:
+        logger.info("course_plan_next_steps_fallback")
+        refreshed = _without_developed(existing, created)
+    return refreshed
+
+
+def structured_or_raise(value: Any) -> Any:
+    if not isinstance(value, dict):
+        raise ValueError("réponse structurée invalide")
+    return value
 
 
 async def generate_more_sections(
@@ -769,7 +836,7 @@ async def generate_more_sections(
         response_schema=MoreSectionsSchema,
     )
     try:
-        parsed = MoreSectionsSchema.model_validate(structured)
+        parsed = _LenientMoreSections.model_validate(structured)
         generated = parsed.planned_sections
     except ValidationError as exc:
         raise GeminiInvalidResponseError(f"Nouvelles sections invalides: {exc}") from exc
@@ -786,6 +853,7 @@ async def generate_more_sections(
 
     if not created:
         raise GeminiInvalidResponseError("Aucune nouvelle section exploitable n'a été générée")
-    return MoreSectionsResult(
-        sections=created, next_steps=_refreshed_next_steps(parsed.next_steps, current_sections, created)
+    next_steps_section = await _refreshed_next_steps(
+        parsed.next_steps, current_sections, created, question=plan_row.question, gemini_client=gemini_client
     )
+    return MoreSectionsResult(sections=created, next_steps=next_steps_section)
