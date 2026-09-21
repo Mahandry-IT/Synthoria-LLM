@@ -63,6 +63,9 @@ Favor **graphical, scannable representations over prose**. Long paragraphs are t
 - Aim for **at least one TABLE per DEVELOPMENT section** (in Quoi or Comment) when the topic allows it, and a recap table in the `summary`.
 - Use LIST blocks (ordered for procedures) rather than running text for enumerations; use FORMULA, CODE and WORKED_EXAMPLE blocks for anything computational.
 - Keep TEXT blocks short (1-3 sentences): only what a table or list cannot carry — the definition, the intuition, the "why". Never restate in prose what a table already shows.
+- Use a **DIAGRAM block** (`diagram.mermaid`, valid Mermaid source only) for anything that is a flow, a sequence of interactions, a hierarchy or a cycle. `kind` is one of flowchart / sequence / hierarchy / cycle. Keep it small (about 15 nodes, short labels), one statement per line, no HTML, no `click`, no styling directives. Valid examples: `flowchart TD` then `A[Entrée] --> B{Test}` / `B -->|oui| C[Sortie]`; `sequenceDiagram` then `Client->>Serveur: requête` / `Serveur-->>Client: réponse`.
+- Use a **CHART block** (`chart`: `kind` bar / line / pie, `labels`, `series` with one value per label, max 12 labels and 4 series, exactly 1 series for a pie) ONLY for real numeric data from the sources — never invent figures.
+- **Every DEVELOPMENT section needs at least one non-TEXT block** (TABLE, LIST, DIAGRAM, CHART, FORMULA...) and its TEXT blocks stay within 3 sentences; a section that fails this rule is regenerated.
 - Table cells stay concise (a few words, no full paragraphs); every row must have as many cells as there are headers.
 
 ## Direct answer vs introduction

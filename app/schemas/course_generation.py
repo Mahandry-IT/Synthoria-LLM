@@ -46,6 +46,8 @@ class BlockType(str, Enum):
     CALLOUT = "callout"
     IMAGE = "image"
     PITFALL = "pitfall"
+    DIAGRAM = "diagram"
+    CHART = "chart"
 
 
 class CalloutVariant(str, Enum):
@@ -75,6 +77,43 @@ class TableData(BaseModel):
     caption: str = Field(default="", description="Short title of the table (what it compares or summarizes).")
     headers: list[str] = Field(description="Column headers, in order.")
     rows: list[list[str]] = Field(description="Row values, each row matching the headers length.")
+
+
+class DiagramKind(str, Enum):
+    FLOWCHART = "flowchart"
+    SEQUENCE = "sequence"
+    HIERARCHY = "hierarchy"
+    CYCLE = "cycle"
+
+
+class DiagramData(BaseModel):
+    kind: DiagramKind = Field(description="Nature of the diagram: process flow, interaction sequence, hierarchy or cycle.")
+    caption: str = Field(default="", description="Short title of the diagram.")
+    mermaid: str = Field(
+        description=(
+            "Valid Mermaid source ONLY (flowchart TD / sequenceDiagram / ...), max ~15 nodes, short labels, "
+            "no HTML, no click handlers, no styling directives. Example: "
+            "'flowchart TD; A[Entrée] --> B{Test}; B -->|oui| C[Résultat]; B -->|non| A' (one statement per line)."
+        )
+    )
+
+
+class ChartKind(str, Enum):
+    BAR = "bar"
+    LINE = "line"
+    PIE = "pie"
+
+
+class ChartSeries(BaseModel):
+    name: str = Field(description="Series name (legend).")
+    values: list[float] = Field(description="One numeric value per label, same order and same length as `labels`.")
+
+
+class ChartData(BaseModel):
+    kind: ChartKind = Field(description="bar to compare, line for an evolution, pie for shares of a whole.")
+    caption: str = Field(default="", description="Short title of the chart, with the unit.")
+    labels: list[str] = Field(description="Category labels (x axis / slices), max 12.")
+    series: list[ChartSeries] = Field(description="1 to 4 series (exactly 1 for a pie).")
 
 
 class VideoSuggestion(BaseModel):
@@ -141,6 +180,8 @@ class ContentBlock(BaseModel):
     worked_example: WorkedExample | None = Field(default=None, description="Set for WORKED_EXAMPLE.")
     image_caption: str | None = Field(default=None, description="Set for IMAGE.")
     image_reference: str | None = Field(default=None, description="Set for IMAGE — chunk/page reference of the source figure.")
+    diagram: DiagramData | None = Field(default=None, description="Set for DIAGRAM — flows, sequences, hierarchies, cycles.")
+    chart: ChartData | None = Field(default=None, description="Set for CHART — only for real numeric data, never invented figures.")
     pitfall: PitfallData | None = Field(default=None, description="Set for PITFALL — always fill all 3 sub-fields, never leave why_it_happens/how_to_avoid blank.")
 
 

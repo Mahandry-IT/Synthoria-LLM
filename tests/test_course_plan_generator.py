@@ -171,7 +171,13 @@ def _dev_section(title: str) -> dict:
         "title": title,
         "blocks": [],
         "subsections": [
-            {"title": "Quoi", "blocks": [{"type": "text", "text": f"quoi {title}"}]},
+            {
+                "title": "Quoi",
+                "blocks": [
+                    {"type": "text", "text": f"quoi {title}"},
+                    {"type": "table", "table": {"caption": "c", "headers": ["h"], "rows": [["x"]]}},
+                ],
+            },
             {"title": "Pourquoi", "blocks": [{"type": "text", "text": f"pourquoi {title}"}]},
             {"title": "Comment", "blocks": [{"type": "text", "text": f"comment {title}"}]},
         ],

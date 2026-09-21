@@ -137,6 +137,74 @@ class CourseTable(BaseModel):
     rows: list[list[str]]
 
 
+# Limites de rendu : sources non fiables (LLM), on borne pour éviter un rendu bloquant côté client.
+DIAGRAM_SOURCE_MAX = 4000
+CHART_LABELS_MAX = 12
+CHART_SERIES_MAX = 4
+
+
+class ApiDiagram(BaseModel):
+    kind: Literal["flowchart", "sequence", "hierarchy", "cycle"]
+    caption: str = ""
+    mermaid: str = Field(..., min_length=1, max_length=DIAGRAM_SOURCE_MAX)
+
+
+class ApiChartSeries(BaseModel):
+    name: str
+    values: list[float] = Field(..., max_length=CHART_LABELS_MAX)
+
+
+class ApiChart(BaseModel):
+    kind: Literal["bar", "line", "pie"]
+    caption: str = ""
+    labels: list[str] = Field(..., min_length=1, max_length=CHART_LABELS_MAX)
+    series: list[ApiChartSeries] = Field(..., min_length=1, max_length=CHART_SERIES_MAX)
+
+
+class ApiFormula(BaseModel):
+    latex: str
+    description: str | None = None
+
+
+class ApiWorkedExample(BaseModel):
+    statement: str = ""
+    steps: list[str] = Field(default_factory=list)
+    result: str = ""
+
+
+class ApiPitfall(BaseModel):
+    description: str
+    why_it_happens: str = ""
+    how_to_avoid: str = ""
+
+
+class ApiContentBlock(BaseModel):
+    """Bloc de contenu typé (contrat par blocs). Seuls les champs correspondant à `type` sont renseignés."""
+
+    type: Literal[
+        "text", "definition", "list", "table", "formula", "code", "worked_example",
+        "callout", "image", "pitfall", "diagram", "chart",
+    ]
+    text: str | None = None
+    callout_variant: Literal["note", "warning", "tip"] | None = None
+    list_items: list[str] | None = None
+    list_ordered: bool | None = None
+    table: CourseTable | None = None
+    formula: ApiFormula | None = None
+    code_language: str | None = None
+    code: str | None = None
+    worked_example: ApiWorkedExample | None = None
+    image_caption: str | None = None
+    pitfall: ApiPitfall | None = None
+    diagram: ApiDiagram | None = None
+    chart: ApiChart | None = None
+
+
+class CourseSubsection(BaseModel):
+    title: str = ""
+    blocks: list[ApiContentBlock] = Field(default_factory=list)
+
+
 class CourseVideo(BaseModel):
     """Vidéo YouTube vérifiée, affichée en carte au-dessus du podcast."""
     video_id: str
@@ -156,6 +224,13 @@ class CourseSection(BaseModel):
     worked_example: WorkedExample
     key_points: list[str] = Field(default_factory=list)
     tables: list[CourseTable] = Field(default_factory=list, description="Tableaux de la section (hors texte quoi/pourquoi/comment).")
+    subsections: list[CourseSubsection] = Field(
+        default_factory=list,
+        description=(
+            "Contenu par blocs typés (référence). `quoi/pourquoi/comment/worked_example/tables` sont "
+            "dépréciés : conservés pour l'historique et le podcast pendant une version."
+        ),
+    )
 
 
 class CoursePitfall(BaseModel):
