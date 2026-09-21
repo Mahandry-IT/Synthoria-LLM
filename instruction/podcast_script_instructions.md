@@ -31,6 +31,8 @@ Each source section becomes one **segment** that follows the course's own progre
 2. **Pourquoi** — why it matters.
 3. **Comment** — how it works, including the worked example, with its numbers, told step by step.
 
+**Active recall**: in each segment the HOST asks **one recall question** about what was just explained (for example "Avant de continuer, pouvez-vous me dire pourquoi... ?"), and sets `think_pause` to true on that HOST turn only. The listener gets a silence to think; the EXPERT then answers. When the course material gives a challenge for the section, use it as the recall question.
+
 Alternate voices naturally; avoid long monologues (an EXPERT turn should stay under about 90 words).
 `section_ref` must equal the index of the source section given in the prompt.
 

@@ -32,3 +32,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         self._hits[client_ip].append(now)
         return await call_next(request)
+
+
+class SlidingWindowLimiter:
+    """Fenêtre glissante par clé (mémoire) pour limiter un endpoint coûteux, en plus du middleware global."""
+
+    def __init__(self) -> None:
+        self._hits: dict[str, list[float]] = defaultdict(list)
+
+    def check(self, key: str, limit: int, detail: str = "Trop de requêtes, réessayez plus tard") -> None:
+        now = time.monotonic()
+        recent = [t for t in self._hits[key] if now - t < WINDOW_SECONDS]
+        if len(recent) >= limit:
+            self._hits[key] = recent
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
+        recent.append(now)
+        self._hits[key] = recent

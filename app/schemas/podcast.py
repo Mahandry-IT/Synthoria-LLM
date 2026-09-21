@@ -23,6 +23,13 @@ class PodcastTurn(BaseModel):
             "aucun code, aucun Markdown, nombres et unités écrits comme ils se prononcent."
         ),
     )
+    think_pause: bool = Field(
+        default=False,
+        description=(
+            "True uniquement pour la question de rappel posée par HOST : l'audio marque alors un silence "
+            "de réflexion avant la réponse de EXPERT."
+        ),
+    )
 
 
 class PodcastSegment(BaseModel):

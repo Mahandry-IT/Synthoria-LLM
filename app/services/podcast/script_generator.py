@@ -90,9 +90,13 @@ def _merge_same_speaker(turns: list[PodcastTurn]) -> list[PodcastTurn]:
         if not text:
             continue
         if merged and merged[-1].speaker == turn.speaker:
-            merged[-1] = PodcastTurn(speaker=turn.speaker, text=f"{merged[-1].text} {text}")
+            merged[-1] = PodcastTurn(
+                speaker=turn.speaker,
+                text=f"{merged[-1].text} {text}",
+                think_pause=merged[-1].think_pause or turn.think_pause,
+            )
         else:
-            merged.append(PodcastTurn(speaker=turn.speaker, text=text))
+            merged.append(PodcastTurn(speaker=turn.speaker, text=text, think_pause=turn.think_pause))
     return merged
 
 

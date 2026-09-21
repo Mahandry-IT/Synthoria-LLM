@@ -1,4 +1,5 @@
 import logging
+import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ from app.schemas.course_generation import (
     Section,
 )
 from app.services.gemini_client import GeminiClient
+from app.services.leitner import flashcards_from_course
 from app.services.vector_store import NumpyVectorStore
 from app.services.youtube import candidate_video, verify_videos
 
@@ -338,7 +340,7 @@ def _map_sections_to_course_sections(
         tables = _tables_of(_all_blocks(section))
 
         subsections = _map_subsections(section)
-        if quoi_text or pourquoi_text or comment_text or tables or subsections:
+        if quoi_text or pourquoi_text or comment_text or tables or subsections or section.challenge:
             api_sections.append(CourseSection(
                 id=str(start_index + i),
                 title=section.title,
@@ -352,6 +354,10 @@ def _map_sections_to_course_sections(
                 ),
                 tables=tables,
                 subsections=subsections,
+                challenge=section.challenge,
+                faded_example=section.faded_example.model_dump(mode="json") if section.faded_example else None,
+                check_questions=[_map_quiz_question(q) for q in section.check_questions],
+                recall_prompt=section.recall_prompt.model_dump(mode="json") if section.recall_prompt else None,
             ))
 
     return api_sections
@@ -426,6 +432,21 @@ def _intro_text(schema: CourseGenerationSchema) -> str:
     )
 
 
+def _map_quiz_question(q: Any, points: float = 1.0) -> dict[str, Any]:
+    """QuizQuestion Gemini → dict d'API (quiz final et `check_questions` de section)."""
+    return {
+        "question": q.question,
+        "options": q.choices,
+        "correct_option_indices": q.correct_indices,
+        "difficulty": q.difficulty.value,
+        "points": points,
+        "explanation": q.explanation,
+        "explanation_per_choice": q.explanation_per_choice,
+        "section_refs": q.section_refs,
+        "time_limit_seconds": 80 if q.requires_calculation else 45,
+    }
+
+
 def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationResponse:
     """Convertit la réponse Gemini (CourseGenerationSchema) en CourseGenerationResponse API.
 
@@ -483,17 +504,9 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
 
     # Calculer les points du quiz (déterministe, source de vérité côté serveur)
     quiz_points = compute_quiz_points(schema.quiz) if schema.quiz else []
-    quiz_items = []
-    for q, pts in zip(schema.quiz, quiz_points):
-        quiz_items.append({
-            "question": q.question,
-            "options": q.choices,
-            "correct_option_indices": q.correct_indices,
-            "difficulty": q.difficulty.value,
-            "points": pts,
-            "explanation": q.explanation,
-            "time_limit_seconds": 80 if q.requires_calculation else 45,
-        })
+    quiz_items = [_map_quiz_question(q, pts) for q, pts in zip(schema.quiz, quiz_points)]
+
+    flashcards = flashcards_from_course({"sections": [s.model_dump(mode="json") for s in api_sections]})
 
     return CourseGenerationResponse(
         mode=schema.mode.value,
@@ -512,6 +525,7 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
         summary=summary,
         next_steps=next_steps or schema.unconfirmed_points,
         videos=[v for v in (candidate_video(s.url, s.title) for s in schema.video_suggestions) if v],
+        flashcards=flashcards,
     )
 
 
@@ -591,26 +605,23 @@ def _is_quiz_difficulty_error(exc: Exception) -> bool:
 
 
 def _rebalance_quiz_difficulty(structured: dict[str, Any]) -> dict[str, Any]:
-    """Réassigne déterministiquement les labels difficulty du quiz pour respecter
-    exactement la distribution attendue (difficile=round(N/2), normale=round(N/4),
-    facile=N-reste). Tri stable par index pour un comportement prévisible.
+    """Filet déterministe : promeut en « normale » les premières questions faciles du quiz final
+    jusqu'à atteindre la part minimale normale/difficile (`course_quiz_min_hard_share`).
 
-    Cette fonction est le filet de sécurité final : aucune génération ne doit
-    échouer sur ce seul critère.
+    Aucune génération ne doit échouer sur ce seul critère.
     """
     quiz = structured.get("quiz")
     if not quiz or len(quiz) < 2:
         return structured
 
-    n = len(quiz)
-    n_difficile = round(n / 2)
-    n_normale = round(n / 4)
-    n_facile = n - n_difficile - n_normale
-
-    # Tri stable par index d'origine : on garde l'ordre d'arrivée
-    difficulties = ["difficile"] * n_difficile + ["normale"] * n_normale + ["facile"] * n_facile
-    for i, q in enumerate(quiz):
-        q["difficulty"] = difficulties[i]
+    needed = math.ceil(get_settings().course_quiz_min_hard_share * len(quiz))
+    hard = sum(1 for q in quiz if q.get("difficulty") != "facile")
+    for q in quiz:
+        if hard >= needed:
+            break
+        if q.get("difficulty") == "facile":
+            q["difficulty"] = "normale"
+            hard += 1
 
     return structured
 
@@ -667,8 +678,7 @@ async def _validate_and_map_with_retry(
             f"{raw_answer_for_retry}\n\n"
             f"ERREUR DE VALIDATION : {exc}\n"
             f"Corrige UNIQUEMENT le champ 'difficulty' des questions concernées "
-            f"pour respecter la distribution : difficile=round(N/2), "
-            f"normale=round(N/4), facile=N-difficile-normale. "
+            f"pour que la majorité des questions du quiz final soient de difficulté normale ou difficile. "
             f"Ne change ni les questions ni les réponses."
         )
         try:

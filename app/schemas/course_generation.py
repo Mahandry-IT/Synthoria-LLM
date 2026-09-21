@@ -16,6 +16,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.config import get_settings
+
 
 class InteractionMode(str, Enum):
     FILE_QUESTION = "file_question"   # RAG context, no google_search
@@ -189,29 +191,13 @@ class Subsection(BaseModel):
     title: str = Field(
         description=(
             "Subsection heading. Under a DEVELOPMENT section, use exactly "
-            "'Quoi', 'Pourquoi', 'Comment' — all three are mandatory, never "
+            "'Pourquoi', 'Quoi', 'Comment' (in that order) — all three are mandatory, never "
             "omit one — so downstream mapping stays reliable. Other section "
             "types may use free-form titles. Each DEVELOPMENT section covers "
             "one focused sub-topic, not the entire course."
         )
     )
     blocks: list[ContentBlock] = Field(description="Ordered content blocks for this subsection.")
-
-
-class Section(BaseModel):
-    type: SectionType = Field(description="Structural role of the section.")
-    title: str = Field(description="Section heading shown to the learner.")
-    blocks: list[ContentBlock] = Field(default_factory=list, description="Content directly in the section (no subsection needed).")
-    subsections: list[Subsection] = Field(default_factory=list, description="Subsections, e.g. Quoi/Pourquoi/Comment under 'development'.")
-    covered_subtopics: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Only when generating from a validated plan: the planned subtopics this "
-            "section really explains, each copied VERBATIM from the plan. List a "
-            "subtopic only if the text above develops it (definition/mechanism and "
-            "concrete items), never if it is merely mentioned."
-        ),
-    )
 
 
 class QuizDifficulty(str, Enum):
@@ -231,12 +217,25 @@ class QuizQuestion(BaseModel):
     )
     difficulty: QuizDifficulty = Field(
         description=(
-            "Difficulty level of this question. Counts must follow the rule: "
-            "difficile = round(N/2), normale = round(N/4), "
-            "facile = N - difficile - normale."
+            "Difficulty level of this question. Section check questions are facile or normale; the final "
+            "quiz is mostly normale or difficile (see the generation instructions)."
         ),
     )
     explanation: str = Field(description="Why the correct answer(s) is/are correct.")
+    explanation_per_choice: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional: one short sentence per choice, in the same order as `choices`, explaining why that "
+            "choice is right or why it is a tempting but wrong distractor."
+        ),
+    )
+    section_refs: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Final quiz only: 1-based positions (among the DEVELOPMENT sections) of the sections the "
+            "question draws on. Mix several sections in the same question when possible."
+        ),
+    )
     requires_calculation: bool = Field(
         description=(
             "True if answering requires performing a calculation, not just "
@@ -258,6 +257,64 @@ class QuizQuestion(BaseModel):
                     f"(choices a {len(self.choices)} éléments, index 0..{len(self.choices)-1})"
                 )
         return self
+
+
+class FadedExample(BaseModel):
+    """Exemple à trous : le début de la résolution est donné, l'apprenant complète la fin."""
+
+    statement: str = Field(description="Statement of a NEW example, close to the worked example but with other data.")
+    given_steps: list[str] = Field(description="First steps of the solution, shown to the learner.")
+    hidden_steps: list[str] = Field(description="Remaining steps, revealed one by one after the learner tried.")
+    result: str = Field(description="Final result, commented.")
+
+
+class RecallPrompt(BaseModel):
+    """Consigne « explique avec tes mots » posée à la fin de la section."""
+
+    prompt: str = Field(description="Invitation to explain the section in the learner's own words (one question).")
+    expected_key_points: list[str] = Field(
+        description="2-5 key ideas a good explanation contains (used to grade, never shown before the answer)."
+    )
+
+
+class Section(BaseModel):
+    type: SectionType = Field(description="Structural role of the section.")
+    title: str = Field(description="Section heading shown to the learner.")
+    blocks: list[ContentBlock] = Field(default_factory=list, description="Content directly in the section (no subsection needed).")
+    subsections: list[Subsection] = Field(
+        default_factory=list,
+        description="Subsections, e.g. Pourquoi / Quoi / Comment (in that order) under 'development'.",
+    )
+    challenge: str = Field(
+        default="",
+        description=(
+            "DEVELOPMENT only: a question or concrete situation posed BEFORE the explanation (prediction, "
+            "real case) that the learner tries to answer first. Never answered in the challenge itself."
+        ),
+    )
+    faded_example: FadedExample | None = Field(
+        default=None,
+        description="DEVELOPMENT only: a faded example consistent with the worked example in Comment.",
+    )
+    check_questions: list[QuizQuestion] = Field(
+        default_factory=list,
+        description=(
+            "DEVELOPMENT only: 2-3 quick check questions (difficulty facile or normale), each with feedback "
+            "for the wrong answers via `explanation_per_choice`."
+        ),
+    )
+    recall_prompt: RecallPrompt | None = Field(
+        default=None, description="DEVELOPMENT only: the closing 'explain in your own words' prompt."
+    )
+    covered_subtopics: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Only when generating from a validated plan: the planned subtopics this "
+            "section really explains, each copied VERBATIM from the plan. List a "
+            "subtopic only if the text above develops it (definition/mechanism and "
+            "concrete items), never if it is merely mentioned."
+        ),
+    )
 
 
 class CoverageCompletionSchema(BaseModel):
@@ -284,8 +341,9 @@ class SectionsBatchSchema(BaseModel):
         description=(
             "Exactement une section DEVELOPMENT par section planifiée du lot, dans "
             "le même ordre et avec le même titre que dans le plan. Chaque section "
-            "contient les sous-sections Quoi / Pourquoi / Comment (toutes "
-            "obligatoires) et un exemple travaillé complet dans Comment."
+            "contient, dans cet ordre, les sous-sections Pourquoi / Quoi / Comment (toutes "
+            "obligatoires), un exemple travaillé complet dans Comment, un défi (`challenge`), un exemple à trous "
+            "(`faded_example`), 2-3 `check_questions` et un `recall_prompt`."
         )
     )
 
@@ -309,6 +367,15 @@ class PlannedSection(BaseModel):
     order: int = Field(description="Position 1-based dans le cours, respectant l'ordre de dépendance logique.")
 
 
+class PretestItem(BaseModel):
+    """Question diagnostique posée avant le cours sur une section de développement."""
+
+    section_title: str = Field(description="Exact title of the DEVELOPMENT section this question checks.")
+    question: QuizQuestion = Field(
+        description="One question of difficulty normale testing prior knowledge of that section's topic."
+    )
+
+
 class CoursePlanSchema(BaseModel):
     """Sortie structurée Gemini de l'étape de planification (structure du cours, sans contenu rédigé)."""
 
@@ -320,6 +387,13 @@ class CoursePlanSchema(BaseModel):
             "résumé → suite). Aucun plafond de sections : la couverture "
             "exhaustive du sujet prime."
         )
+    )
+    pretest: list[PretestItem] = Field(
+        default_factory=list,
+        description=(
+            "Diagnostic pre-test: exactly ONE question per `development` section (same titles as in "
+            "planned_sections). Lets the learner skip what they already master."
+        ),
     )
     coverage_notes: str = Field(
         default="",
@@ -403,7 +477,7 @@ class CourseGenerationSchema(BaseModel):
         description=(
             "Break the content into MULTIPLE DEVELOPMENT sections — one per "
             "logical topic or sub-concept. Each DEVELOPMENT section must have "
-            "Quoi/Pourquoi/Comment subsections. Example for a course on "
+            "Pourquoi/Quoi/Comment subsections. Example for a course on "
             "regression: Section 'Introduction', Section 'Le modèle', "
             "Section 'Estimateur', Section 'Métriques d'évaluation'. "
             "Optionally add INTRODUCTION, COMMON_PITFALLS, SUMMARY, NEXT_STEPS."
@@ -456,14 +530,19 @@ class CourseGenerationSchema(BaseModel):
 
     @model_validator(mode="after")
     def _check_quiz_difficulty_distribution(self) -> "CourseGenerationSchema":
-        """Vérifie la répartition de difficulté dans le quiz.
-
-        Distribution attendue : ~50% difficile, ~25% normale, ~25% facile.
-        Tolérance : ±1 question par catégorie (arrondi pour N non multiple de 4).
-        Le quiz vide est autorisé (pas de quiz si pas de contenu pertinent).
+        """Le quiz final est majoritairement normale/difficile (les questions faciles vont dans les
+        `check_questions` de section). Part minimale : `course_quiz_min_hard_share`.
         """
         if not self.quiz or len(self.quiz) < 2:
             return self
+        hard = sum(1 for q in self.quiz if q.difficulty is not QuizDifficulty.FACILE)
+        minimum = get_settings().course_quiz_min_hard_share
+        if hard / len(self.quiz) < minimum:
+            raise ValueError(
+                f"Répartition de difficulté incorrecte : {hard} question(s) normale/difficile "
+                f"sur {len(self.quiz)} (attendu ≥ {minimum:.0%})"
+            )
+        return self
         n = len(self.quiz)
         counts = {d: 0 for d in QuizDifficulty}
         for q in self.quiz:

@@ -100,3 +100,19 @@ class PodcastJob(Base):
         Index("idx_podcast_jobs_status_created", "status", "created_at"),
         Index("idx_podcast_jobs_session_params", "course_session_id", "params_hash"),
     )
+
+
+class FlashcardReview(Base):
+    """État de répétition espacée (Leitner) d'une flashcard d'un cours persisté."""
+
+    __tablename__ = "flashcard_reviews"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    card_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    box: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    due_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    last_result: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    __table_args__ = (Index("idx_flashcard_reviews_due_at", due_at),)

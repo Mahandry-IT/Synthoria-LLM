@@ -52,16 +52,19 @@ class SpokenTurn:
     speaker: str
     text: str
     chapter: str | None
+    think_pause: bool = False
 
 
 def build_spoken_turns(script: PodcastScript) -> list[SpokenTurn]:
     """Aplatit le script en répliques ordonnées ; la première réplique de chaque bloc ouvre un chapitre."""
     spoken: list[SpokenTurn] = []
     for index, turn in enumerate(script.intro_turns):
-        spoken.append(SpokenTurn(turn.speaker, turn.text, "Introduction" if index == 0 else None))
+        spoken.append(SpokenTurn(turn.speaker, turn.text, "Introduction" if index == 0 else None, turn.think_pause))
     for segment in script.segments:
         for index, turn in enumerate(segment.turns):
-            spoken.append(SpokenTurn(turn.speaker, turn.text, segment.title if index == 0 else None))
+            spoken.append(
+                SpokenTurn(turn.speaker, turn.text, segment.title if index == 0 else None, turn.think_pause)
+            )
     for index, turn in enumerate(script.outro_turns):
         spoken.append(SpokenTurn(turn.speaker, turn.text, "Conclusion" if index == 0 else None))
     return spoken
@@ -158,7 +161,7 @@ async def run_podcast_job(
             chunks = split_for_tts(normalize_for_tts(turn.text), settings.podcast_tts_max_chars)
             if not chunks:
                 continue
-            kept.append((SpokenTurn(turn.speaker, turn.text, pending_chapter), chunks))
+            kept.append((SpokenTurn(turn.speaker, turn.text, pending_chapter, turn.think_pause), chunks))
             pending_chapter = None
         if not kept:
             raise PermanentJobError("Le script ne contient aucune réplique prononçable")
@@ -183,7 +186,11 @@ async def run_podcast_job(
         timed: list[TimedTurn] = []
         cursor = 0
         for turn, chunks in kept:
-            timed.append(TimedTurn(turn.speaker, turn.text, paths[cursor : cursor + len(chunks)], turn.chapter))
+            timed.append(
+                TimedTurn(
+                    turn.speaker, turn.text, paths[cursor : cursor + len(chunks)], turn.chapter, turn.think_pause
+                )
+            )
             cursor += len(chunks)
         timeline = build_timeline(timed)
         output = directory / AUDIO_FILENAME

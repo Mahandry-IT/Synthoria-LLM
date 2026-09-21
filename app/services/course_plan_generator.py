@@ -201,6 +201,11 @@ def _format_section(section: ApiPlannedSection, *, detailed: bool) -> str:
     line = f"{section.order}. [{section.type}] {section.title}"
     if not detailed:
         return line
+    if section.mastery == "known":
+        line += (
+            "\n   ⚑ Déjà maîtrisée par l'apprenant (pré-test réussi) : version CONDENSÉE — un rappel court, "
+            "sans défi ni exemple à trous ; garde tout de même un bloc visuel et une consigne de reformulation."
+        )
     if section.objective:
         line += f"\n   Objectif : {section.objective}"
     if section.subtopics:

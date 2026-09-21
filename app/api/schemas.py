@@ -215,6 +215,18 @@ class CourseVideo(BaseModel):
     channel: str = ""
 
 
+class ApiFadedExample(BaseModel):
+    statement: str = ""
+    given_steps: list[str] = Field(default_factory=list)
+    hidden_steps: list[str] = Field(default_factory=list)
+    result: str = ""
+
+
+class ApiRecallPrompt(BaseModel):
+    prompt: str
+    expected_key_points: list[str] = Field(default_factory=list)
+
+
 class CourseSection(BaseModel):
     id: str
     title: str
@@ -224,6 +236,12 @@ class CourseSection(BaseModel):
     worked_example: WorkedExample
     key_points: list[str] = Field(default_factory=list)
     tables: list[CourseTable] = Field(default_factory=list, description="Tableaux de la section (hors texte quoi/pourquoi/comment).")
+    challenge: str = Field("", description="Défi posé avant l'explication (cycle pédagogique).")
+    faded_example: "ApiFadedExample | None" = None
+    check_questions: list["QuizQuestion"] = Field(default_factory=list, description="2-3 questions « Vérifie ».")
+    recall_prompt: "ApiRecallPrompt | None" = Field(
+        None, description="Consigne « explique avec tes mots » ; les points attendus servent à l'évaluation côté serveur."
+    )
     subsections: list[CourseSubsection] = Field(
         default_factory=list,
         description=(
@@ -254,6 +272,8 @@ class QuizQuestion(BaseModel):
     difficulty: Literal["facile", "normale", "difficile"] = "normale"
     points: float = Field(default=1.0, ge=0.0, description="Points alloués à cette question (calculé côté serveur, borne sup ~2.0 pour N≥10)")
     explanation: str = ""
+    explanation_per_choice: list[str] = Field(default_factory=list, description="Retour par option (bonne ou distracteur).")
+    section_refs: list[int] = Field(default_factory=list, description="Sections (position 1-based) mobilisées par la question.")
     time_limit_seconds: int = Field(default=45, description="45 par défaut, 80 si la question implique un calcul")
 
     @model_validator(mode="before")
@@ -339,6 +359,15 @@ class CourseGenerationRequest(BaseModel):
     )
 
 
+class Flashcard(BaseModel):
+    """Carte de révision dérivée d'une question « Vérifie » (recto/verso)."""
+
+    card_id: str
+    front: str
+    back: str
+    section_ref: str | None = None
+
+
 class CourseGenerationResponse(BaseModel):
     mode: Literal["file_only", "file_question", "question_only"]
     format: Literal["full_course", "focused_answer"]
@@ -359,6 +388,9 @@ class CourseGenerationResponse(BaseModel):
     summary: str
     next_steps: list[str] = Field(default_factory=list)
     videos: list[CourseVideo] = Field(default_factory=list, description="Vidéos YouTube vérifiées expliquant le cours.")
+    flashcards: list[Flashcard] = Field(
+        default_factory=list, description="Flashcards dérivées des questions « Vérifie » (répétition espacée)."
+    )
 
     # Renseignés par les routes après persistance (jamais stockés dans `gemini_response`).
     session_id: UUID | None = Field(None, description="Id de la session persistée (None si la persistance a échoué).")
@@ -398,6 +430,9 @@ class ApiPlannedSection(BaseModel):
         default_factory=list, max_length=_PLAN_SUBTOPICS_MAX_ITEMS
     )
     order: int = Field(..., ge=1)
+    mastery: Literal["known"] | None = Field(
+        None, description="« known » : l'apprenant maîtrise déjà cette section (pré-test réussi) → version condensée."
+    )
 
     @field_validator("title", "objective")
     @classmethod
@@ -418,12 +453,18 @@ class CoursePlanMeta(BaseModel):
     language: str = "fr"
 
 
+class ApiPretestItem(BaseModel):
+    section_title: str
+    question: QuizQuestion
+
+
 class CoursePlanResponse(BaseModel):
     plan_id: UUID
     expires_at: str
     mode: Literal["file_question", "question_only"]
     meta: CoursePlanMeta
     sections: list[ApiPlannedSection]
+    pretest: list[ApiPretestItem] = Field(default_factory=list, description="Pré-test diagnostique (1 question par section).")
     coverage_notes: str = ""
 
 
@@ -455,6 +496,24 @@ class MoreSectionsRequest(BaseModel):
 
     plan_id: UUID
     sections: list[ApiPlannedSection] = Field(..., min_length=1, max_length=COURSE_PLAN_MAX_SECTIONS)
+
+
+class RecallRequest(BaseModel):
+    answer: str = Field(..., min_length=1, max_length=1000, description="Reformulation de l'apprenant (≤ 1000 caractères).")
+
+    @field_validator("answer")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("answer ne peut pas être vide")
+        return v
+
+
+class RecallResponse(BaseModel):
+    verdict: Literal["correct", "partiel", "incorrect"]
+    feedback: str
+    missing_points: list[str] = Field(default_factory=list)
 
 
 class MoreSectionsResponse(BaseModel):
