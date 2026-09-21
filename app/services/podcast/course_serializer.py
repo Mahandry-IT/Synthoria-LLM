@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.api.schemas import CourseGenerationResponse, CoursePitfall, CourseSection
+from app.api.schemas import CourseAnswer, CourseGenerationResponse, CoursePitfall, CourseSection
 from app.services.podcast.tts_normalizer import latex_to_words
 
 SectionKind = Literal["intro", "development", "pitfalls", "summary", "next_steps"]
@@ -51,16 +51,19 @@ def _join(*parts: tuple[str, str]) -> str:
     return "\n".join(f"{label} : {_clean(value)}" for label, value in parts if value and value.strip())
 
 
-def _development_text(section: CourseSection) -> str:
+def _development_text(section: CourseSection | CourseAnswer) -> str:
     example = section.worked_example
-    steps = " ".join(f"Étape {step.id} : {_clean(step.content)}" for step in example.steps)
-    example_text = " ".join(
-        part for part in (_clean(example.statement), steps, _clean(example.result)) if part
-    )
+    example_text = ""
+    if example is not None:
+        steps = " ".join(f"Étape {step.id} : {_clean(step.content)}" for step in example.steps)
+        example_text = " ".join(
+            part for part in (_clean(example.statement), steps, _clean(example.result)) if part
+        )
     return _join(
-        ("Quoi", section.quoi),
-        ("Pourquoi", section.pourquoi),
-        ("Comment", section.comment),
+        ("Réponse", getattr(section, "summary", "") or ""),
+        ("Quoi", section.quoi or ""),
+        ("Pourquoi", section.pourquoi or ""),
+        ("Comment", section.comment or ""),
         ("Exemple", example_text),
         ("Points clés", " ; ".join(section.key_points)),
     )
@@ -95,7 +98,7 @@ def serialize_course(course: CourseGenerationResponse | dict[str, Any]) -> list[
     if course.sections:
         drafts.extend((s.title, _development_text(s), "development") for s in course.sections)
     elif course.answer is not None:
-        drafts.append((course.meta.title, _development_text(course.answer), "development"))  # type: ignore[arg-type]
+        drafts.append((course.meta.title, _development_text(course.answer), "development"))
 
     if course.common_pitfalls:
         drafts.append(("Pièges fréquents", _pitfalls_text(course.common_pitfalls), "pitfalls"))

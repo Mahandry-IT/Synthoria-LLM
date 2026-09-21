@@ -65,6 +65,13 @@ Favor **graphical, scannable representations over prose**. Long paragraphs are t
 - Keep TEXT blocks short (1-3 sentences): only what a table or list cannot carry — the definition, the intuition, the "why". Never restate in prose what a table already shows.
 - Table cells stay concise (a few words, no full paragraphs); every row must have as many cells as there are headers.
 
+## Direct answer vs introduction
+
+The `direct_answer` and the `introduction` section have **distinct roles and must never overlap**:
+- `direct_answer` = the **answer to the user's question itself**: `summary` (the answer in 2-3 sentences), `key_points` (3-5 short takeaways) and `blocks` (one recap visual, a TABLE preferably). A reader who stops here must already have the answer.
+- `introduction` = context, prerequisites and overview of the course. It does not answer the question.
+- Never copy, quote or paraphrase the introduction inside `direct_answer` (or the reverse).
+
 ## Videos
 
 Fill `video_suggestions` with 1 to 3 **YouTube videos that explain the course topic well** (prefer French-language educational channels). Give the exact URL and title. Only propose videos you actually found through search or are certain exist — never invent a URL or an identifier; every URL is verified and silently dropped if the video does not exist.

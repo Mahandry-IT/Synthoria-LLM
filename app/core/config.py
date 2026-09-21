@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     podcast_retention_days: int = 30
     podcast_generate_rate_limit_per_minute: int = 5
 
+    # Part maximale (0-1) de la réponse directe recopiée de l'introduction avant relance ciblée.
+    course_answer_intro_similarity_max: float = 0.5
+
 
 @lru_cache
 def get_settings() -> Settings:

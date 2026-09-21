@@ -216,10 +216,16 @@ class CourseMeta(BaseModel):
 
 
 class CourseAnswer(BaseModel):
-    quoi: str
-    pourquoi: str
-    comment: str
-    worked_example: WorkedExample
+    """Réponse directe. `quoi/pourquoi/comment/worked_example` : ancien format (historique JSONB)."""
+
+    summary: str = ""
+    blocks: list[dict[str, Any]] = Field(
+        default_factory=list, description="Blocs de contenu de la réponse (visuel récapitulatif)."
+    )
+    quoi: str | None = None
+    pourquoi: str | None = None
+    comment: str | None = None
+    worked_example: WorkedExample | None = None
     key_points: list[str] = Field(default_factory=list)
 
 
