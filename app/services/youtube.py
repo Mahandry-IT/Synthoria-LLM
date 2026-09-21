@@ -55,6 +55,45 @@ def candidate_video(url: str, title: str = "") -> CourseVideo | None:
     )
 
 
+# Le grounding Gemini cite ses sources via une redirection : seule cette origine est suivie (jamais d'URL libre).
+_GROUNDING_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+
+
+async def resolve_grounding_video_ids(
+    sources: list[dict[str, str]],
+    timeout_seconds: float = 5.0,
+    max_sources: int = 8,
+) -> list[str]:
+    """Identifiants de vidéos YouTube trouvés dans les sources de citation d'une recherche groundée.
+
+    Une source peut pointer directement vers YouTube, ou vers une redirection du grounding Gemini
+    dont la cible (en-tête `Location`, un seul saut) est la vidéo. Les autres sources sont ignorées.
+    Best-effort : aucune exception ne remonte.
+    """
+    ids: list[str] = []
+    pending: list[str] = []
+    for source in sources[:max_sources]:
+        reference = source.get("reference", "")
+        direct = extract_video_id(reference)
+        if direct:
+            ids.append(direct)
+        elif urlparse(reference).hostname == _GROUNDING_REDIRECT_HOST:
+            pending.append(reference)
+
+    async def _target(client: httpx.AsyncClient, url: str) -> str | None:
+        try:
+            response = await client.get(url, follow_redirects=False)
+        except httpx.HTTPError as exc:
+            logger.info("youtube_grounding_redirect_unreachable", extra={"error": str(exc)})
+            return None
+        return extract_video_id(response.headers.get("location", ""))
+
+    if pending:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            ids.extend(v for v in await asyncio.gather(*(_target(client, u) for u in pending)) if v)
+    return list(dict.fromkeys(ids))
+
+
 async def _verify_one(client: httpx.AsyncClient, video: CourseVideo) -> CourseVideo | None:
     try:
         response = await client.get(_OEMBED_URL, params={"url": video.url, "format": "json"})
