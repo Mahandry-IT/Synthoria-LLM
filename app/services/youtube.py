@@ -1,0 +1,92 @@
+"""Vérification des vidéos YouTube suggérées par le modèle.
+
+Le modèle peut inventer une URL : chaque candidat est donc validé via l'endpoint
+oEmbed de YouTube (sans clé d'API). Une vidéo inexistante, privée ou dont
+l'intégration est désactivée renvoie une erreur HTTP et est écartée.
+"""
+
+import asyncio
+import logging
+import re
+from urllib.parse import parse_qs, urlparse
+
+import httpx
+
+from app.api.schemas import CourseVideo
+
+logger = logging.getLogger(__name__)
+
+_OEMBED_URL = "https://www.youtube.com/oembed"
+_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
+
+
+def extract_video_id(url: str) -> str | None:
+    """Extrait l'identifiant d'une URL YouTube (watch, youtu.be, embed, shorts), sinon None."""
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    candidate: str | None = None
+    if host == "youtu.be":
+        candidate = parsed.path.lstrip("/").split("/")[0]
+    elif host in _YOUTUBE_HOSTS:
+        if parsed.path == "/watch":
+            candidate = (parse_qs(parsed.query).get("v") or [None])[0]
+        else:
+            parts = [p for p in parsed.path.split("/") if p]
+            if len(parts) >= 2 and parts[0] in {"embed", "shorts", "live"}:
+                candidate = parts[1]
+    return candidate if candidate and _VIDEO_ID_RE.match(candidate) else None
+
+
+def candidate_video(url: str, title: str = "") -> CourseVideo | None:
+    """Construit une vidéo non vérifiée depuis une URL, ou None si ce n'est pas une vidéo YouTube."""
+    video_id = extract_video_id(url)
+    if video_id is None:
+        return None
+    return CourseVideo(
+        video_id=video_id,
+        url=f"https://www.youtube.com/watch?v={video_id}",
+        embed_url=f"https://www.youtube.com/embed/{video_id}",
+        thumbnail_url=f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        title=title.strip() or "Vidéo YouTube",
+    )
+
+
+async def _verify_one(client: httpx.AsyncClient, video: CourseVideo) -> CourseVideo | None:
+    try:
+        response = await client.get(_OEMBED_URL, params={"url": video.url, "format": "json"})
+    except httpx.HTTPError as exc:
+        logger.warning("youtube_verify_unreachable", extra={"video_id": video.video_id, "error": str(exc)})
+        return None
+    if response.status_code != 200:
+        logger.info("youtube_video_rejected", extra={"video_id": video.video_id, "status": response.status_code})
+        return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    return video.model_copy(update={
+        "title": data.get("title") or video.title,
+        "channel": data.get("author_name") or video.channel,
+    })
+
+
+async def verify_videos(
+    candidates: list[CourseVideo],
+    timeout_seconds: float = 5.0,
+    max_videos: int = 3,
+) -> list[CourseVideo]:
+    """Ne conserve que les vidéos réellement disponibles (titre/chaîne remplacés par ceux de YouTube).
+
+    Best-effort : aucune exception ne remonte. Si YouTube est injoignable,
+    aucune vidéo n'est retournée plutôt qu'une URL non vérifiée.
+    """
+    unique = list({v.video_id: v for v in candidates}.values())
+    if not unique:
+        return []
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        results = await asyncio.gather(*(_verify_one(client, v) for v in unique))
+    return [v for v in results if v is not None][:max_videos]

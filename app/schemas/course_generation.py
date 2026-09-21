@@ -72,8 +72,14 @@ class Source(BaseModel):
 
 
 class TableData(BaseModel):
+    caption: str = Field(default="", description="Short title of the table (what it compares or summarizes).")
     headers: list[str] = Field(description="Column headers, in order.")
     rows: list[list[str]] = Field(description="Row values, each row matching the headers length.")
+
+
+class VideoSuggestion(BaseModel):
+    url: str = Field(description="Full YouTube URL (https://www.youtube.com/watch?v=...) of a video that really exists.")
+    title: str = Field(default="", description="Title of the video.")
 
 
 class FormulaData(BaseModel):
@@ -340,6 +346,15 @@ class CourseGenerationSchema(BaseModel):
         description=(
             "Empty when not relevant to the current mode. Question count is "
             "driven by how much content was actually covered — no fixed number."
+        ),
+    )
+
+    video_suggestions: list[VideoSuggestion] = Field(
+        default_factory=list,
+        description=(
+            "1 to 3 YouTube videos that explain the course topic well (preferably in French, from "
+            "reputable educational channels). ONLY real videos you found through search or are certain "
+            "exist — never invent a URL: each URL is checked and dropped if the video does not exist."
         ),
     )
 

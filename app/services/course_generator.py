@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.api.schemas import CourseGenerationResponse, CourseMeta, CourseSource
+from app.api.schemas import CourseGenerationResponse, CourseMeta, CourseSource, CourseTable, CourseVideo
 from app.core.config import Settings
 from app.core.exceptions import (
     GeminiInvalidResponseError,
@@ -13,6 +13,7 @@ from app.core.exceptions import (
 from app.schemas.course_generation import CoverageCompletionSchema, CourseGenerationSchema, QuizDifficulty, Section
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
+from app.services.youtube import candidate_video, verify_videos
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,19 @@ def _block_to_text(block: Any) -> str:
     return ""
 
 
+def _text_of(blocks: list[Any]) -> str:
+    """Texte aplati des blocs, tableaux exclus (exposés à part sous forme structurée)."""
+    return " ".join(t for t in (_block_to_text(b) for b in blocks if not b.table) if t)
+
+
+def _tables_of(blocks: list[Any]) -> list[CourseTable]:
+    return [
+        CourseTable(caption=b.table.caption, headers=b.table.headers, rows=b.table.rows)
+        for b in blocks
+        if b.table and b.table.headers and b.table.rows
+    ]
+
+
 def _all_blocks(section: Section) -> list[Any]:
     """Blocs directs d'une section puis ceux de ses sous-sections, dans l'ordre."""
     return [*section.blocks, *(b for sub in section.subsections for b in sub.blocks)]
@@ -226,7 +240,7 @@ def _map_sections_to_course_sections(
 
         unmatched: list[str] = []
         for sub in section.subsections:
-            sub_text = " ".join(_block_to_text(b) for b in sub.blocks if _block_to_text(b))
+            sub_text = _text_of(sub.blocks)
             title_lower = sub.title.lower()
             if "pourquoi" in title_lower:
                 pourquoi_text = sub_text
@@ -259,13 +273,15 @@ def _map_sections_to_course_sections(
 
         # Si pas de sous-sections, extraire depuis les blocks directs
         if not section.subsections and section.blocks:
-            direct_text = " ".join(_block_to_text(b) for b in section.blocks if _block_to_text(b))
+            direct_text = _text_of(section.blocks)
             if section.type.value == "introduction":
                 quoi_text = direct_text
             else:
                 comment_text = direct_text
 
-        if quoi_text or pourquoi_text or comment_text:
+        tables = _tables_of(_all_blocks(section))
+
+        if quoi_text or pourquoi_text or comment_text or tables:
             api_sections.append(CourseSection(
                 id=str(start_index + i),
                 title=section.title,
@@ -277,6 +293,7 @@ def _map_sections_to_course_sections(
                     steps=worked_ex.steps if worked_ex else [],
                     result=worked_ex.result if worked_ex else "",
                 ),
+                tables=tables,
             ))
 
     return api_sections
@@ -375,7 +392,56 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
         quiz=quiz_items or None,
         summary=summary,
         next_steps=next_steps or schema.unconfirmed_points,
+        videos=[v for v in (candidate_video(s.url, s.title) for s in schema.video_suggestions) if v],
     )
+
+
+_YOUTUBE_URL_RE = re.compile(
+    r"https?://(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|embed/|shorts/)|youtu\.be/)[A-Za-z0-9_-]{11}"
+)
+
+
+async def _search_videos(topic: str, gemini_client: GeminiClient) -> list[CourseVideo]:
+    """Recherche web (grounding) de vidéos YouTube sur le sujet ; URL extraites du texte, non vérifiées."""
+    raw, _ = await gemini_client.search_grounded(
+        prompt=(
+            f"Trouve 3 vidéos YouTube pédagogiques, de préférence en français, qui expliquent bien : {topic}. "
+            "Donne pour chacune son titre et son URL complète (https://www.youtube.com/watch?v=...). "
+            "Ne cite que des vidéos réellement trouvées."
+        ),
+        system_instruction="Tu es un assistant de recherche de ressources pédagogiques.",
+    )
+    urls = list(dict.fromkeys(_YOUTUBE_URL_RE.findall(raw)))
+    return [v for v in (candidate_video(u) for u in urls) if v]
+
+
+async def attach_verified_videos(
+    response: CourseGenerationResponse, settings: Settings, gemini_client: GeminiClient | None = None,
+) -> CourseGenerationResponse:
+    """Remplace les vidéos candidates du modèle par celles réellement disponibles sur YouTube.
+
+    Le modèle invente souvent des identifiants : chaque candidat est vérifié (oEmbed). Si aucun
+    ne passe, une recherche web dédiée est tentée (un seul appel). Best-effort : ne lève jamais.
+    """
+    if not settings.course_videos_enabled:
+        return response.model_copy(update={"videos": []})
+
+    async def _verified(candidates: list[CourseVideo]) -> list[CourseVideo]:
+        return await verify_videos(
+            candidates,
+            timeout_seconds=settings.course_videos_verify_timeout_seconds,
+            max_videos=settings.course_videos_max,
+        )
+
+    verified: list[CourseVideo] = []
+    try:
+        verified = await _verified(response.videos)
+        if not verified and gemini_client is not None:
+            topic = f"{response.meta.title} ({response.meta.subject})"
+            verified = await _verified(await _search_videos(topic, gemini_client))
+    except Exception:
+        logger.warning("course_videos_lookup_failed", exc_info=True)
+    return response.model_copy(update={"videos": verified})
 
 
 _MODE_TO_FORMAT: dict[str, str] = {
@@ -595,6 +661,7 @@ async def _complete_missing_coverage(
             existing_section.comment = (
                 (existing_section.comment + "\n\n" + ns.comment).strip()
             )
+            existing_section.tables = [*existing_section.tables, *ns.tables]
             if not existing_section.quoi and ns.quoi:
                 existing_section.quoi = ns.quoi
             if not existing_section.pourquoi and ns.pourquoi:
@@ -848,11 +915,12 @@ async def generate_course_from_question(
         validated = await _validate_and_map_with_retry(
             structured, mode, gemini_client, system_instruction, prompt,
         )
-        return await _apply_coverage_check(
+        completed = await _apply_coverage_check(
             validated, vector_store, filename,
             gemini_client=gemini_client, settings=settings,
             system_instruction=system_instruction,
         )
+        return await attach_verified_videos(completed, settings, gemini_client)
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -884,8 +952,9 @@ async def generate_course_from_question(
     validated = await _validate_and_map_with_retry(
         structured, mode, gemini_client, system_instruction, formatting_prompt,
     )
-    return await _apply_coverage_check(
+    completed = await _apply_coverage_check(
         validated, vector_store, filename,
         gemini_client=gemini_client, settings=settings,
         system_instruction=system_instruction,
     )
+    return await attach_verified_videos(completed, settings, gemini_client)

@@ -51,6 +51,7 @@ from app.services.course_generator import (
     _rebalance_quiz_difficulty,
     _retrieve_chunks,
     _validate_and_map,
+    attach_verified_videos,
 )
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
@@ -415,6 +416,7 @@ async def _generate_wrap_up(
         f"{_format_sections(wanted, detailed=True) or '(aucune section hors développement)'}\n\n"
         "Génère ces sections (mêmes titres, même ordre) ainsi que le quiz couvrant l'ensemble des sections "
         "DEVELOPMENT. N'inclus AUCUNE section de type development. Laisse `sources` vide. "
+        "Propose dans `video_suggestions` 1 à 3 vidéos YouTube réelles qui expliquent bien le sujet. "
         "Retourne le JSON selon le schéma fourni."
     )
     try:
@@ -535,8 +537,9 @@ async def generate_course_from_validated_plan(
         "quiz": [q.model_dump(mode="json") for q in wrap_up.quiz] if wrap_up else [],
         "confidence": wrap_up.confidence.value if wrap_up else "medium",
         "unconfirmed_points": wrap_up.unconfirmed_points if wrap_up else [_WRAP_UP_FAILED_NOTE],
+        "video_suggestions": [v.model_dump(mode="json") for v in wrap_up.video_suggestions] if wrap_up else [],
     }
-    return _validate_and_map(structured, mode)
+    return await attach_verified_videos(_validate_and_map(structured, mode), settings, gemini_client)
 
 
 # ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────

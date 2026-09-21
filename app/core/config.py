@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     course_coverage_min_missing_chars: int = 300
     course_plan_batch_size: int = 4
     course_plan_ttl_minutes: int = 120
+    course_videos_enabled: bool = True
+    course_videos_max: int = 3
+    course_videos_verify_timeout_seconds: float = 5.0
     gemini_use_search_grounding: bool = True
     database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
 

@@ -55,6 +55,20 @@ Do not use placeholder examples ("for instance, X happens") — make them fully 
 - **No parentheses around code**: never wrap a code example in parentheses such as `(ex: ...)`, `(par exemple ...)` or `(...)`, because the closing `)` and `.` end up alone after the code block. Introduce the example with a full sentence ending in a colon, e.g. « Par exemple : » followed by the code, or put the code last in the field with nothing after it.
 - Inline math stays in `$...$`; code stays in backticks — never mix the two.
 
+## Visual-first content
+
+Favor **graphical, scannable representations over prose**. Long paragraphs are the last resort.
+
+- Whenever content can be compared, classified, enumerated or summarized, put it in a **TABLE block** (`table` with a short `caption`, `headers` and `rows`) instead of sentences: definitions side by side, advantages/drawbacks, types and characteristics, steps with inputs/outputs, formulas with their meaning, before/after, etc.
+- Aim for **at least one TABLE per DEVELOPMENT section** (in Quoi or Comment) when the topic allows it, and a recap table in the `summary`.
+- Use LIST blocks (ordered for procedures) rather than running text for enumerations; use FORMULA, CODE and WORKED_EXAMPLE blocks for anything computational.
+- Keep TEXT blocks short (1-3 sentences): only what a table or list cannot carry — the definition, the intuition, the "why". Never restate in prose what a table already shows.
+- Table cells stay concise (a few words, no full paragraphs); every row must have as many cells as there are headers.
+
+## Videos
+
+Fill `video_suggestions` with 1 to 3 **YouTube videos that explain the course topic well** (prefer French-language educational channels). Give the exact URL and title. Only propose videos you actually found through search or are certain exist — never invent a URL or an identifier; every URL is verified and silently dropped if the video does not exist.
+
 ## Output
 
 Your raw answer will be reformatted into a strict JSON schema in a second pass.
