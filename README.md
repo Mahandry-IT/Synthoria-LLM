@@ -122,7 +122,8 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 - **Quiz final** : majorité de questions normale/difficile (`COURSE_QUIZ_MIN_HARD_SHARE`, 0.6), `section_refs` pour les questions mêlant plusieurs sections.
 - **Pré-test** : `POST /courses/plan` renvoie `pretest` (1 question par section) ; une section envoyée à `/courses/generate/from-plan` avec `mastery: "known"` est générée en version condensée.
 - **Flashcards** : `flashcards[]` dérivées des questions « Vérifie ». Migration `005_add_flashcard_reviews` (table `flashcard_reviews`) : `docker compose exec api alembic upgrade head` (la table est aussi créée au démarrage). Intervalles : `REVIEW_INTERVALS_DAYS`.
-- **Podcast actif** : l'hôte pose une question de rappel par segment (`think_pause`) suivie d'un silence de 5 s avant la réponse.
+- **Podcast actif** : chaque segment se termine par une question de rappel posée par l'hôte (`think_pause`), tirée du défi ou des questions « Vérifie » de la section, suivie d'un silence de 5 s puis de la réponse de l'expert. Cette paire finale n'est jamais tronquée par le budget de mots.
+- **Abus** : `/recall` (10/min), `/courses/plan/more-sections` (6/min, `MORE_SECTIONS_RATE_LIMIT_PER_MINUTE`) et `/reviews/...` ont une limite dédiée en plus de la limite globale ; `section_refs` est borné (1-500, 10 max).
 
 ## Variables d'environnement
 

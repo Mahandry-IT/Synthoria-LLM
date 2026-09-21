@@ -273,7 +273,9 @@ class QuizQuestion(BaseModel):
     points: float = Field(default=1.0, ge=0.0, description="Points alloués à cette question (calculé côté serveur, borne sup ~2.0 pour N≥10)")
     explanation: str = ""
     explanation_per_choice: list[str] = Field(default_factory=list, description="Retour par option (bonne ou distracteur).")
-    section_refs: list[int] = Field(default_factory=list, description="Sections (position 1-based) mobilisées par la question.")
+    section_refs: list[Annotated[int, Field(ge=1, le=500)]] = Field(
+        default_factory=list, max_length=10, description="Sections (position 1-based) mobilisées par la question."
+    )
     time_limit_seconds: int = Field(default=45, description="45 par défaut, 80 si la question implique un calcul")
 
     @model_validator(mode="before")

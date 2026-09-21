@@ -100,10 +100,25 @@ def _merge_same_speaker(turns: list[PodcastTurn]) -> list[PodcastTurn]:
     return merged
 
 
+def _final_recall_pair(turns: list[PodcastTurn]) -> list[PodcastTurn] | None:
+    """Dernière question de rappel (HOST, `think_pause`) et la réponse qui la suit, si le segment s'y termine."""
+    for index in range(len(turns) - 1, -1, -1):
+        if turns[index].think_pause:
+            return turns[index:] if index >= 1 and len(turns) - index <= 2 else None
+    return None
+
+
 def enforce_budget(segment: PodcastSegment, budget: int) -> PodcastSegment:
     """Fusionne les répliques consécutives d'un même locuteur puis tronque au-delà de 1,5× le budget."""
     turns = _merge_same_speaker(segment.turns)
     limit = round(budget * 1.5)
+    # La question de rappel finale (avec la réponse de l'EXPERT) n'est jamais tronquée : elle fait
+    # l'intérêt pédagogique du segment ; seul le corps qui la précède est ramené au budget.
+    recall = _final_recall_pair(turns)
+    if recall is not None:
+        head = turns[: len(turns) - len(recall)]
+        limit -= turns_word_count(recall)
+        turns = head
     kept: list[PodcastTurn] = []
     used = 0
     for turn in turns:
@@ -112,7 +127,8 @@ def enforce_budget(segment: PodcastSegment, budget: int) -> PodcastSegment:
             break
         kept.append(turn)
         used += words
-    return segment.model_copy(update={"turns": kept or turns[:1]})
+    kept = kept or turns[:1]
+    return segment.model_copy(update={"turns": [*kept, *(recall or [])]})
 
 
 def _fallback_segment(section: SourceSection, budget: int) -> PodcastSegment:
@@ -203,7 +219,9 @@ def _segments_prompt(
         f"Style : {_STYLE_HINTS.get(style, _STYLE_HINTS['conversational'])}\n\n"
         f"{_course_data(batch, budgets)}\n\n"
         f"Écris exactement {len(batch)} segment(s), un par section ci-dessus et dans le même ordre, "
-        "avec `section_ref` égal à l'index de la section et un nombre de mots proche de `budget_words`."
+        "avec `section_ref` égal à l'index de la section et un nombre de mots proche de `budget_words`. "
+        "Chaque segment se termine par une question de rappel posée à l'auditeur par HOST (`think_pause` à true, "
+        "tirée du défi ou des « Questions de rappel » de la section), puis la réponse de EXPERT."
     )
 
 

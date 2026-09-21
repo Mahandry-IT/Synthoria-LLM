@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     # Évaluation de la reformulation (« explique avec tes mots »)
     recall_answer_max_length: int = 1000
     recall_rate_limit_per_minute: int = 10
+    more_sections_rate_limit_per_minute: int = 6
 
     # Répétition espacée (Leitner) : intervalles en jours par boîte, cours analysés pour « à réviser »
     review_intervals_days: list[int] = [1, 3, 7, 21]

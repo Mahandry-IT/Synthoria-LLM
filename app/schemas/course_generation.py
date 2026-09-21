@@ -14,9 +14,14 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import get_settings
+
+
+# Bornes des références de sections d'une question (sortie LLM non fiable)
+SECTION_REFS_MAX_POSITION = 500
+SECTION_REFS_MAX_ITEMS = 10
 
 
 class InteractionMode(str, Enum):
@@ -243,6 +248,12 @@ class QuizQuestion(BaseModel):
             "don't compute the timer value yourself, just flag this."
         )
     )
+
+    @field_validator("section_refs")
+    @classmethod
+    def _bound_section_refs(cls, refs: list[int]) -> list[int]:
+        """Références de sections plausibles uniquement : bornées, dédupliquées, jamais bloquantes."""
+        return sorted({r for r in refs if 1 <= r <= SECTION_REFS_MAX_POSITION})[:SECTION_REFS_MAX_ITEMS]
 
     @model_validator(mode="after")
     def _check_correct_indices(self) -> "QuizQuestion":

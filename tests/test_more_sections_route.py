@@ -64,3 +64,15 @@ def test_more_sections_invalid_gemini_response_is_502(env):
         routes, "generate_more_sections", AsyncMock(side_effect=GeminiInvalidResponseError("x"))
     )
     assert env.client.post("/courses/plan/more-sections", json=_payload()).status_code == 502
+
+
+def test_more_sections_is_rate_limited(env):
+    env.client.app.dependency_overrides[routes.get_settings] = lambda: SimpleNamespace(
+        more_sections_rate_limit_per_minute=1
+    )
+    result = MoreSectionsResult(sections=[ApiPlannedSection(**_section(3, "development", "Nouveau"))])
+    env.monkeypatch.setattr(routes, "generate_more_sections", AsyncMock(return_value=result))
+
+    codes = [env.client.post("/courses/plan/more-sections", json=_payload()).status_code for _ in range(2)]
+
+    assert codes == [200, 429]
