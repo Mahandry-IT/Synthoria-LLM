@@ -301,13 +301,20 @@ class MoreSectionsSchema(BaseModel):
             "déjà présentes dans le plan, qui développent les pistes « pour aller plus loin »."
         )
     )
-    next_steps: PlannedSection | None = Field(
-        default=None,
+    next_steps: PlannedSection = Field(
         description=(
             "Section « Pour aller plus loin » (type next_steps) mise à jour : 3 à 5 NOUVELLES pistes qui "
             "prolongent le plan APRÈS ces nouvelles sections. Ne reprend aucune piste déjà développée "
             "(celles qui viennent de devenir des sections) ni aucun sujet déjà présent dans le plan."
         ),
+    )
+
+
+class NextStepsSchema(BaseModel):
+    """Sortie structurée Gemini : relance ciblée de la seule section « Pour aller plus loin »."""
+
+    next_steps: PlannedSection = Field(
+        description="Section « Pour aller plus loin » (type next_steps) : 3 à 5 pistes NOUVELLES uniquement."
     )
 
 

@@ -382,8 +382,8 @@ class MoreSectionsResponse(BaseModel):
         None,
         description=(
             "Section « Pour aller plus loin » actualisée avec de nouvelles pistes (mêmes `title` et `order` "
-            "que celle envoyée) : le client doit REMPLACER l'ancienne section par celle-ci. None si le plan "
-            "n'en contenait pas ou si aucune nouvelle piste n'a pu être proposée (l'ancienne est alors inchangée)."
+            "que celle envoyée) : le client doit REMPLACER l'ancienne section par celle-ci. None uniquement si "
+            "le plan n'en contenait pas."
         ),
     )
 
