@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     course_question_max_length: int = 2000
     course_coverage_completion_enabled: bool = True
     course_coverage_min_missing_chars: int = 300
-    course_plan_batch_size: int = 4
+    # Sections plus lourdes (défi, exemple à trous, questions, reformulation) : lots plus petits.
+    course_plan_batch_size: int = 2
     course_plan_ttl_minutes: int = 120
     course_videos_enabled: bool = True
     course_videos_max: int = 3
@@ -64,6 +65,13 @@ class Settings(BaseSettings):
 
     # Part maximale (0-1) de la réponse directe recopiée de l'introduction avant relance ciblée.
     course_answer_intro_similarity_max: float = 0.5
+
+    # Part minimale de questions normale/difficile dans le quiz final (les faciles vont dans les sections).
+    course_quiz_min_hard_share: float = 0.6
+
+    # Évaluation de la reformulation (« explique avec tes mots »)
+    recall_answer_max_length: int = 1000
+    recall_rate_limit_per_minute: int = 10
 
 
 @lru_cache

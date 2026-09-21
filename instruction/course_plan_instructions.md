@@ -26,10 +26,10 @@ Order the sections as follows:
 4. `summary` — key takeaways (one section).
 5. `next_steps` — suggested follow-up topics (one section).
 
-## Number of sections — floor, never a ceiling
+## Number of sections — driven by coverage
 
 - The number of `development` sections is driven by **full coverage of the topic**. Never stop at a target count while a sub-topic is still uncovered.
-- Rough floor: at least 10 `development` sections for any course; simple topics 10-15, complex or broad topics 15-20+. These figures are **minimums, not caps** — if the topic needs more, plan more. Never merge distinct concepts to stay under a number.
+- No minimum and no maximum number of `development` sections: **coverage decides**. Plan exactly what the topic needs, never pad with filler and never merge distinct concepts to stay under a number.
 
 ## Content of each planned section
 

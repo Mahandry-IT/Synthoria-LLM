@@ -33,9 +33,12 @@ from app.api.schemas import (
     PDFIngestMultiResponse,
     PDFIngestResponse,
     PendingPlanItem,
+    RecallRequest,
+    RecallResponse,
     RefineSectionRequest,
 )
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import SlidingWindowLimiter
 from app.core.exceptions import (
     GeminiInvalidResponseError,
     GeminiQuotaExceededError,
@@ -53,6 +56,7 @@ from app.services.course_plan_generator import (
     refine_planned_section,
 )
 from app.services.gemini_client import GeminiClient
+from app.services.recall_evaluator import evaluate_recall
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
 from app.services.podcast.jobs import enqueue_podcast_job
@@ -645,4 +649,56 @@ async def get_course_history(
         filenames=row.filenames,
         mode=row.mode,
         gemini_response=row.gemini_response,
+    )
+
+
+def _limit_recall(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    limiter = getattr(request.app.state, "recall_rate_limiter", None)
+    if limiter is None:
+        limiter = request.app.state.recall_rate_limiter = SlidingWindowLimiter()
+    limiter.check(
+        request.client.host if request.client else "unknown",
+        settings.recall_rate_limit_per_minute,
+        "Trop d'évaluations, réessayez dans une minute",
+    )
+
+
+@router.post(
+    "/courses/{session_id}/sections/{section_id}/recall",
+    response_model=RecallResponse,
+    dependencies=[Depends(_limit_recall)],
+)
+async def evaluate_section_recall(
+    session_id: UUID,
+    section_id: str,
+    body: RecallRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+) -> RecallResponse:
+    """Évalue la reformulation de l'apprenant pour une section d'une session persistée.
+
+    La section (consigne + points attendus) est lue en base, jamais fournie par le client.
+    404 si la session, la section ou sa consigne `recall_prompt` n'existe pas ; 422 si la réponse est
+    vide ou dépasse `recall_answer_max_length` ; 429 au-delà de `recall_rate_limit_per_minute`.
+    """
+    if len(body.answer) > settings.recall_answer_max_length:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Réponse trop longue")
+
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+
+    section = next(
+        (s for s in (row.gemini_response.get("sections") or []) if str(s.get("id")) == section_id), None
+    )
+    if section is None or not section.get("recall_prompt"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Section introuvable")
+
+    with _gemini_http_errors():
+        evaluation = await evaluate_recall(section, body.answer, gemini_client)
+    return RecallResponse(
+        verdict=evaluation.verdict.value, feedback=evaluation.feedback, missing_points=evaluation.missing_points
     )
