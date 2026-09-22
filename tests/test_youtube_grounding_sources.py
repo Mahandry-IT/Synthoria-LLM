@@ -90,7 +90,7 @@ async def test_search_videos_uses_citation_sources_when_text_has_no_url(monkeypa
 async def test_grounding_fallback_end_to_end_resolves_video_from_citations(monkeypatch):
     """Sans clé YOUTUBE_API_KEY (find_course_videos no-op), le repli groundé retrouve une vidéo
     via les citations de la recherche, même quand le texte de la réponse n'en contient aucune."""
-    settings = Settings(gemini_api_key="k", course_videos_enabled=True)
+    settings = Settings(gemini_api_key="k", course_videos_enabled=True, youtube_api_key=None)
     response = _map_schema_to_response(_schema([{
         "type": "development", "title": "A", "blocks": [{"type": "text", "text": "x"}],
     }]))

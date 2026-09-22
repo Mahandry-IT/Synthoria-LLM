@@ -77,7 +77,7 @@ def test_tables_exposed_structured_and_not_flattened():
 @pytest.mark.asyncio
 async def test_attach_videos_falls_back_to_web_search_without_a_youtube_api_key(monkeypatch):
     """Sans clé YOUTUBE_API_KEY, find_course_videos() est un no-op : repli grounding + oEmbed."""
-    settings = Settings(gemini_api_key="k", course_videos_enabled=True)
+    settings = Settings(gemini_api_key="k", course_videos_enabled=True, youtube_api_key=None)
     response = _map_schema_to_response(_schema([{
         "type": "development", "title": "A", "blocks": [{"type": "text", "text": "x"}],
     }]))
