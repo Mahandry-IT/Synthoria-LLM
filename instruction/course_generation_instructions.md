@@ -85,7 +85,7 @@ The `direct_answer` and the `introduction` section have **distinct roles and mus
 
 ## Videos
 
-Fill `video_suggestions` with 1 to 3 **YouTube videos that explain the course topic well** (prefer French-language educational channels). Give the exact URL and title. Only propose videos you actually found through search or are certain exist — never invent a URL or an identifier; every URL is verified and silently dropped if the video does not exist.
+Fill `video_search_queries` with 1 to 2 short **YouTube search queries** (in French) that would surface videos explaining the course topic well — one oriented toward the lecture/explanation itself, one toward exercises or method. NEVER a URL or a video ID: the actual videos are found by a real YouTube search from these queries, never invented or guessed.
 
 ## Output
 

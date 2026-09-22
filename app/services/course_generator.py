@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.schemas import (
     CHART_LABELS_MAX,
@@ -30,10 +31,10 @@ from app.schemas.course_generation import (
     QuizDifficulty,
     Section,
 )
+from app.services.course_videos import _search_videos, attach_verified_videos  # noqa: F401 — rétrocompat (imports historiques)
 from app.services.gemini_client import GeminiClient
 from app.services.leitner import flashcards_from_course
 from app.services.vector_store import NumpyVectorStore
-from app.services.youtube import candidate_video, resolve_grounding_video_ids, verify_videos
 
 logger = logging.getLogger(__name__)
 
@@ -524,62 +525,9 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
         quiz=quiz_items or None,
         summary=summary,
         next_steps=next_steps or schema.unconfirmed_points,
-        videos=[v for v in (candidate_video(s.url, s.title) for s in schema.video_suggestions) if v],
+        videos=[],  # jamais depuis Gemini (V1 vidéos) : renseigné après coup par attach_verified_videos
         flashcards=flashcards,
     )
-
-
-_YOUTUBE_URL_RE = re.compile(
-    r"https?://(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|embed/|shorts/)|youtu\.be/)[A-Za-z0-9_-]{11}"
-)
-
-
-async def _search_videos(topic: str, gemini_client: GeminiClient) -> list[CourseVideo]:
-    """Recherche web (grounding) de vidéos YouTube sur le sujet ; URL extraites du texte, non vérifiées."""
-    raw, web_sources = await gemini_client.search_grounded(
-        prompt=(
-            f"Trouve 3 vidéos YouTube pédagogiques, de préférence en français, qui expliquent bien : {topic}. "
-            "Donne pour chacune son titre et son URL complète (https://www.youtube.com/watch?v=...). "
-            "Ne cite que des vidéos réellement trouvées."
-        ),
-        system_instruction="Tu es un assistant de recherche de ressources pédagogiques.",
-    )
-    urls = list(dict.fromkeys(_YOUTUBE_URL_RE.findall(raw)))
-    # Les liens sont surtout dans les citations du grounding, rarement dans le texte de la réponse.
-    from_sources = await resolve_grounding_video_ids(web_sources)
-    urls += [f"https://www.youtube.com/watch?v={vid}" for vid in from_sources]
-    return [v for v in (candidate_video(u) for u in dict.fromkeys(urls)) if v]
-
-
-async def attach_verified_videos(
-    response: CourseGenerationResponse, settings: Settings, gemini_client: GeminiClient | None = None,
-) -> CourseGenerationResponse:
-    """Remplace les vidéos candidates du modèle par celles réellement disponibles sur YouTube.
-
-    Le modèle invente souvent des identifiants : chaque candidat est vérifié (oEmbed). Si aucun
-    ne passe, une recherche web dédiée est tentée (un seul appel). Best-effort : ne lève jamais.
-    """
-    if not settings.course_videos_enabled:
-        return response.model_copy(update={"videos": []})
-
-    async def _verified(candidates: list[CourseVideo]) -> list[CourseVideo]:
-        return await verify_videos(
-            candidates,
-            timeout_seconds=settings.course_videos_verify_timeout_seconds,
-            max_videos=settings.course_videos_max,
-        )
-
-    verified: list[CourseVideo] = []
-    try:
-        verified = await _verified(response.videos)
-        if not verified and gemini_client is not None:
-            topic = f"{response.meta.title} ({response.meta.subject})"
-            verified = await _verified(await _search_videos(topic, gemini_client))
-        if not verified:
-            logger.warning("course_videos_none_verified", extra={"candidates": len(response.videos)})
-    except Exception:
-        logger.warning("course_videos_lookup_failed", exc_info=True)
-    return response.model_copy(update={"videos": verified})
 
 
 _MODE_TO_FORMAT: dict[str, str] = {
@@ -981,6 +929,7 @@ async def generate_course_from_question(
     top_k: int | None = None,
     filename: str | list[str] | None = None,
     full_document: bool = False,
+    db_session_factory: async_sessionmaker | None = None,
 ) -> CourseGenerationResponse:
     """
     Orchestration RAG + génération de cours structuré.
@@ -1058,7 +1007,10 @@ async def generate_course_from_question(
             gemini_client=gemini_client, settings=settings,
             system_instruction=system_instruction,
         )
-        return await attach_verified_videos(completed, settings, gemini_client)
+        return await attach_verified_videos(
+            completed, settings, gemini_client,
+            search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
+        )
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -1095,4 +1047,7 @@ async def generate_course_from_question(
         gemini_client=gemini_client, settings=settings,
         system_instruction=system_instruction,
     )
-    return await attach_verified_videos(completed, settings, gemini_client)
+    return await attach_verified_videos(
+        completed, settings, gemini_client,
+        search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
+    )

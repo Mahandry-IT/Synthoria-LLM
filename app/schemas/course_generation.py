@@ -123,11 +123,6 @@ class ChartData(BaseModel):
     series: list[ChartSeries] = Field(description="1 to 4 series (exactly 1 for a pie).")
 
 
-class VideoSuggestion(BaseModel):
-    url: str = Field(description="Full YouTube URL (https://www.youtube.com/watch?v=...) of a video that really exists.")
-    title: str = Field(default="", description="Title of the video.")
-
-
 class FormulaData(BaseModel):
     latex: str = Field(description="Formula in LaTeX, exact — never round or simplify silently.")
     description: str | None = Field(default=None, description="Short plain-language reading of the formula.")
@@ -509,12 +504,13 @@ class CourseGenerationSchema(BaseModel):
         ),
     )
 
-    video_suggestions: list[VideoSuggestion] = Field(
+    video_search_queries: list[str] = Field(
         default_factory=list,
+        max_length=2,
         description=(
-            "1 to 3 YouTube videos that explain the course topic well (preferably in French, from "
-            "reputable educational channels). ONLY real videos you found through search or are certain "
-            "exist — never invent a URL: each URL is checked and dropped if the video does not exist."
+            "1 to 2 short YouTube search queries (in French) to find videos that explain the course topic well — "
+            "one oriented 'cours' (lecture/explanation), one oriented 'exercices corrigés' or 'méthode'. "
+            "NEVER a URL or a video ID: real videos are found by an actual YouTube search, never invented."
         ),
     )
 

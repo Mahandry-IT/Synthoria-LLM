@@ -213,6 +213,11 @@ class CourseVideo(BaseModel):
     thumbnail_url: str
     title: str
     channel: str = ""
+    duration_seconds: int | None = Field(None, description="Durée de la vidéo, en secondes (YouTube Data API).")
+    published_at: str | None = Field(None, description="Date de publication ISO 8601 (YouTube Data API).")
+    category: str | None = Field(None, description="Catégorie pédagogique (V2 : classement Gemini).")
+    level: str | None = Field(None, description="Niveau estimé (V2 : classement Gemini).")
+    relevance_reason: str | None = Field(None, description="Pourquoi cette vidéo a été retenue (V2).")
 
 
 class ApiFadedExample(BaseModel):

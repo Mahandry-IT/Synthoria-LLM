@@ -124,6 +124,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 - **Flashcards** : `flashcards[]` dérivées des questions « Vérifie ». Migration `005_add_flashcard_reviews` (table `flashcard_reviews`) : `docker compose exec api alembic upgrade head` (la table est aussi créée au démarrage). Intervalles : `REVIEW_INTERVALS_DAYS`.
 - **Podcast actif** : chaque segment se termine par une question de rappel posée par l'hôte (`think_pause`), tirée du défi ou des questions « Vérifie » de la section, suivie d'un silence de 5 s puis de la réponse de l'expert. Cette paire finale n'est jamais tronquée par le budget de mots.
 - **Abus** : `/recall` (10/min), `/courses/plan/more-sections` (6/min, `MORE_SECTIONS_RATE_LIMIT_PER_MINUTE`) et `/reviews/...` ont une limite dédiée en plus de la limite globale ; `section_refs` est borné (1-500, 10 max).
+- **Vidéos** : `videos[]` vient d'une vraie recherche YouTube (jamais d'ID inventé par Gemini) — voir [Vidéos YouTube](#vidéos-youtube).
 
 ## Variables d'environnement
 
@@ -143,6 +144,7 @@ GEMINI_MODEL_FLASH_LITE=gemini-2.5-flash-lite
 GEMINI_MAX_RETRIES=3
 GEMINI_TIMEOUT_SECONDS=30
 GEMINI_RPM_LIMIT=14
+YOUTUBE_API_KEY=
 COURSE_TOP_K_DEFAULT=6
 COURSE_QUESTION_MAX_LENGTH=2000
 COURSE_PLAN_BATCH_SIZE=2
@@ -159,6 +161,18 @@ DATABASE_URL=postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
 Google limite l'API sur trois axes (ex. `gemini-*-flash-lite` au palier gratuit : 15 requêtes/minute, 250k tokens/minute, 500 requêtes/jour). L'application espace ses appels (`app/services/gemini_rate_limit.py`, fenêtre glissante) pour rester sous `GEMINI_RPM_LIMIT` (14 par défaut) au lieu de heurter un 429 puis retenter — les requêtes en excès attendent leur tour (`gemini_rate_limit_throttled` dans les journaux) plutôt que d'échouer. C'est le seuil RPM qui est généralement atteint en premier : le TPM est large au regard du contexte envoyé par appel.
 
 Cette limite est **par conteneur** : les conteneurs `api` et `worker` (podcast) ont chacun leur fenêtre, sans coordination entre eux. En usage courant ils ne se chevauchent pas assez pour dépasser le vrai quota de la clé API ; en cas d'usage intensif et simultané des deux, baissez `GEMINI_RPM_LIMIT` (ex. 7 pour partager 15 RPM en deux). Le quota journalier (RPD) n'est pas plafonné côté application : au-delà, Gemini renvoie un 429 que l'application retente puis remonte normalement.
+
+### Vidéos YouTube
+
+Gemini ne produit plus d'ID ni d'URL de vidéo (il en invente régulièrement) : il propose seulement `video_search_queries` (1-2 requêtes de recherche courtes), et les vidéos viennent uniquement d'une vraie recherche.
+
+1. **YouTube Data API v3** (`app/services/youtube_data_client.py`), si `YOUTUBE_API_KEY` est configurée : `search.list` puis un seul `videos.list` groupé, filtrés (intégrable, public, pas un direct, durée entre `YOUTUBE_MIN_DURATION_SECONDS` et `YOUTUBE_MAX_DURATION_SECONDS`), mis en cache en base (table `youtube_search_cache`, TTL `YOUTUBE_CACHE_TTL_HOURS`, migration `006_add_youtube_search_cache`) et partagé entre cours proches.
+2. **Repli** (pas de clé, quota épuisé, ou aucun résultat) : recherche groundée Gemini + vérification oEmbed (comportement historique).
+3. Sinon, aucune vidéo n'est jointe au cours.
+
+Un `quotaExceeded` ouvre un disjoncteur en mémoire jusqu'au reset du quota (minuit heure du Pacifique) : la Data API n'est plus appelée jusque-là, chaque cours retombe directement sur le repli. **Coût de quota** : `search.list` = 100 u, `videos.list` = 1 u ; avec 2 requêtes par cours, ~201 u, soit environ 49 cours/jour sans cache sur le quota gratuit (10 000 u/jour).
+
+Créer la clé : [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → nouveau projet (ou existant) → activer **YouTube Data API v3** → créer une clé API → la restreindre à cette seule API et, en production, à l'IP du serveur. La clé est envoyée en en-tête (`X-Goog-Api-Key`), jamais en query string ni journalisée.
 
 ## Développement local (sans Docker)
 

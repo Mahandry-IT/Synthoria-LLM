@@ -5,7 +5,8 @@ import pytest
 
 from app.core.config import Settings
 from app.services import youtube
-from app.services.course_generator import _search_videos, attach_verified_videos, _map_schema_to_response
+from app.services.course_generator import _map_schema_to_response
+from app.services.course_videos import _search_videos, attach_verified_videos
 from app.services.youtube import resolve_grounding_video_ids
 from tests.test_course_visuals_videos import _schema
 
@@ -86,11 +87,13 @@ async def test_search_videos_uses_citation_sources_when_text_has_no_url(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_invented_ids_are_rejected_then_citations_provide_a_verified_video(monkeypatch):
+async def test_grounding_fallback_end_to_end_resolves_video_from_citations(monkeypatch):
+    """Sans clé YOUTUBE_API_KEY (find_course_videos no-op), le repli groundé retrouve une vidéo
+    via les citations de la recherche, même quand le texte de la réponse n'en contient aucune."""
     settings = Settings(gemini_api_key="k", course_videos_enabled=True)
     response = _map_schema_to_response(_schema([{
         "type": "development", "title": "A", "blocks": [{"type": "text", "text": "x"}],
-    }], videos=["https://youtu.be/525c0kWjX7k"]))  # identifiant inventé, 404 chez YouTube
+    }]))
     monkeypatch.setattr(
         youtube.httpx, "AsyncClient", _client_returning({REDIRECT: f"https://www.youtube.com/watch?v={VID}"})
     )
@@ -100,7 +103,7 @@ async def test_invented_ids_are_rejected_then_citations_provide_a_verified_video
     async def fake_verify(candidates, **_):
         return [v for v in candidates if v.video_id == VID]
 
-    monkeypatch.setattr("app.services.course_generator.verify_videos", fake_verify)
+    monkeypatch.setattr("app.services.course_videos.verify_videos", fake_verify)
 
     result = await attach_verified_videos(response, settings, gemini)
 

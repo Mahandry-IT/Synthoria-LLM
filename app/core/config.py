@@ -1,5 +1,7 @@
+from datetime import timedelta
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -82,6 +84,26 @@ class Settings(BaseSettings):
     review_intervals_days: list[int] = [1, 3, 7, 21]
     review_sessions_scan_limit: int = 50
     review_rate_limit_per_minute: int = 60
+
+    # YouTube Data API v3 : recherche réelle de vidéos (remplace les IDs inventés par Gemini).
+    # Sans clé, comportement inchangé (repli sur le grounding Gemini + vérification oEmbed).
+    youtube_api_key: SecretStr | None = None
+    youtube_timeout_seconds: float = 5.0
+    youtube_search_max_results: int = 8
+    youtube_relevance_language: str = "fr"
+    youtube_region_code: str = "FR"
+    youtube_min_duration_seconds: int = 240
+    youtube_max_duration_seconds: int = 2400
+    youtube_max_queries: int = 2
+    youtube_cache_ttl_hours: int = 72
+
+    # V2 : classement / catégorisation pédagogique des candidats (1 appel Flash-Lite de plus par cours).
+    course_videos_ranking_enabled: bool = True
+    youtube_ranking_min_score: int = 40
+
+    @property
+    def youtube_cache_ttl(self) -> timedelta:
+        return timedelta(hours=self.youtube_cache_ttl_hours)
 
 
 @lru_cache

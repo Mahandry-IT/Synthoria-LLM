@@ -360,6 +360,7 @@ async def generate_course(
             top_k=body.top_k,
             filename=body.filename,
             full_document=body.full_document,
+            db_session_factory=request.app.state.db_session_factory,
         )
 
     session_id = await _persist_course_session(
@@ -603,6 +604,7 @@ async def generate_course_from_plan(
             edited_sections=body.sections,
             gemini_client=gemini_client,
             settings=settings,
+            db_session_factory=session_factory,
         )
 
     session_id = await _persist_course_session(
