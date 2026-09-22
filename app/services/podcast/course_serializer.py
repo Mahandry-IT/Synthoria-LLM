@@ -17,6 +17,7 @@ SectionKind = Literal["intro", "development", "pitfalls", "summary", "next_steps
 _FENCED_RE = re.compile(r"```[^\n]*\n?.*?```", re.DOTALL)
 _DISPLAY_FORMULA_RE = re.compile(r"\$\$(.+?)\$\$(?:\s*\(([^)]*)\))?", re.DOTALL)
 _INLINE_MATH_RE = re.compile(r"\$([^$\n]+?)\$")
+_RECALL_QUESTIONS_MAX = 2  # au-delà, le segment audio serait surchargé
 _INLINE_CODE_RE = re.compile(r"`([^`]*)`")
 
 
@@ -67,7 +68,18 @@ def _development_text(section: CourseSection | CourseAnswer) -> str:
         ("Comment", section.comment or ""),
         ("Exemple", example_text),
         ("Points clés", " ; ".join(section.key_points)),
+        ("Questions de rappel", _recall_questions_text(getattr(section, "check_questions", []))),
     )
+
+
+def _recall_questions_text(questions: list[Any]) -> str:
+    """Questions « Vérifie » de la section (avec leur bonne réponse), pour la question de rappel du podcast."""
+    lines = []
+    for q in questions[:_RECALL_QUESTIONS_MAX]:
+        answers = [q.options[i] for i in q.correct_option_indices if 0 <= i < len(q.options)]
+        if answers:
+            lines.append(f"{_clean(q.question)} Réponse : {_clean(' ; '.join(answers))}")
+    return " | ".join(lines)
 
 
 def _pitfalls_text(pitfalls: list[CoursePitfall]) -> str:

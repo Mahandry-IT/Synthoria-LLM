@@ -14,6 +14,7 @@ from app.core.exceptions import (
     GeminiServiceError,
     GeminiUnavailableError,
 )
+from app.services.gemini_rate_limit import GeminiRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,9 @@ class GeminiClient:
         self._client = client or (
             genai.Client(api_key=settings.gemini_api_key) if settings.gemini_api_key else None
         )
+        # Une instance par processus (voir gemini_rate_limit.py) : partagée entre tous les appels
+        # tant que `GeminiClient` reste un singleton applicatif (app.state.gemini_client).
+        self._rate_limiter = GeminiRateLimiter(settings.gemini_rpm_limit)
 
     def _ensure_configured(self) -> None:
         if self._client is None:
@@ -127,6 +131,9 @@ class GeminiClient:
 
         for attempt in range(self._settings.gemini_max_retries):
             try:
+                # Espace les appels (y compris les retries) pour rester sous GEMINI_RPM_LIMIT
+                # plutôt que de laisser Google renvoyer 429 puis retenter après coup.
+                await self._rate_limiter.acquire()
                 return await asyncio.wait_for(
                     asyncio.to_thread(func, *args, **kwargs),
                     timeout=self._settings.gemini_timeout_seconds,

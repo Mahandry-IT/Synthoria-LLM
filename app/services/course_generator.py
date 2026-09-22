@@ -33,7 +33,7 @@ from app.schemas.course_generation import (
 from app.services.gemini_client import GeminiClient
 from app.services.leitner import flashcards_from_course
 from app.services.vector_store import NumpyVectorStore
-from app.services.youtube import candidate_video, verify_videos
+from app.services.youtube import candidate_video, resolve_grounding_video_ids, verify_videos
 
 logger = logging.getLogger(__name__)
 
@@ -536,7 +536,7 @@ _YOUTUBE_URL_RE = re.compile(
 
 async def _search_videos(topic: str, gemini_client: GeminiClient) -> list[CourseVideo]:
     """Recherche web (grounding) de vidéos YouTube sur le sujet ; URL extraites du texte, non vérifiées."""
-    raw, _ = await gemini_client.search_grounded(
+    raw, web_sources = await gemini_client.search_grounded(
         prompt=(
             f"Trouve 3 vidéos YouTube pédagogiques, de préférence en français, qui expliquent bien : {topic}. "
             "Donne pour chacune son titre et son URL complète (https://www.youtube.com/watch?v=...). "
@@ -545,7 +545,10 @@ async def _search_videos(topic: str, gemini_client: GeminiClient) -> list[Course
         system_instruction="Tu es un assistant de recherche de ressources pédagogiques.",
     )
     urls = list(dict.fromkeys(_YOUTUBE_URL_RE.findall(raw)))
-    return [v for v in (candidate_video(u) for u in urls) if v]
+    # Les liens sont surtout dans les citations du grounding, rarement dans le texte de la réponse.
+    from_sources = await resolve_grounding_video_ids(web_sources)
+    urls += [f"https://www.youtube.com/watch?v={vid}" for vid in from_sources]
+    return [v for v in (candidate_video(u) for u in dict.fromkeys(urls)) if v]
 
 
 async def attach_verified_videos(
@@ -572,6 +575,8 @@ async def attach_verified_videos(
         if not verified and gemini_client is not None:
             topic = f"{response.meta.title} ({response.meta.subject})"
             verified = await _verified(await _search_videos(topic, gemini_client))
+        if not verified:
+            logger.warning("course_videos_none_verified", extra={"candidates": len(response.videos)})
     except Exception:
         logger.warning("course_videos_lookup_failed", exc_info=True)
     return response.model_copy(update={"videos": verified})

@@ -484,7 +484,22 @@ async def refine_plan_section(
         )
 
 
-@router.post("/courses/plan/more-sections", response_model=MoreSectionsResponse)
+def _limit_more_sections(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    limiter = getattr(request.app.state, "more_sections_rate_limiter", None)
+    if limiter is None:
+        limiter = request.app.state.more_sections_rate_limiter = SlidingWindowLimiter()
+    limiter.check(
+        request.client.host if request.client else "unknown",
+        settings.more_sections_rate_limit_per_minute,
+        "Trop de demandes de nouvelles sections, réessayez dans une minute",
+    )
+
+
+@router.post(
+    "/courses/plan/more-sections",
+    response_model=MoreSectionsResponse,
+    dependencies=[Depends(_limit_more_sections)],
+)
 async def add_more_plan_sections(
     request: Request,
     body: MoreSectionsRequest,

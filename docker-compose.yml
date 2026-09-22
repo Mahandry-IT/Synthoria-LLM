@@ -6,8 +6,8 @@ services:
     env_file:
     - .env
     dns:
-      - 8.8.8.8
-      - 8.8.4.4
+      - ${DNS_PRIMARY:-8.8.8.8}
+      - ${DNS_SECONDARY:-1.1.1.1}
     environment:
       PYTHONUNBUFFERED: 1
       OLLAMA_BASE_URL: http://ollama:11435

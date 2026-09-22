@@ -122,7 +122,8 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 - **Quiz final** : majorité de questions normale/difficile (`COURSE_QUIZ_MIN_HARD_SHARE`, 0.6), `section_refs` pour les questions mêlant plusieurs sections.
 - **Pré-test** : `POST /courses/plan` renvoie `pretest` (1 question par section) ; une section envoyée à `/courses/generate/from-plan` avec `mastery: "known"` est générée en version condensée.
 - **Flashcards** : `flashcards[]` dérivées des questions « Vérifie ». Migration `005_add_flashcard_reviews` (table `flashcard_reviews`) : `docker compose exec api alembic upgrade head` (la table est aussi créée au démarrage). Intervalles : `REVIEW_INTERVALS_DAYS`.
-- **Podcast actif** : l'hôte pose une question de rappel par segment (`think_pause`) suivie d'un silence de 5 s avant la réponse.
+- **Podcast actif** : chaque segment se termine par une question de rappel posée par l'hôte (`think_pause`), tirée du défi ou des questions « Vérifie » de la section, suivie d'un silence de 5 s puis de la réponse de l'expert. Cette paire finale n'est jamais tronquée par le budget de mots.
+- **Abus** : `/recall` (10/min), `/courses/plan/more-sections` (6/min, `MORE_SECTIONS_RATE_LIMIT_PER_MINUTE`) et `/reviews/...` ont une limite dédiée en plus de la limite globale ; `section_refs` est borné (1-500, 10 max).
 
 ## Variables d'environnement
 
@@ -141,6 +142,7 @@ GEMINI_MODEL_FLASH=gemini-2.5-flash
 GEMINI_MODEL_FLASH_LITE=gemini-2.5-flash-lite
 GEMINI_MAX_RETRIES=3
 GEMINI_TIMEOUT_SECONDS=30
+GEMINI_RPM_LIMIT=14
 COURSE_TOP_K_DEFAULT=6
 COURSE_QUESTION_MAX_LENGTH=2000
 COURSE_PLAN_BATCH_SIZE=2
@@ -151,6 +153,12 @@ DATABASE_URL=postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
 > `DATABASE_URL` pointe vers le conteneur PostgreSQL du compose. Pour un dev local sans Docker, ajustez l'URL (ex. `postgresql+asyncpg://user:pass@localhost:5432/synthoria`).
 
 > `GEMINI_API_KEY` est optionnel. Sans clé, l'extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative.
+
+### Limite de débit Gemini (429 / RESOURCE_EXHAUSTED)
+
+Google limite l'API sur trois axes (ex. `gemini-*-flash-lite` au palier gratuit : 15 requêtes/minute, 250k tokens/minute, 500 requêtes/jour). L'application espace ses appels (`app/services/gemini_rate_limit.py`, fenêtre glissante) pour rester sous `GEMINI_RPM_LIMIT` (14 par défaut) au lieu de heurter un 429 puis retenter — les requêtes en excès attendent leur tour (`gemini_rate_limit_throttled` dans les journaux) plutôt que d'échouer. C'est le seuil RPM qui est généralement atteint en premier : le TPM est large au regard du contexte envoyé par appel.
+
+Cette limite est **par conteneur** : les conteneurs `api` et `worker` (podcast) ont chacun leur fenêtre, sans coordination entre eux. En usage courant ils ne se chevauchent pas assez pour dépasser le vrai quota de la clé API ; en cas d'usage intensif et simultané des deux, baissez `GEMINI_RPM_LIMIT` (ex. 7 pour partager 15 RPM en deux). Le quota journalier (RPD) n'est pas plafonné côté application : au-delà, Gemini renvoie un 429 que l'application retente puis remonte normalement.
 
 ## Développement local (sans Docker)
 

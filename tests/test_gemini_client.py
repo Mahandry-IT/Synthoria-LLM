@@ -171,3 +171,47 @@ async def test_cascade_does_not_fall_back_on_first_model_success():
 
     assert text == "ok flash"
     assert fake_client.models.generate_content.call_count == 1
+
+
+# ─── Limite de débit (RPM) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_every_gemini_call_goes_through_the_rate_limiter():
+    """Chaque appel réseau (initial et retries) réserve un créneau avant de partir."""
+    response = SimpleNamespace(text='{"ok": true}', candidates=[])
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    client = GeminiClient(_settings(), client=fake_client)
+    acquired = 0
+    original = client._rate_limiter.acquire
+
+    async def counting_acquire():
+        nonlocal acquired
+        acquired += 1
+        await original()
+
+    client._rate_limiter.acquire = counting_acquire
+
+    await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+    assert acquired == 1  # un seul appel réseau ici : un seul créneau réservé
+
+
+@pytest.mark.asyncio
+async def test_retries_each_reserve_their_own_slot():
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [Exception("connexion impossible"), SimpleNamespace(text="ok", candidates=[])]
+    client = GeminiClient(_settings(), client=fake_client)  # gemini_max_retries=2
+    acquired = 0
+    original = client._rate_limiter.acquire
+
+    async def counting_acquire():
+        nonlocal acquired
+        acquired += 1
+        await original()
+
+    client._rate_limiter.acquire = counting_acquire
+
+    await client.search_grounded("question", "system")
+
+    assert acquired == 2  # premier essai échoué + retry réussi : deux créneaux
