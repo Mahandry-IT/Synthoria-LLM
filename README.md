@@ -58,6 +58,8 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | GET | `/courses/history?page=1&limit=20` | Historique paginé des sessions de cours (UUID, date, question, fichiers, mode) |
 | GET | `/courses/history/{id}` | Détail d'une session avec la réponse Gemini complète |
 | POST | `/courses/{session_id}/sections/{section_id}/recall` | Évalue la reformulation (« explique avec tes mots ») d'une section : body `{answer}` (≤ 1000 caractères) → `{verdict: correct\|partiel\|incorrect, feedback, missing_points}`. La section est lue en base ; la réponse est traitée comme une donnée. `404` session/section inconnue, `422` réponse vide ou trop longue, `429` (10/min). |
+| POST | `/courses/{session_id}/sections/{section_id}/regenerate` | Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération) → `CourseSection` mis à jour. `404` session/section inconnue, `409` la section n'est pas incomplète, `429` (6/min), `502`/`503` échec Gemini. |
+| PUT | `/courses/{session_id}/sections/{section_id}/note` | Enregistre (ou efface, note vide) la note libre de l'apprenant sur une section (≤ 2000 caractères, jamais générée) → `{note, updated_at}`. `404` session/section inconnue, `422` trop longue, `429` (20/min). |
 | GET | `/reviews/due?limit=20` | Flashcards à réviser aujourd'hui (jamais révisées ou échues), dérivées des questions « Vérifie » des cours récents |
 | POST | `/reviews/{session_id}/{card_id}` | Enregistre `{result: correct\|incorrect}` et planifie la suite (Leitner J+1, J+3, J+7, J+21) → `{box, due_at}`. `404` carte inconnue |
 | POST | `/podcasts/generate/{session_id}` | Met en file la génération d'un podcast à partir d'un cours persisté (`202` + `job_id`). Body optionnel `{style, target_minutes, force}`. `404` session inconnue, `422` cours sans contenu exploitable, `429` trop de demandes, `503` fonctionnalité désactivée. Idempotent : un job non échoué équivalent est renvoyé sauf `force=true`. |
@@ -125,6 +127,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 - **Podcast actif** : chaque segment se termine par une question de rappel posée par l'hôte (`think_pause`), tirée du défi ou des questions « Vérifie » de la section, suivie d'un silence de 5 s puis de la réponse de l'expert. Cette paire finale n'est jamais tronquée par le budget de mots.
 - **Abus** : `/recall` (10/min), `/courses/plan/more-sections` (6/min, `MORE_SECTIONS_RATE_LIMIT_PER_MINUTE`) et `/reviews/...` ont une limite dédiée en plus de la limite globale ; `section_refs` est borné (1-500, 10 max).
 - **Vidéos** : `videos[]` vient d'une vraie recherche YouTube (jamais d'ID inventé par Gemini) — voir [Vidéos YouTube](#vidéos-youtube).
+- **Régénération et notes** : une section `incomplete: true` (échec temporaire à la génération) peut être régénérée seule (`POST .../regenerate`), sans relancer tout le cours ; le contexte (fichiers ou recherche web) est ré-obtenu à partir de la session, jamais renvoyé silencieusement en cas d'échec (contrairement à la génération complète). Une section qui n'est pas incomplète ne peut pas être régénérée — à la place, l'apprenant peut y laisser une note libre (`note`, ≤ 2000 caractères, table séparée `course_section_notes`, jamais générée par le modèle) via `PUT .../note`.
 
 ## Variables d'environnement
 

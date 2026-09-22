@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     review_sessions_scan_limit: int = 50
     review_rate_limit_per_minute: int = 60
 
+    # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
+    course_regenerate_rate_limit_per_minute: int = 6
+    course_note_max_length: int = 2000
+    course_note_rate_limit_per_minute: int = 20
+
     # YouTube Data API v3 : recherche réelle de vidéos (remplace les IDs inventés par Gemini).
     # Sans clé, comportement inchangé (repli sur le grounding Gemini + vérification oEmbed).
     youtube_api_key: SecretStr | None = None

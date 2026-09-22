@@ -133,3 +133,22 @@ class YoutubeSearchCache(Base):
     fetched_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 
     __table_args__ = (Index("idx_youtube_search_cache_fetched_at", fetched_at),)
+
+
+class CourseSectionNote(Base):
+    """Note libre de l'apprenant sur une section d'un cours persisté (pense-bête, idées).
+
+    Distincte de `gemini_response` : jamais écrite par la génération, table séparée pour ne pas
+    mélanger le contenu généré (snapshot du modèle) et l'annotation de l'apprenant.
+    """
+
+    __tablename__ = "course_section_notes"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    section_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )

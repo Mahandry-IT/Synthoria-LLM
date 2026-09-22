@@ -254,6 +254,13 @@ class CourseSection(BaseModel):
             "dépréciés : conservés pour l'historique et le podcast pendant une version."
         ),
     )
+    incomplete: bool = Field(
+        False,
+        description="Génération de cette section échouée (erreur temporaire) : seule une section incomplète peut être régénérée.",
+    )
+    note: str = Field(
+        "", description="Note libre de l'apprenant sur cette section (pense-bête, idées) ; jamais générée par le modèle."
+    )
 
 
 class CoursePitfall(BaseModel):
@@ -521,6 +528,20 @@ class RecallResponse(BaseModel):
     verdict: Literal["correct", "partiel", "incorrect"]
     feedback: str
     missing_points: list[str] = Field(default_factory=list)
+
+
+class SectionNoteRequest(BaseModel):
+    note: str = Field("", max_length=2000, description="Note libre de l'apprenant ; chaîne vide pour l'effacer.")
+
+    @field_validator("note")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+
+class SectionNoteResponse(BaseModel):
+    note: str
+    updated_at: str
 
 
 class MoreSectionsResponse(BaseModel):

@@ -20,6 +20,7 @@ from app.api.schemas import (
     CoursePlanMeta,
     CoursePlanRequest,
     CoursePlanResponse,
+    CourseSection,
     DocumentQueryRequest,
     DocumentQueryResponse,
     FileListResponse,
@@ -37,6 +38,8 @@ from app.api.schemas import (
     RecallRequest,
     RecallResponse,
     RefineSectionRequest,
+    SectionNoteRequest,
+    SectionNoteResponse,
 )
 from app.core.config import Settings, get_settings
 from app.core.rate_limit import SlidingWindowLimiter
@@ -47,9 +50,9 @@ from app.core.exceptions import (
     OllamaModelNotFoundError,
     OllamaUnavailableError,
 )
-from app.repositories import course_plan_repository, course_session_repository
+from app.repositories import course_plan_repository, course_section_note_repository, course_session_repository
 from app.schemas.course_generation import CoursePlanSchema, SectionType
-from app.services.course_generator import _map_quiz_question, generate_course_from_question
+from app.services.course_generator import _map_quiz_question, _map_sections_to_course_sections, generate_course_from_question
 from app.services.course_plan_generator import (
     generate_course_from_validated_plan,
     generate_course_plan,
@@ -58,6 +61,7 @@ from app.services.course_plan_generator import (
 )
 from app.services.gemini_client import GeminiClient
 from app.services.recall_evaluator import evaluate_recall
+from app.services.section_regenerator import regenerate_section
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
 from app.services.podcast.jobs import enqueue_podcast_job
@@ -664,16 +668,23 @@ async def get_course_history(
     session_id: UUID,
     request: Request,
 ) -> CourseHistoryDetail:
-    """Détail d'une session de cours (404 si introuvable)."""
+    """Détail d'une session de cours (404 si introuvable). Les notes de l'apprenant (table séparée,
+    jamais générées) sont fusionnées dans `gemini_response.sections[].note`."""
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         row = await course_session_repository.get_by_id(db, session_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+        notes = await course_section_note_repository.get_for_session(db, session_id)
 
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session introuvable",
-        )
+    gemini_response = row.gemini_response
+    if notes and gemini_response.get("sections"):
+        gemini_response = {
+            **gemini_response,
+            "sections": [
+                {**s, "note": notes.get(str(s.get("id")), "")} for s in gemini_response["sections"]
+            ],
+        }
 
     return CourseHistoryDetail(
         id=row.id,
@@ -681,7 +692,7 @@ async def get_course_history(
         question=row.question,
         filenames=row.filenames,
         mode=row.mode,
-        gemini_response=row.gemini_response,
+        gemini_response=gemini_response,
     )
 
 
@@ -735,3 +746,102 @@ async def evaluate_section_recall(
     return RecallResponse(
         verdict=evaluation.verdict.value, feedback=evaluation.feedback, missing_points=evaluation.missing_points
     )
+
+
+def _limit_regenerate(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    limiter = getattr(request.app.state, "regenerate_rate_limiter", None)
+    if limiter is None:
+        limiter = request.app.state.regenerate_rate_limiter = SlidingWindowLimiter()
+    limiter.check(
+        request.client.host if request.client else "unknown",
+        settings.course_regenerate_rate_limit_per_minute,
+        "Trop de régénérations, réessayez dans une minute",
+    )
+
+
+@router.post(
+    "/courses/{session_id}/sections/{section_id}/regenerate",
+    response_model=CourseSection,
+    dependencies=[Depends(_limit_regenerate)],
+)
+async def regenerate_course_section(
+    session_id: UUID,
+    section_id: str,
+    request: Request,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
+) -> CourseSection:
+    """Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération).
+
+    404 si la session ou la section n'existe pas ; 409 si la section n'est pas incomplète (seules les
+    sections en échec peuvent être régénérées) ; 429 au-delà de `course_regenerate_rate_limit_per_minute`.
+    La note éventuelle de l'apprenant sur cette section est conservée (table séparée, non affectée).
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+
+    section = next(
+        (s for s in (row.gemini_response.get("sections") or []) if str(s.get("id")) == section_id), None
+    )
+    if section is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Section introuvable")
+    if not section.get("incomplete"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cette section n'est pas incomplète : seules les sections en échec peuvent être régénérées",
+        )
+
+    vector_store = request.app.state.vector_store
+    with _gemini_http_errors():
+        regenerated = await regenerate_section(row, section["title"], gemini_client, vector_store, settings)
+    mapped = _map_sections_to_course_sections([regenerated])
+    if not mapped:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Section régénérée vide")
+    updated = mapped[0].model_copy(update={"id": section_id})
+
+    async with session_factory() as db:
+        saved = await course_session_repository.update_section(db, session_id, section_id, updated.model_dump(mode="json"))
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session ou section introuvable")
+    return updated
+
+
+def _limit_note(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    limiter = getattr(request.app.state, "note_rate_limiter", None)
+    if limiter is None:
+        limiter = request.app.state.note_rate_limiter = SlidingWindowLimiter()
+    limiter.check(
+        request.client.host if request.client else "unknown",
+        settings.course_note_rate_limit_per_minute,
+        "Trop de notes enregistrées, réessayez dans une minute",
+    )
+
+
+@router.put(
+    "/courses/{session_id}/sections/{section_id}/note",
+    response_model=SectionNoteResponse,
+    dependencies=[Depends(_limit_note)],
+)
+async def save_section_note(
+    session_id: UUID,
+    section_id: str,
+    body: SectionNoteRequest,
+    request: Request,
+) -> SectionNoteResponse:
+    """Enregistre (ou efface, avec une note vide) la note libre de l'apprenant sur une section.
+
+    404 si la session ou la section n'existe pas ; 429 au-delà de `course_note_rate_limit_per_minute`.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+        if not any(str(s.get("id")) == section_id for s in (row.gemini_response.get("sections") or [])):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Section introuvable")
+
+        saved = await course_section_note_repository.upsert(db, session_id, section_id, body.note)
+    return SectionNoteResponse(note=saved.note, updated_at=saved.updated_at.isoformat())

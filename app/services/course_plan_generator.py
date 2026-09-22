@@ -46,6 +46,7 @@ from app.schemas.course_generation import (
     Subsection,
 )
 from app.services.course_generator import (
+    INCOMPLETE_SECTION_NOTICE,
     _build_context_block,
     _coerce_known_format,
     ensure_distinct_direct_answer,
@@ -56,6 +57,7 @@ from app.services.course_generator import (
     _rebalance_quiz_difficulty,
     _retrieve_chunks,
     _validate_and_map,
+    is_incomplete_section,
 )
 from app.services.course_videos import attach_verified_videos
 from app.services.gemini_client import GeminiClient
@@ -65,10 +67,7 @@ from app.services.visual_validation import visual_issues
 logger = logging.getLogger(__name__)
 
 _NO_CONTEXT = "Aucun contexte source fourni : s'appuyer sur les connaissances générales et signaler toute incertitude."
-_INCOMPLETE_NOTICE = (
-    "⚠️ Section incomplète : la génération de son contenu a échoué (erreur temporaire). "
-    "Relancez la génération du cours pour l'obtenir."
-)
+_INCOMPLETE_NOTICE = INCOMPLETE_SECTION_NOTICE  # ré-export local : nombreux appels internes à ce module
 _WRAP_UP_FAILED_NOTE = (
     "Introduction, pièges courants, résumé et quiz non générés (erreur temporaire) : "
     "relancez la génération du cours."
@@ -240,13 +239,6 @@ def _incomplete_section(planned: ApiPlannedSection) -> Section:
     return Section(type=SectionType.DEVELOPMENT, title=planned.title, subsections=subsections)
 
 
-def _is_incomplete(section: Section) -> bool:
-    """Section de repli (génération en échec) : inutile de la régénérer pour son aspect visuel."""
-    return any(
-        b.text == _INCOMPLETE_NOTICE for sub in section.subsections for b in sub.blocks
-    )
-
-
 def _align_batch_sections(returned: list[Section], planned: list[ApiPlannedSection]) -> list[Section]:
     """Force la correspondance exacte avec le plan : même nombre, mêmes titres, même ordre.
 
@@ -348,7 +340,7 @@ async def _enforce_visual_first(
     flagged = {
         i: issues
         for i, s in enumerate(sections)
-        if not _is_incomplete(s) and (issues := visual_issues(s))
+        if not is_incomplete_section(s) and (issues := visual_issues(s))
     }
     if not flagged:
         return sections
