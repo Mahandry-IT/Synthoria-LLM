@@ -193,12 +193,39 @@ async def test_two_queries_round_robin_and_a_single_grouped_details_call():
 
 
 @pytest.mark.asyncio
-async def test_result_is_capped_at_course_videos_max():
+async def test_result_is_capped_at_course_videos_max_when_ranking_is_disabled():
+    """Classement V2 désactivé : find_course_videos applique lui-même la coupe finale."""
     client = FakeDataClient(
         {"q": ["a1111111111", "a2222222222", "a3333333333"]},
         {v: _details(v) for v in ["a1111111111", "a2222222222", "a3333333333"]},
     )
 
-    result = await find_course_videos(["q"], "Sujet", Settings(youtube_api_key="fake-key", course_videos_max=2, youtube_min_duration_seconds=60, youtube_max_duration_seconds=3600), client=client)
+    result = await find_course_videos(
+        ["q"], "Sujet",
+        Settings(
+            youtube_api_key="fake-key", course_videos_max=2, course_videos_ranking_enabled=False,
+            youtube_min_duration_seconds=60, youtube_max_duration_seconds=3600,
+        ),
+        client=client,
+    )
 
     assert len(result) == 2
+
+
+@pytest.mark.asyncio
+async def test_ranking_enabled_returns_a_wider_pool_than_course_videos_max():
+    """Classement V2 actif : find_course_videos renvoie un vivier plus large (la coupe finale
+    revient à attach_verified_videos, après le classement)."""
+    ids = [f"a{d}{d * 9}" for d in "12345"]  # 5 ids valides de 11 caractères (a1111111111, a2222222222, ...)
+    client = FakeDataClient({"q": ids}, {v: _details(v) for v in ids})
+
+    result = await find_course_videos(
+        ["q"], "Sujet",
+        Settings(
+            youtube_api_key="fake-key", course_videos_max=2, course_videos_ranking_enabled=True,
+            youtube_min_duration_seconds=60, youtube_max_duration_seconds=3600,
+        ),
+        client=client,
+    )
+
+    assert len(result) == 5  # < _RANKING_POOL_SIZE, donc non tronqué

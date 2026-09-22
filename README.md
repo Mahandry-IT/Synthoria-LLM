@@ -174,6 +174,8 @@ Un `quotaExceeded` ouvre un disjoncteur en mémoire jusqu'au reset du quota (min
 
 Créer la clé : [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → nouveau projet (ou existant) → activer **YouTube Data API v3** → créer une clé API → la restreindre à cette seule API et, en production, à l'IP du serveur. La clé est envoyée en en-tête (`X-Goog-Api-Key`), jamais en query string ni journalisée.
 
+**Classement pédagogique (optionnel)** : si `COURSE_VIDEOS_RANKING_ENABLED=true` (défaut) et qu'une clé Data API a trouvé ≥ 2 candidats, un appel Flash-Lite supplémentaire (`rank_videos`) catégorise chaque vidéo (`category` : cours / exercices_corriges / intuition / demonstration / methode, `level` : debutant / intermediaire / avance, `relevance_score` 0-100) à partir d'un vivier plus large que `COURSE_VIDEOS_MAX` (8 candidats). Gemini ne reçoit et ne renvoie que des index numérotés et des enums — jamais d'URL ni de texte libre non borné — donc un titre ou une description de vidéo malveillante ne peut pas injecter d'instruction. Les candidats sous `YOUTUBE_RANKING_MIN_SCORE` (40 par défaut) sont écartés ; la sélection finale privilégie la diversité (meilleur score de chaque catégorie d'abord). Best-effort : en cas d'échec, l'ordre V1 est conservé. Ce classement ajoute 1 appel Gemini par cours (dans la fenêtre de `GEMINI_RPM_LIMIT`) ; désactiver `COURSE_VIDEOS_RANKING_ENABLED` si le quota est trop juste.
+
 ## Développement local (sans Docker)
 
 ```bash
