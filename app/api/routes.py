@@ -52,7 +52,12 @@ from app.core.exceptions import (
 )
 from app.repositories import course_plan_repository, course_section_note_repository, course_session_repository
 from app.schemas.course_generation import CoursePlanSchema, SectionType
-from app.services.course_generator import _map_quiz_question, _map_sections_to_course_sections, generate_course_from_question
+from app.services.course_generator import (
+    _map_quiz_question,
+    _map_sections_to_course_sections,
+    generate_course_from_question,
+    is_incomplete_section_dict,
+)
 from app.services.course_plan_generator import (
     generate_course_from_validated_plan,
     generate_course_plan,
@@ -669,7 +674,8 @@ async def get_course_history(
     request: Request,
 ) -> CourseHistoryDetail:
     """Détail d'une session de cours (404 si introuvable). Les notes de l'apprenant (table séparée,
-    jamais générées) sont fusionnées dans `gemini_response.sections[].note`."""
+    jamais générées) sont fusionnées dans `gemini_response.sections[].note`, et `incomplete` est
+    recalculé depuis le contenu (jamais la seule valeur stockée, qui peut dater d'avant ce champ)."""
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         row = await course_session_repository.get_by_id(db, session_id)
@@ -678,11 +684,16 @@ async def get_course_history(
         notes = await course_section_note_repository.get_for_session(db, session_id)
 
     gemini_response = row.gemini_response
-    if notes and gemini_response.get("sections"):
+    if gemini_response.get("sections"):
         gemini_response = {
             **gemini_response,
             "sections": [
-                {**s, "note": notes.get(str(s.get("id")), "")} for s in gemini_response["sections"]
+                {
+                    **s,
+                    "note": notes.get(str(s.get("id")), ""),
+                    "incomplete": is_incomplete_section_dict(s),
+                }
+                for s in gemini_response["sections"]
             ],
         }
 
@@ -788,7 +799,7 @@ async def regenerate_course_section(
     )
     if section is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Section introuvable")
-    if not section.get("incomplete"):
+    if not is_incomplete_section_dict(section):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cette section n'est pas incomplète : seules les sections en échec peuvent être régénérées",

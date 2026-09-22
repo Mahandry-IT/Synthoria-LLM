@@ -279,6 +279,22 @@ def is_incomplete_section(section: Section) -> bool:
     return any(b.text == INCOMPLETE_SECTION_NOTICE for sub in section.subsections for b in sub.blocks)
 
 
+def is_incomplete_section_dict(section: dict[str, Any]) -> bool:
+    """Équivalent de `is_incomplete_section` sur une `CourseSection` déjà sérialisée (JSONB persisté).
+
+    Ne fait jamais confiance au seul champ `incomplete` stocké : une session persistée avant
+    l'existence de ce champ (ou de tout futur format de repli) ne l'aurait jamais eu calculé, alors
+    que son contenu est bien le texte de repli. Toujours recalculé depuis le contenu, à la lecture.
+    """
+    if section.get("comment", "").strip() == INCOMPLETE_SECTION_NOTICE:
+        return True
+    return any(
+        b.get("text") == INCOMPLETE_SECTION_NOTICE
+        for sub in section.get("subsections") or []
+        for b in sub.get("blocks") or []
+    )
+
+
 def _map_sections_to_course_sections(
     sections: list[Section],
     start_index: int = 0,

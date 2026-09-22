@@ -10,11 +10,14 @@ from fastapi.testclient import TestClient
 from app.api import routes
 from app.core.exceptions import GeminiInvalidResponseError, GeminiUnavailableError
 from app.schemas.course_generation import Section
+from app.services.course_generator import INCOMPLETE_SECTION_NOTICE
 
 _WORKED_EXAMPLE = {"statement": "", "steps": [], "result": ""}
 INCOMPLETE = {
-    "id": "0", "title": "Notion en échec", "incomplete": True,
-    "quoi": "", "pourquoi": "", "comment": "", "note": "", "worked_example": _WORKED_EXAMPLE,
+    # incomplete=False à dessein : la détection ne doit JAMAIS se fier au seul champ stocké (une
+    # session persistée avant l'existence de ce champ ne l'aurait pas), mais au texte de repli.
+    "id": "0", "title": "Notion en échec", "incomplete": False,
+    "quoi": "", "pourquoi": "", "comment": INCOMPLETE_SECTION_NOTICE, "note": "", "worked_example": _WORKED_EXAMPLE,
 }
 HEALTHY = {
     "id": "1", "title": "Notion en bonne santé", "incomplete": False,
@@ -232,3 +235,18 @@ def test_history_without_notes_leaves_sections_untouched(monkeypatch):
     body = env.client.get(f"/courses/history/{env.row.id}").json()
 
     assert body["gemini_response"]["sections"][0]["note"] == ""
+
+
+def test_history_recomputes_incomplete_for_a_session_predating_the_field(monkeypatch):
+    """Reproduction du bug signalé : une section historique avec `incomplete` absent/faux, mais
+    dont le contenu est le texte de repli, doit ressortir `incomplete: true` à la lecture."""
+    legacy_section = {
+        "id": "0", "title": "Notion en échec", "quoi": "", "pourquoi": "", "note": "",
+        "comment": INCOMPLETE_SECTION_NOTICE, "worked_example": _WORKED_EXAMPLE,
+        # pas de clé "incomplete" du tout : session persistée avant l'existence de ce champ
+    }
+    env = _history_env(monkeypatch, [legacy_section], {})
+
+    body = env.client.get(f"/courses/history/{env.row.id}").json()
+
+    assert body["gemini_response"]["sections"][0]["incomplete"] is True

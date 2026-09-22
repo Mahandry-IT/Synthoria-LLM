@@ -1,5 +1,10 @@
 from app.api.schemas import ApiPlannedSection
-from app.services.course_generator import INCOMPLETE_SECTION_NOTICE, _map_sections_to_course_sections, is_incomplete_section
+from app.services.course_generator import (
+    INCOMPLETE_SECTION_NOTICE,
+    _map_sections_to_course_sections,
+    is_incomplete_section,
+    is_incomplete_section_dict,
+)
 from app.services.course_plan_generator import _incomplete_section
 from app.schemas.course_generation import Section
 
@@ -63,3 +68,44 @@ def test_notice_text_is_shared_between_fallback_and_detection():
     assert any(
         b.text == INCOMPLETE_SECTION_NOTICE for sub in section.subsections for b in sub.blocks
     )
+
+
+# ─── is_incomplete_section_dict (CourseSection déjà persistée en JSONB) ────
+
+
+def test_dict_detects_the_notice_in_the_flat_comment_field():
+    """Format legacy (sections sans `subsections`, juste quoi/pourquoi/comment à plat)."""
+    section = {"id": "0", "title": "T", "comment": INCOMPLETE_SECTION_NOTICE}
+
+    assert is_incomplete_section_dict(section) is True
+
+
+def test_dict_detects_the_notice_inside_typed_subsection_blocks():
+    section = {
+        "id": "0", "title": "T", "comment": "",
+        "subsections": [{"title": "Comment", "blocks": [{"type": "text", "text": INCOMPLETE_SECTION_NOTICE}]}],
+    }
+
+    assert is_incomplete_section_dict(section) is True
+
+
+def test_dict_is_false_for_ordinary_content():
+    section = {"id": "0", "title": "T", "comment": "un mécanisme réel", "subsections": []}
+
+    assert is_incomplete_section_dict(section) is False
+
+
+def test_dict_ignores_a_stale_stored_incomplete_flag_and_trusts_the_content():
+    """Régression réelle : une session persistée avant l'existence du champ `incomplete` stockait
+    `False` (valeur par défaut) alors que son contenu est bien le texte de repli — la détection ne
+    doit jamais se fier à ce champ seul."""
+    stale = {"id": "0", "title": "T", "incomplete": False, "comment": INCOMPLETE_SECTION_NOTICE}
+
+    assert is_incomplete_section_dict(stale) is True
+
+    healthy_but_flagged = {"id": "1", "title": "T", "incomplete": True, "comment": "contenu réel"}
+    assert is_incomplete_section_dict(healthy_but_flagged) is False
+
+
+def test_dict_handles_missing_subsections_and_blocks_gracefully():
+    assert is_incomplete_section_dict({"id": "0", "title": "T"}) is False
