@@ -7,7 +7,8 @@ import pytest
 from app.core.config import Settings
 from app.schemas.course_generation import CourseGenerationSchema
 from app.services import youtube
-from app.services.course_generator import _map_schema_to_response, attach_verified_videos
+from app.services.course_generator import _map_schema_to_response
+from app.services.course_videos import attach_verified_videos
 
 VID = "dQw4w9WgXcQ"
 
@@ -42,12 +43,12 @@ async def test_verify_one_keeps_existing_and_drops_missing():
     assert ko is None
 
 
-def _schema(sections, videos=()):
+def _schema(sections, queries=()):
     return CourseGenerationSchema.model_validate({
         "mode": "question_only", "format": "focused_answer",
         "meta": {"title": "T", "subject": "S", "generated_at": datetime.now(timezone.utc).isoformat()},
         "sections": sections, "confidence": "high",
-        "video_suggestions": [{"url": u, "title": "x"} for u in videos],
+        "video_search_queries": list(queries),
     })
 
 
@@ -62,7 +63,7 @@ def test_tables_exposed_structured_and_not_flattened():
             {"title": "Pourquoi", "blocks": [{"type": "text", "text": "Car."}]},
             {"title": "Comment", "blocks": [{"type": "text", "text": "Ainsi."}]},
         ],
-    }], videos=[f"https://youtu.be/{VID}", "https://example.com/x"])
+    }])
 
     response = _map_schema_to_response(schema)
 
@@ -70,22 +71,23 @@ def test_tables_exposed_structured_and_not_flattened():
     assert section.quoi == "Définition."
     assert section.tables[0].caption == "Comparatif"
     assert section.tables[0].rows == [["1", "2"]]
-    assert [v.video_id for v in response.videos] == [VID]
+    assert response.videos == []  # jamais depuis Gemini : attaché après coup par attach_verified_videos
 
 
 @pytest.mark.asyncio
-async def test_attach_videos_falls_back_to_web_search(monkeypatch):
-    settings = Settings(gemini_api_key="k", course_videos_enabled=True)
+async def test_attach_videos_falls_back_to_web_search_without_a_youtube_api_key(monkeypatch):
+    """Sans clé YOUTUBE_API_KEY, find_course_videos() est un no-op : repli grounding + oEmbed."""
+    settings = Settings(gemini_api_key="k", course_videos_enabled=True, youtube_api_key=None)
     response = _map_schema_to_response(_schema([{
         "type": "development", "title": "A", "blocks": [{"type": "text", "text": "x"}],
-    }], videos=["https://youtu.be/AAAAAAAAAAA"]))
+    }]))
     gemini = AsyncMock()
     gemini.search_grounded.return_value = (f"Voir https://www.youtube.com/watch?v={VID}", [])
 
     async def fake_verify(candidates, **_):
         return [v for v in candidates if v.video_id == VID]
 
-    monkeypatch.setattr("app.services.course_generator.verify_videos", fake_verify)
+    monkeypatch.setattr("app.services.course_videos.verify_videos", fake_verify)
 
     result = await attach_verified_videos(response, settings, gemini)
 
@@ -97,6 +99,6 @@ async def test_attach_videos_falls_back_to_web_search(monkeypatch):
 async def test_attach_videos_disabled_returns_empty():
     response = _map_schema_to_response(_schema([{
         "type": "development", "title": "A", "blocks": [{"type": "text", "text": "x"}],
-    }], videos=[f"https://youtu.be/{VID}"]))
+    }]))
     result = await attach_verified_videos(response, Settings(gemini_api_key="k", course_videos_enabled=False), AsyncMock())
     assert result.videos == []

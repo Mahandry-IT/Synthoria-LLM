@@ -116,3 +116,20 @@ class FlashcardReview(Base):
     last_result: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     __table_args__ = (Index("idx_flashcard_reviews_due_at", due_at),)
+
+
+class YoutubeSearchCache(Base):
+    """Résultats mis en cache d'une requête YouTube Data API (`search.list` + `videos.list` enrichis).
+
+    `query_key` est un hash de la requête normalisée (+ langue, région) : indépendant du cours qui
+    a déclenché la recherche, pour que deux cours proches partagent le cache.
+    """
+
+    __tablename__ = "youtube_search_cache"
+
+    query_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    candidates: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    fetched_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+
+    __table_args__ = (Index("idx_youtube_search_cache_fetched_at", fetched_at),)

@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.schemas import (
     _PLAN_OBJECTIVE_MAX,
@@ -55,8 +56,8 @@ from app.services.course_generator import (
     _rebalance_quiz_difficulty,
     _retrieve_chunks,
     _validate_and_map,
-    attach_verified_videos,
 )
+from app.services.course_videos import attach_verified_videos
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
 from app.services.visual_validation import visual_issues
@@ -500,7 +501,7 @@ async def _generate_wrap_up(
         "DEVELOPMENT. N'inclus AUCUNE section de type development. Laisse `sources` vide. "
         "Renseigne `direct_answer` : la réponse directe à la question (2-3 phrases, points clés, 1 visuel "
         "récapitulatif), distincte de l'introduction dont elle ne reprend aucun texte. "
-        "Propose dans `video_suggestions` 1 à 3 vidéos YouTube réelles qui expliquent bien le sujet. "
+        "Propose dans `video_search_queries` 1 à 2 requêtes de recherche YouTube courtes (jamais une URL). "
         "Retourne le JSON selon le schéma fourni."
     )
     try:
@@ -533,6 +534,7 @@ async def generate_course_from_validated_plan(
     edited_sections: list[ApiPlannedSection],
     gemini_client: GeminiClient,
     settings: Settings,
+    db_session_factory: async_sessionmaker | None = None,
 ) -> CourseGenerationResponse:
     """Génère le cours complet à partir d'un plan validé, par lots de sections DEVELOPMENT.
 
@@ -626,9 +628,12 @@ async def generate_course_from_validated_plan(
         "quiz": [q.model_dump(mode="json") for q in wrap_up.quiz] if wrap_up else [],
         "confidence": wrap_up.confidence.value if wrap_up else "medium",
         "unconfirmed_points": wrap_up.unconfirmed_points if wrap_up else [_WRAP_UP_FAILED_NOTE],
-        "video_suggestions": [v.model_dump(mode="json") for v in wrap_up.video_suggestions] if wrap_up else [],
+        "video_search_queries": wrap_up.video_search_queries if wrap_up else [],
     }
-    return await attach_verified_videos(_validate_and_map(structured, mode), settings, gemini_client)
+    return await attach_verified_videos(
+        _validate_and_map(structured, mode), settings, gemini_client,
+        search_queries=structured["video_search_queries"], db_session_factory=db_session_factory,
+    )
 
 
 # ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────

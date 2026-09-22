@@ -31,6 +31,22 @@ class GeminiInvalidResponseError(GeminiServiceError):
     """La réponse de Gemini n'a pas pu être interprétée comme un JSON structuré valide."""
 
 
+class YoutubeServiceError(Exception):
+    """Erreur générique lors de la communication avec YouTube Data API v3."""
+
+
+class YoutubeQuotaExceeded(YoutubeServiceError):
+    """Quota journalier de la clé Data API dépassé (403 quotaExceeded / dailyLimitExceeded)."""
+
+
+class YoutubeUnavailable(YoutubeServiceError):
+    """YouTube Data API est injoignable (timeout, erreur réseau, 5xx)."""
+
+
+class YoutubeConfigError(YoutubeServiceError):
+    """Clé API absente ou invalide (403 keyInvalid, 400) — inutile de réessayer."""
+
+
 class TTSError(Exception):
     """Erreur générique de synthèse vocale."""
 
