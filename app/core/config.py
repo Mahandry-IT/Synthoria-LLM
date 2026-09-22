@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     gemini_model_flash_lite: str = "gemini-3.5-flash-lite"
     gemini_max_retries: int = 3
     gemini_timeout_seconds: float = 30.0
+    # Marge sous la limite Google (ex. 15 RPM sur gemini-*-flash-lite au palier gratuit) : les
+    # appels sont espacés pour rester sous ce seuil plutôt que de heurter un 429. Par processus
+    # (api et worker ont chacun leur fenêtre) — voir app/services/gemini_rate_limit.py.
+    gemini_rpm_limit: int = 14
     course_top_k_default: int = 6
     course_question_max_length: int = 2000
     course_coverage_completion_enabled: bool = True
