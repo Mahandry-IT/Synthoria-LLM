@@ -81,7 +81,7 @@ async def test_search_videos_uses_citation_sources_when_text_has_no_url(monkeypa
     gemini = AsyncMock()
     gemini.search_grounded.return_value = ("Voici de bonnes vidéos, sans lien dans le texte.", [{"reference": REDIRECT}])
 
-    videos = await _search_videos("Transformateur", gemini)
+    videos = await _search_videos("Transformateur", gemini, Settings())
 
     assert [v.video_id for v in videos] == [VID]
 
