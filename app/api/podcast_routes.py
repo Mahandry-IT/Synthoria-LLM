@@ -21,6 +21,7 @@ from app.api.schemas import (
     PodcastSummaryList,
 )
 from app.core.config import Settings, get_settings
+from app.core.markdown import markdown_to_plain
 from app.repositories import course_session_repository, podcast_job_repository
 from app.schemas.podcast import PodcastScript
 from app.services.podcast.course_serializer import has_usable_content, serialize_course
@@ -79,10 +80,10 @@ def _job_status(job) -> PodcastJobStatus:
 
 
 def _podcast_title(job, course) -> str:
-    """Titre affichable : celui du script, sinon celui du cours, sinon la question."""
+    """Titre affichable : celui du script, sinon celui du cours, sinon la question (sans Markdown)."""
     script_title = (job.script or {}).get("title")
     course_title = ((course.gemini_response or {}).get("meta") or {}).get("title")
-    return script_title or course_title or course.question[:120]
+    return script_title or course_title or markdown_to_plain(course.question)[:120]
 
 
 async def _get_job_or_404(request: Request, job_id: UUID):

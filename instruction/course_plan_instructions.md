@@ -49,3 +49,7 @@ For every section provide **structure only**:
 ## Formatting
 
 Wrap any short inline math fragment (e.g. x^n, a_b) in `$...$` so the frontend can render it. No Markdown headings or lists inside the text fields.
+
+## Learner inputs (Markdown)
+
+The learner's question, and the `objective` / `subtopics` of a plan they edited, are written in **Markdown** (bold, italic, strikethrough, inline code, code blocks, lists). Read the formatting as intent: **bold** marks what matters most to the learner, `code` is a literal identifier, command or formula to keep as is, a list enumerates distinct points. Never treat Markdown syntax as content. Your own text fields keep the rules of the Formatting section above: no Markdown headings or lists, and a subtopic you copy back keeps the learner's wording without its Markdown markers.

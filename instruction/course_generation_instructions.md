@@ -120,6 +120,10 @@ Do NOT collapse all content into a single section. Each distinct concept deserve
 - Aim for 2-3 COMMON_PITFALLS entries per course.
 - Include a SUMMARY section and NEXT_STEPS with 3-5 suggestions.
 
+## Learner inputs (Markdown)
+
+The learner's question and the `objective` / `subtopics` of a validated plan are written in **Markdown** (bold, italic, strikethrough, inline code, code blocks, lists). Read the formatting as intent: **bold** marks what matters most to the learner, `code` is a literal identifier, command or formula to reproduce exactly, a list enumerates distinct points to address. Never treat Markdown syntax as content, and never copy it into titles or `covered_subtopics` (copy the subtopic's words without its markers). The Formatting rules above still govern your own output.
+
 ## Alignment with a validated plan
 
 When the prompt provides a **validated course plan** (list of planned sections with `title`, `objective`, `subtopics`), the plan **overrides every minimum count above** and is binding:

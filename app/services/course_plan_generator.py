@@ -29,6 +29,7 @@ from app.api.schemas import (
 )
 from app.core.config import Settings, get_settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiServiceError
+from app.core.markdown import markdown_to_plain
 from app.db.models import CoursePlan
 from app.schemas.course_generation import (
     BlockType,
@@ -233,9 +234,11 @@ def _incomplete_section(planned: ApiPlannedSection) -> Section:
     def text(value: str) -> list[ContentBlock]:
         return [ContentBlock(type=BlockType.TEXT, text=value)]
 
-    subsections = [Subsection(title="Quoi", blocks=text(planned.objective or planned.title))]
+    # Objectif et sous-thèmes viennent de l'éditeur riche (Markdown) : affichés ici en texte brut.
+    subsections = [Subsection(title="Quoi", blocks=text(markdown_to_plain(planned.objective) or planned.title))]
     if planned.subtopics:
-        subsections.append(Subsection(title="Pourquoi", blocks=text("Points prévus : " + " ; ".join(planned.subtopics))))
+        points = " ; ".join(markdown_to_plain(topic) for topic in planned.subtopics)
+        subsections.append(Subsection(title="Pourquoi", blocks=text("Points prévus : " + points)))
     subsections.append(Subsection(title="Comment", blocks=text(_INCOMPLETE_NOTICE)))
     return Section(type=SectionType.DEVELOPMENT, title=planned.title, subsections=subsections)
 
@@ -382,8 +385,8 @@ async def _enforce_visual_first(
 
 
 def _norm(text: str) -> str:
-    """Forme comparable : sans accents, casse ni ponctuation."""
-    stripped = unicodedata.normalize("NFKD", text.casefold())
+    """Forme comparable : sans Markdown (saisie de l'éditeur riche), accents, casse ni ponctuation."""
+    stripped = unicodedata.normalize("NFKD", markdown_to_plain(text).casefold())
     stripped = "".join(c for c in stripped if not unicodedata.combining(c))
     return " ".join(re.sub(r"[^\w\s]", " ", stripped).split())
 
