@@ -34,6 +34,7 @@ from app.schemas.course_generation import (
 from app.services.course_videos import _search_videos, attach_verified_videos  # noqa: F401 — rétrocompat (imports historiques)
 from app.services.gemini_client import GeminiClient
 from app.services.leitner import flashcards_from_course
+from app.services.media.visual_resolver import resolve_visuals
 from app.services.vector_store import NumpyVectorStore
 
 logger = logging.getLogger(__name__)
@@ -228,7 +229,6 @@ def _map_block(block: Any) -> ApiContentBlock | None:
         data["worked_example"] = block.worked_example.model_dump(mode="json")
     if block.image_caption is not None:
         data["image_caption"] = block.image_caption
-    data.pop("image_reference", None)
     if block.chart:
         # Séries tronquées à la longueur des libellés : un décalage rendrait le graphique faux.
         n = min(len(block.chart.labels), CHART_LABELS_MAX)
@@ -1036,10 +1036,11 @@ async def generate_course_from_question(
             gemini_client=gemini_client, settings=settings,
             system_instruction=system_instruction,
         )
-        return await attach_verified_videos(
+        with_videos = await attach_verified_videos(
             completed, settings, gemini_client,
             search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
         )
+        return await resolve_visuals(with_videos, settings=settings, db_session_factory=db_session_factory)
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -1076,7 +1077,8 @@ async def generate_course_from_question(
         gemini_client=gemini_client, settings=settings,
         system_instruction=system_instruction,
     )
-    return await attach_verified_videos(
+    with_videos = await attach_verified_videos(
         completed, settings, gemini_client,
         search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
     )
+    return await resolve_visuals(with_videos, settings=settings, db_session_factory=db_session_factory)

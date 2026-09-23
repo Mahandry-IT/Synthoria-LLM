@@ -118,6 +118,10 @@ class GeminiClient:
         if self._client is None:
             raise GeminiUnavailableError("GEMINI_API_KEY non configurée")
 
+    @property
+    def is_configured(self) -> bool:
+        return self._client is not None
+
     async def _call_with_retry(self, func: Any, *args: Any, **kwargs: Any) -> Any:
         """Retry avec backoff exponentiel + jitter. Les 429 sont retryables.
 
@@ -375,3 +379,22 @@ class GeminiClient:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise GeminiInvalidResponseError(f"Réponse Gemini non-JSON: {exc}") from exc
+
+    async def describe_image(self, image_bytes: bytes, mime_type: str, system_instruction: str) -> str:
+        """Décrit une image (ex. figure extraite d'un PDF) via `gemini_model_flash_lite`.
+
+        Passe par le même rate limiter / retry-backoff / timeout que les autres appels Gemini
+        (`_call_with_retry`) — contrairement à un appel SDK direct qui pourrait déclencher une
+        rafale de requêtes non espacées et épuiser le quota (ex. plusieurs images par PDF ingéré).
+        """
+        self._ensure_configured()
+
+        def _run(model: str) -> Any:
+            return self._client.models.generate_content(
+                model=model,
+                contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime_type)],
+                config=types.GenerateContentConfig(system_instruction=system_instruction),
+            )
+
+        response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
+        return getattr(response, "text", "") or ""

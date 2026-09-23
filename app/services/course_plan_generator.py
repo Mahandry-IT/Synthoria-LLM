@@ -29,6 +29,7 @@ from app.api.schemas import (
 )
 from app.core.config import Settings, get_settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiServiceError
+from app.core.markdown import markdown_to_plain
 from app.db.models import CoursePlan
 from app.schemas.course_generation import (
     BlockType,
@@ -61,6 +62,7 @@ from app.services.course_generator import (
 )
 from app.services.course_videos import attach_verified_videos
 from app.services.gemini_client import GeminiClient
+from app.services.media.visual_resolver import resolve_visuals
 from app.services.vector_store import NumpyVectorStore
 from app.services.visual_validation import visual_issues
 
@@ -232,9 +234,11 @@ def _incomplete_section(planned: ApiPlannedSection) -> Section:
     def text(value: str) -> list[ContentBlock]:
         return [ContentBlock(type=BlockType.TEXT, text=value)]
 
-    subsections = [Subsection(title="Quoi", blocks=text(planned.objective or planned.title))]
+    # Objectif et sous-thèmes viennent de l'éditeur riche (Markdown) : affichés ici en texte brut.
+    subsections = [Subsection(title="Quoi", blocks=text(markdown_to_plain(planned.objective) or planned.title))]
     if planned.subtopics:
-        subsections.append(Subsection(title="Pourquoi", blocks=text("Points prévus : " + " ; ".join(planned.subtopics))))
+        points = " ; ".join(markdown_to_plain(topic) for topic in planned.subtopics)
+        subsections.append(Subsection(title="Pourquoi", blocks=text("Points prévus : " + points)))
     subsections.append(Subsection(title="Comment", blocks=text(_INCOMPLETE_NOTICE)))
     return Section(type=SectionType.DEVELOPMENT, title=planned.title, subsections=subsections)
 
@@ -381,8 +385,8 @@ async def _enforce_visual_first(
 
 
 def _norm(text: str) -> str:
-    """Forme comparable : sans accents, casse ni ponctuation."""
-    stripped = unicodedata.normalize("NFKD", text.casefold())
+    """Forme comparable : sans Markdown (saisie de l'éditeur riche), accents, casse ni ponctuation."""
+    stripped = unicodedata.normalize("NFKD", markdown_to_plain(text).casefold())
     stripped = "".join(c for c in stripped if not unicodedata.combining(c))
     return " ".join(re.sub(r"[^\w\s]", " ", stripped).split())
 
@@ -622,10 +626,11 @@ async def generate_course_from_validated_plan(
         "unconfirmed_points": wrap_up.unconfirmed_points if wrap_up else [_WRAP_UP_FAILED_NOTE],
         "video_search_queries": wrap_up.video_search_queries if wrap_up else [],
     }
-    return await attach_verified_videos(
+    with_videos = await attach_verified_videos(
         _validate_and_map(structured, mode), settings, gemini_client,
         search_queries=structured["video_search_queries"], db_session_factory=db_session_factory,
     )
+    return await resolve_visuals(with_videos, settings=settings, db_session_factory=db_session_factory)
 
 
 # ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────

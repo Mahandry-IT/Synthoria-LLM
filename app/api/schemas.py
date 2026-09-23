@@ -178,6 +178,26 @@ class ApiPitfall(BaseModel):
     how_to_avoid: str = ""
 
 
+class ApiImageAttribution(BaseModel):
+    """Attribution obligatoire pour les licences CC BY / CC BY-SA (jamais affiché sans elle)."""
+
+    author: str | None = None
+    license: str | None = None
+    license_url: str | None = None
+
+
+class ApiImage(BaseModel):
+    """Image ré-hébergée, jamais de hotlink : `url` pointe toujours vers GET /media/{asset_id}."""
+
+    asset_id: str
+    url: str
+    alt: str = ""
+    caption: str = ""
+    width: int
+    height: int
+    attribution: ApiImageAttribution | None = None
+
+
 class ApiContentBlock(BaseModel):
     """Bloc de contenu typé (contrat par blocs). Seuls les champs correspondant à `type` sont renseignés."""
 
@@ -195,9 +215,18 @@ class ApiContentBlock(BaseModel):
     code: str | None = None
     worked_example: ApiWorkedExample | None = None
     image_caption: str | None = None
+    image: ApiImage | None = None
     pitfall: ApiPitfall | None = None
     diagram: ApiDiagram | None = None
     chart: ApiChart | None = None
+
+    # Intention Gemini portée jusqu'au résolveur (app/services/media/visual_resolver.py), jamais
+    # exposée aux clients de l'API : ni URL ni identifiant externe, juste de quoi résoudre le
+    # visuel serveur (cf. plan-supports-visuels.md, principe « Gemini n'émet jamais d'URL »).
+    image_source: str | None = Field(default=None, exclude=True)
+    image_query: str | None = Field(default=None, exclude=True)
+    image_reference: str | None = Field(default=None, exclude=True)
+    image_alt: str | None = Field(default=None, exclude=True)
 
 
 class CourseSubsection(BaseModel):
