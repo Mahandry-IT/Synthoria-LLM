@@ -17,6 +17,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
+      MEDIA_STORAGE_DIR: /data/media
     depends_on:
       ollama:
         condition: service_healthy
@@ -30,6 +31,7 @@ services:
     volumes:
       - chroma-data:/data
       - podcast-data:/data/podcasts   # partagé avec le worker : l'API sert les MP3 produits par lui
+      - media-data:/data/media   # images ré-hébergées, servies par GET /media/{id}
     networks:
       - default
       - synthoria-net   # ajouté : accessible depuis Studio
@@ -48,6 +50,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
       PODCAST_TTS_BASE_URL: http://piper:5000
       PODCAST_STORAGE_DIR: /data/podcasts
+      MEDIA_STORAGE_DIR: /data/media
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,6 +63,7 @@ services:
     stop_grace_period: 60s   # laisse le worker finir son étape sur SIGTERM
     volumes:
       - podcast-data:/data/podcasts
+      - media-data:/data/media
     networks:
       - default
 
@@ -180,3 +184,4 @@ volumes:
   postgres-data:
   piper-voices:
   podcast-data:
+  media-data:

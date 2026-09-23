@@ -65,6 +65,7 @@ from app.services.course_plan_generator import (
     refine_planned_section,
 )
 from app.services.gemini_client import GeminiClient
+from app.services.media.visual_resolver import resolve_visuals_in_sections
 from app.services.recall_evaluator import evaluate_recall
 from app.services.section_regenerator import regenerate_section
 from app.services.ollama_client import OllamaClient
@@ -811,6 +812,7 @@ async def regenerate_course_section(
     mapped = _map_sections_to_course_sections([regenerated])
     if not mapped:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Section régénérée vide")
+    mapped = await resolve_visuals_in_sections(mapped, settings=settings, db_session_factory=session_factory)
     updated = mapped[0].model_copy(update={"id": section_id})
 
     async with session_factory() as db:

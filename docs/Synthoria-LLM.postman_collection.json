@@ -33,6 +33,11 @@
       "key": "cardId",
       "value": "",
       "description": "Id d'une flashcard (champ flashcards[].card_id, ex. 1-0)"
+    },
+    {
+      "key": "assetId",
+      "value": "",
+      "description": "UUID d'une image ré-hébergée (champ image.asset_id d'un bloc IMAGE résolu)"
     }
   ],
   "item": [
@@ -738,6 +743,30 @@
                 }
               }
             }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Media",
+      "item": [
+        {
+          "name": "GET /media/{asset_id}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/media/{{assetId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "media",
+                "{{assetId}}"
+              ]
+            },
+            "description": "Sert une image ré-hébergée (jamais de hotlink) : téléchargée, ré-encodée et servie depuis le stockage local, jamais depuis la source d'origine. Codes: 200, 404 (image inconnue), 410 (fichier expiré/supprimé), 422 (asset_id invalide)."
           },
           "response": []
         }

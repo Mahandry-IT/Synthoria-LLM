@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     def youtube_cache_ttl(self) -> timedelta:
         return timedelta(hours=self.youtube_cache_ttl_hours)
 
+    # Supports visuels : images ré-hébergées (jamais de hotlink), servies par GET /media/{id}.
+    media_storage_dir: str = "/data/media"
+    media_max_bytes: int = 5 * 1024 * 1024
+    media_resolve_concurrency: int = 4
+    media_resolve_timeout_seconds: float = 20.0
+
 
 @lru_cache
 def get_settings() -> Settings:

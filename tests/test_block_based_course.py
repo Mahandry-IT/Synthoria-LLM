@@ -92,6 +92,17 @@ def test_visual_issues():
     assert visual_issues(_section([long_text], type_="summary")) == []
 
 
+def test_visual_issues_image_block_never_satisfies_visual_first():
+    """IMAGE ne compte jamais comme le visuel de la règle : sa résolution peut échouer après coup
+    (app/services/media/visual_resolver.py) et retirer le bloc silencieusement."""
+    image_only = {"type": "image", "image_source": "web", "image_query": "chat noir"}
+    assert visual_issues(_section([image_only])) == [
+        "aucun bloc visuel (TABLE, LIST, DIAGRAM, CHART, FORMULA...)"
+    ]
+    visual = {"type": "list", "list_items": ["a"], "list_ordered": False}
+    assert visual_issues(_section([image_only, visual])) == []  # un autre vrai visuel suffit
+
+
 @pytest.mark.asyncio
 async def test_enforce_visual_first_regenerates_only_flagged_sections():
     bad = _section([{"type": "text", "text": "Juste du texte."}], title="A")
