@@ -57,6 +57,14 @@ class BlockType(str, Enum):
     CHART = "chart"
 
 
+class ImageSource(str, Enum):
+    """Where an IMAGE block's visual should come from — never a URL, always resolved server-side."""
+
+    PDF = "pdf"
+    WEB = "web"
+    GENERATED = "generated"
+
+
 class CalloutVariant(str, Enum):
     NOTE = "note"
     WARNING = "warning"
@@ -181,7 +189,22 @@ class ContentBlock(BaseModel):
     )
     worked_example: WorkedExample | None = Field(default=None, description="Set for WORKED_EXAMPLE.")
     image_caption: str | None = Field(default=None, description="Set for IMAGE.")
-    image_reference: str | None = Field(default=None, description="Set for IMAGE — chunk/page reference of the source figure.")
+    image_source: ImageSource | None = Field(
+        default=None,
+        description=(
+            "Set for IMAGE — where the visual comes from. 'pdf' only if a matching figure was "
+            "actually seen in the provided source document(s) (use image_reference to point at it). "
+            "'web' for a real-world photo/illustration to look up (use image_query). 'generated' for "
+            "a diagram/illustration that must be created because no suitable existing image exists. "
+            "Never invent a URL or filename — resolution happens server-side."
+        ),
+    )
+    image_query: str | None = Field(
+        default=None,
+        description="Set for IMAGE when image_source='web' — a short, specific search query (subject, in French or the course's language) to find the image, never a URL.",
+    )
+    image_reference: str | None = Field(default=None, description="Set for IMAGE when image_source='pdf' — chunk/page reference of the source figure.")
+    image_alt: str | None = Field(default=None, description="Set for IMAGE — short accessible alt text describing the image content, independent of the caption.")
     diagram: DiagramData | None = Field(default=None, description="Set for DIAGRAM — flows, sequences, hierarchies, cycles.")
     chart: ChartData | None = Field(default=None, description="Set for CHART — only for real numeric data, never invented figures.")
     pitfall: PitfallData | None = Field(default=None, description="Set for PITFALL — always fill all 3 sub-fields, never leave why_it_happens/how_to_avoid blank.")

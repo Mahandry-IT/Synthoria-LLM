@@ -71,6 +71,7 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | GET | `/podcasts?limit=3` | Podcasts les plus récents (tous statuts, `limit` 1-20, défaut 3) : état du job + `title` (script, sinon titre du cours, sinon question). Sert le dashboard |
 | GET | `/courses/plans?page&limit` | Plans en cours : `pending`, non expirés, pas encore transformés en cours (`plan_id`, `question`, `title`, `subject`, `sections_count`, `created_at`, `expires_at`), paginés |
 | GET | `/courses/plans/{plan_id}` | Plan proposé relu tel quel, avec la `question` et les `filenames` d'origine (reprise). `404` inconnu, `410` expiré |
+| GET | `/media/{asset_id}` | Sert une image ré-hébergée (jamais de hotlink vers la source d'origine) : téléchargée, ré-encodée en WebP et servie depuis le stockage local. `404` image inconnue, `410` fichier expiré/supprimé, `422` `asset_id` invalide (doit être un UUID). `Cache-Control: public, max-age=31536000, immutable`. |
 
 ### Tester l'API
 
@@ -128,6 +129,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 - **Abus** : `/recall` (10/min), `/courses/plan/more-sections` (6/min, `MORE_SECTIONS_RATE_LIMIT_PER_MINUTE`) et `/reviews/...` ont une limite dédiée en plus de la limite globale ; `section_refs` est borné (1-500, 10 max).
 - **Vidéos** : `videos[]` vient d'une vraie recherche YouTube (jamais d'ID inventé par Gemini) — voir [Vidéos YouTube](#vidéos-youtube).
 - **Régénération et notes** : une section `incomplete: true` (échec temporaire à la génération) peut être régénérée seule (`POST .../regenerate`), sans relancer tout le cours ; le contexte (fichiers ou recherche web) est ré-obtenu à partir de la session, jamais renvoyé silencieusement en cas d'échec (contrairement à la génération complète). Une section qui n'est pas incomplète ne peut pas être régénérée — à la place, l'apprenant peut y laisser une note libre (`note`, ≤ 2000 caractères, table séparée `course_section_notes`, jamais générée par le modèle) via `PUT .../note`.
+- **Images** : un bloc `image` peut apparaître dans `subsections[].blocks[]`, résolu et ré-hébergé (jamais de lien direct vers la source) — voir [Supports visuels](#supports-visuels).
 
 ## Variables d'environnement
 
@@ -153,11 +155,13 @@ COURSE_QUESTION_MAX_LENGTH=2000
 COURSE_PLAN_BATCH_SIZE=2
 COURSE_PLAN_TTL_MINUTES=120
 DATABASE_URL=postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
+MEDIA_STORAGE_DIR=/data/media
+MEDIA_MAX_BYTES=5242880
 ```
 
 > `DATABASE_URL` pointe vers le conteneur PostgreSQL du compose. Pour un dev local sans Docker, ajustez l'URL (ex. `postgresql+asyncpg://user:pass@localhost:5432/synthoria`).
 
-> `GEMINI_API_KEY` est optionnel. Sans clé, l'extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative.
+> `GEMINI_API_KEY` est optionnel. Sans clé, l'extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative. Cette extraction (jusqu'à 5 pages, 2 images/page par PDF ingéré) passe par `GeminiClient.describe_image` (`gemini_model_flash_lite`, moins coûteux que `flash`) et par le même rate limiter que les autres appels Gemini (`GEMINI_RPM_LIMIT`) au lieu de partir en rafale — une image dont la description échoue (quota, indisponibilité) est simplement ignorée.
 
 ### Limite de débit Gemini (429 / RESOURCE_EXHAUSTED)
 
@@ -178,6 +182,17 @@ Un `quotaExceeded` ouvre un disjoncteur en mémoire jusqu'au reset du quota (min
 Créer la clé : [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → nouveau projet (ou existant) → activer **YouTube Data API v3** → créer une clé API → la restreindre à cette seule API et, en production, à l'IP du serveur. La clé est envoyée en en-tête (`X-Goog-Api-Key`), jamais en query string ni journalisée.
 
 **Classement pédagogique (optionnel)** : si `COURSE_VIDEOS_RANKING_ENABLED=true` (défaut) et qu'une clé Data API a trouvé ≥ 2 candidats, un appel Flash-Lite supplémentaire (`rank_videos`) catégorise chaque vidéo (`category` : cours / exercices_corriges / intuition / demonstration / methode, `level` : debutant / intermediaire / avance, `relevance_score` 0-100) à partir d'un vivier plus large que `COURSE_VIDEOS_MAX` (8 candidats). Gemini ne reçoit et ne renvoie que des index numérotés et des enums — jamais d'URL ni de texte libre non borné — donc un titre ou une description de vidéo malveillante ne peut pas injecter d'instruction. Les candidats sous `YOUTUBE_RANKING_MIN_SCORE` (40 par défaut) sont écartés ; la sélection finale privilégie la diversité (meilleur score de chaque catégorie d'abord). Best-effort : en cas d'échec, l'ordre V1 est conservé. Ce classement ajoute 1 appel Gemini par cours (dans la fenêtre de `GEMINI_RPM_LIMIT`) ; désactiver `COURSE_VIDEOS_RANKING_ENABLED` si le quota est trop juste.
+
+### Supports visuels
+
+Comme pour les vidéos, Gemini ne produit jamais d'URL ni de nom de fichier d'image (il en invente régulièrement) : un bloc `image` porte seulement une **intention** — `image_source` (`pdf` / `web` / `generated`), `image_query` (recherche web) ou `image_reference` (figure d'un PDF source), `image_alt` — résolue déterministiquement côté serveur (`app/services/media/visual_resolver.py`).
+
+- **Jamais de hotlink** : toute image retenue est téléchargée, vérifiée par sa signature réelle (pas par le `Content-Type` déclaré), ré-encodée en WebP (EXIF retiré, dimension bornée) et stockée localement (table `media_assets`, migration `008_add_media_assets`) ; le cours ne référence que `GET /media/{asset_id}`.
+- **Best-effort** : la résolution (téléchargement, re-recherche, génération) a un budget de temps et de concurrence dédié (`MEDIA_RESOLVE_TIMEOUT_SECONDS`, `MEDIA_RESOLVE_CONCURRENCY`) ; un bloc `image` dont la résolution échoue est simplement retiré du cours, jamais laissé sans image. À terme (une fois un résolveur par source réellement branché), un bloc `image` ne devra pas non plus compter comme le visuel de la règle « visuel d'abord » (`app/services/visual_validation.py`), puisque sa résolution peut échouer — désactivé pour l'instant (Lot 1 : aucun résolveur actif, ce contrôle ne ferait que payer un appel Gemini de régénération sans jamais pouvoir aboutir à une image affichée).
+- **Déduplication** : les images sont indexées par sha256 du contenu ré-encodé ; deux blocs qui résolvent vers la même image (même figure PDF réutilisée, même image web) partagent une seule ligne.
+- **Attribution** : les images sous licence CC BY / CC BY-SA affichent obligatoirement leur auteur et leur licence ; un bloc sans licence connue n'est pas retenu.
+
+Cette version (Lot 1 — fondations) pose le schéma, le stockage et le routage ; aucun résolveur par source n'est encore branché (`pdf`, `web`, `generated` retournent toujours « non résolu »), donc tout bloc `image` est retiré du cours pour le moment. Les lots suivants brancheront successivement les figures de PDF sources, la recherche d'images web (Wikimedia Commons puis Openverse) et la génération IA.
 
 ## Développement local (sans Docker)
 
@@ -202,7 +217,8 @@ app/
 ├── db/               # SQLAlchemy models + session async
 ├── repositories/     # accès aux données (course sessions, course plans)
 ├── services/         # Ollama, chunking, extraction PDF, vector store, Gemini Vision
-│   └── podcast/      # sérialisation du cours, script, normalisation TTS, client Piper, assemblage ffmpeg, pipeline
+│   ├── podcast/      # sérialisation du cours, script, normalisation TTS, client Piper, assemblage ffmpeg, pipeline
+│   └── media/        # supports visuels : normalisation/stockage (Pillow), résolveur (GET /media/{asset_id})
 ├── workers/          # worker de jobs podcast (python -m app.workers.podcast_worker)
 ├── cli.py            # CLI (python -m app.cli podcast ...)
 ├── main.py           # bootstrap FastAPI

@@ -61,6 +61,7 @@ from app.services.course_generator import (
 )
 from app.services.course_videos import attach_verified_videos
 from app.services.gemini_client import GeminiClient
+from app.services.media.visual_resolver import resolve_visuals
 from app.services.vector_store import NumpyVectorStore
 from app.services.visual_validation import visual_issues
 
@@ -622,10 +623,11 @@ async def generate_course_from_validated_plan(
         "unconfirmed_points": wrap_up.unconfirmed_points if wrap_up else [_WRAP_UP_FAILED_NOTE],
         "video_search_queries": wrap_up.video_search_queries if wrap_up else [],
     }
-    return await attach_verified_videos(
+    with_videos = await attach_verified_videos(
         _validate_and_map(structured, mode), settings, gemini_client,
         search_queries=structured["video_search_queries"], db_session_factory=db_session_factory,
     )
+    return await resolve_visuals(with_videos, settings=settings, db_session_factory=db_session_factory)
 
 
 # ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────

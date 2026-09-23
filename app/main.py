@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.media_routes import router as media_router
 from app.api.podcast_routes import router as podcast_router
 from app.api.review_routes import router as review_router
 from app.api.routes import router
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(podcast_router)
     app.include_router(review_router)
+    app.include_router(media_router)
     return app
 
 

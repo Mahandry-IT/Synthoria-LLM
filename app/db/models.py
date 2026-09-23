@@ -152,3 +152,32 @@ class CourseSectionNote(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+
+
+class MediaAsset(Base):
+    """Image ré-hébergée (jamais de hotlink) : téléchargée, ré-encodée, servie par `GET /media/{id}`.
+
+    `sha256` est unique : deux blocs qui résolvent vers la même image (même figure PDF réutilisée,
+    même image web) partagent une seule ligne (déduplication).
+    """
+
+    __tablename__ = "media_assets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # source | web | generated
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    mime: Mapped[str] = mapped_column(String(50), nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    alt_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    origin_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    author: Mapped[str | None] = mapped_column(Text, nullable=True)
+    license: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    license_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_filename: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_media_assets_created_at", created_at),)

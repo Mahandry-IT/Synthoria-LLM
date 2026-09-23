@@ -106,7 +106,7 @@ def test_regenerate_healthy_section_is_409(env):
 
 def test_regenerate_is_rate_limited(env):
     env.app.dependency_overrides[routes.get_settings] = lambda: SimpleNamespace(
-        course_regenerate_rate_limit_per_minute=1
+        course_regenerate_rate_limit_per_minute=1, media_resolve_concurrency=4
     )
     env.monkeypatch.setattr(routes, "regenerate_section", AsyncMock(return_value=_good_regenerated_section("x")))
     env.monkeypatch.setattr(routes.course_session_repository, "update_section", AsyncMock(return_value=env.row))
