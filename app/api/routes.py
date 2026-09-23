@@ -152,7 +152,7 @@ async def _ingest_single_pdf(
 
     try:
         content = await file.read()
-        chunks = extract_pdf_chunks(content, file.filename, settings)
+        chunks = await extract_pdf_chunks(content, file.filename, settings, request.app.state.gemini_client)
         if not chunks:
             return PDFIngestResponse(
                 status="error",

@@ -1,17 +1,13 @@
-import json
 import logging
 from pathlib import Path
 
 import fitz
 
+from app.core.exceptions import GeminiServiceError
+from app.services.gemini_client import GeminiClient
+
 logger = logging.getLogger(__name__)
 
-try:
-    from google import genai
-    from google.genai import types as genai_types
-except Exception:  # pragma: no cover - dépendance optionnelle
-    genai = None
-    genai_types = None
 
 def _load_vision_instructions() -> str:
     candidates = [
@@ -21,33 +17,23 @@ def _load_vision_instructions() -> str:
     for candidate in candidates:
         if candidate.exists():
             return candidate.read_text(encoding="utf-8")
-    return
+    return ""
 
-def _parse_json_response(raw_text: str) -> dict:
-    text = (raw_text or "").strip()
-    if not text:
-        return {"keep": False, "reason": "Réponse vide"}
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-    return {"keep": False, "reason": "Réponse invalide"}
 
-def extract_key_image_descriptions(pdf_bytes: bytes, api_key: str | None) -> list[str]:
-    """Retourne les descriptions des images clés d'un PDF après filtrage selon le fichier d'instruction Markdown."""
-    if not api_key or genai is None:
+async def extract_key_image_descriptions(pdf_bytes: bytes, gemini_client: GeminiClient | None) -> list[str]:
+    """Retourne les descriptions des images clés d'un PDF après filtrage selon le fichier d'instruction Markdown.
+
+    Passe par `gemini_client.describe_image` (modèle `gemini_model_flash_lite`, moins coûteux que
+    `flash`) : les appels sont donc espacés par le même rate limiter que le reste de l'application
+    (`app/services/gemini_rate_limit.py`) au lieu de partir en rafale non throttlée. Best-effort :
+    une image dont la description échoue (quota, indisponibilité) est simplement ignorée.
+    """
+    if gemini_client is None or not gemini_client.is_configured:
         return []
 
     instructions = _load_vision_instructions()
     descriptions: list[str] = []
     try:
-        client = genai.Client(api_key=api_key)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
         for page_index in range(min(len(doc), 5)):
@@ -66,14 +52,12 @@ def extract_key_image_descriptions(pdf_bytes: bytes, api_key: str | None) -> lis
                     logger.warning("image_extraction_failed page=%s img=%s error=%s", page_index + 1, img_index + 1, exc)
                     continue
 
-                image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=f"image/{image_ext}")
+                try:
+                    text = await gemini_client.describe_image(image_bytes, f"image/{image_ext}", instructions)
+                except GeminiServiceError as exc:
+                    logger.warning("gemini_vision_describe_failed page=%s img=%s error=%s", page_index + 1, img_index + 1, exc)
+                    continue
 
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=[image_part],
-                    config=genai_types.GenerateContentConfig(system_instruction=instructions),
-                )
-                text = getattr(response, "text", "")
                 if text and text.strip():
                     descriptions.append(f"Image page {page_index + 1} ({img_index + 1}): {text.strip()}")
                 else:

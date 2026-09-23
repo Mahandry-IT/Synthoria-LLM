@@ -81,6 +81,48 @@ async def test_format_structured_invalid_json_raises():
 
 
 @pytest.mark.asyncio
+async def test_describe_image_uses_flash_lite_model():
+    """L'extraction d'images (PDF) doit utiliser le modèle lite, moins coûteux que flash."""
+    response = SimpleNamespace(text="Une image décrivant un graphique.")
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    client = GeminiClient(settings, client=fake_client)
+
+    text = await client.describe_image(b"fake-bytes", "image/png", "system instruction")
+
+    assert text == "Une image décrivant un graphique."
+    fake_client.models.generate_content.assert_called_once()
+    assert fake_client.models.generate_content.call_args.kwargs["model"] == "flash-lite"
+
+
+@pytest.mark.asyncio
+async def test_describe_image_goes_through_rate_limiter_and_retries():
+    """Un 429 sur describe_image doit retenter comme n'importe quel autre appel Gemini."""
+    response = SimpleNamespace(text="ok")
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [Exception("429 RESOURCE_EXHAUSTED"), response]
+    client = GeminiClient(_settings(), client=fake_client)
+
+    text = await client.describe_image(b"fake-bytes", "image/png", "system")
+
+    assert text == "ok"
+    assert fake_client.models.generate_content.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_describe_image_raises_unavailable_without_api_key():
+    client = GeminiClient(Settings(gemini_api_key=None))
+
+    with pytest.raises(GeminiUnavailableError):
+        await client.describe_image(b"fake-bytes", "image/png", "system")
+
+
+def test_is_configured_reflects_api_key_presence():
+    assert GeminiClient(_settings()).is_configured is True
+    assert GeminiClient(Settings(gemini_api_key=None)).is_configured is False
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_retries_then_raises_unavailable():
     """Rate-limit persistant : retry sur flash (gemini_max_retries), puis
     cascade sur flash-lite qui échoue aussi (gemini_max_retries) -> Unavailable."""

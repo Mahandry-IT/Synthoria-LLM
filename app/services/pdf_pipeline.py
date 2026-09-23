@@ -6,6 +6,7 @@ import fitz
 
 from app.core.config import Settings
 from app.services.chunker import chunk_text
+from app.services.gemini_client import GeminiClient
 from app.services.gemini_vision import extract_key_image_descriptions
 
 try:
@@ -47,10 +48,12 @@ def _extract_tables_from_pdf(pdf_bytes: bytes) -> list[str]:
     return tables
 
 
-def extract_pdf_chunks(pdf_bytes: bytes, filename: str, settings: Settings) -> list[dict[str, Any]]:
+async def extract_pdf_chunks(
+    pdf_bytes: bytes, filename: str, settings: Settings, gemini_client: GeminiClient | None = None
+) -> list[dict[str, Any]]:
     text_pages = _extract_text_from_pdf(pdf_bytes)
     table_pages = _extract_tables_from_pdf(pdf_bytes)
-    image_descriptions = extract_key_image_descriptions(pdf_bytes, settings.gemini_api_key)
+    image_descriptions = await extract_key_image_descriptions(pdf_bytes, gemini_client)
     content_parts = text_pages + table_pages + image_descriptions
 
     chunks: list[dict[str, Any]] = []

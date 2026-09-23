@@ -161,7 +161,7 @@ MEDIA_MAX_BYTES=5242880
 
 > `DATABASE_URL` pointe vers le conteneur PostgreSQL du compose. Pour un dev local sans Docker, ajustez l'URL (ex. `postgresql+asyncpg://user:pass@localhost:5432/synthoria`).
 
-> `GEMINI_API_KEY` est optionnel. Sans clé, l'extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative.
+> `GEMINI_API_KEY` est optionnel. Sans clé, l'extraction des images clés est ignorée. Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative. Cette extraction (jusqu'à 5 pages, 2 images/page par PDF ingéré) passe par `GeminiClient.describe_image` (`gemini_model_flash_lite`, moins coûteux que `flash`) et par le même rate limiter que les autres appels Gemini (`GEMINI_RPM_LIMIT`) au lieu de partir en rafale — une image dont la description échoue (quota, indisponibilité) est simplement ignorée.
 
 ### Limite de débit Gemini (429 / RESOURCE_EXHAUSTED)
 
