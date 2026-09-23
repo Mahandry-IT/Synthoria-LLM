@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     course_plan_batch_size: int = 2
     course_plan_ttl_minutes: int = 120
     course_videos_enabled: bool = True
-    course_videos_max: int = 3
+    # Cible, jamais garantie : YouTube peut renvoyer moins de résultats pertinents que ce plancher.
+    course_videos_min: int = 5
+    course_videos_max: int = 10
     course_videos_verify_timeout_seconds: float = 5.0
     gemini_use_search_grounding: bool = True
     database_url: str = "postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria"
@@ -94,7 +96,7 @@ class Settings(BaseSettings):
     # Sans clé, comportement inchangé (repli sur le grounding Gemini + vérification oEmbed).
     youtube_api_key: SecretStr | None = None
     youtube_timeout_seconds: float = 5.0
-    youtube_search_max_results: int = 8
+    youtube_search_max_results: int = 10
     youtube_relevance_language: str = "fr"
     youtube_region_code: str = "FR"
     youtube_min_duration_seconds: int = 240
