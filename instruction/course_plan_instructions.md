@@ -33,7 +33,7 @@ Fill `pretest` with **exactly one question per `development` section**, using th
 ## Number of sections — driven by coverage
 
 - The number of `development` sections is driven by **full coverage of the topic**. Never stop at a target count while a sub-topic is still uncovered.
-- No minimum and no maximum number of `development` sections: **coverage decides**. Plan exactly what the topic needs, never pad with filler and never merge distinct concepts to stay under a number.
+- Minimum 6 `development` sections for any plan (6-8 for a simple/narrow topic, 10-15+ for a complex/broad one) — a floor, never a cap: plan exactly what the topic needs, add more when it has more distinct notions, never pad with filler and never merge distinct concepts to stay under a number.
 
 ## Content of each planned section
 

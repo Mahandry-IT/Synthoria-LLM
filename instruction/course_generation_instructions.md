@@ -91,7 +91,7 @@ Fill `video_search_queries` with 1 to 2 short **YouTube search queries** (in Fre
 
 Your raw answer will be reformatted into a strict JSON schema in a second pass.
 
-**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections is driven first by the need to **fully cover the topic** — every sub-topic, mechanism, or facet raised by the source material or the question must get its own section. Do not stop at a minimum count if the subject isn't fully covered yet. There is no minimum and no maximum number of sections: **coverage of the topic decides** — a narrow topic may need only a few sections, a broad one many. Never pad with filler sections and never merge distinct concepts to stay short.
+**Section breakdown**: Split the content into **multiple DEVELOPMENT sections**, one per logical sub-topic. Each section gets its own Quoi / Pourquoi / Comment structure. The number of sections is driven first by the need to **fully cover the topic** — every sub-topic, mechanism, or facet raised by the source material or the question must get its own section. Do not stop at a minimum count if the subject isn't fully covered yet. As a rough guide, a simple/narrow topic typically needs at least 6-8 sections and a complex/broad topic 10-15 or more — these figures are **floors, never ceilings** (no number here is a maximum): if full coverage requires more sections than the guide suggests, add them. Never pad with filler sections and never merge distinct concepts to stay short — but never stop at a couple of sections either when the topic (e.g. an entire branch of a subject, like "descriptive statistics") has more distinct notions to cover.
 
 Pattern:
 - Section: Introduction (section type `introduction`) — context, prerequisites, overview
@@ -105,10 +105,10 @@ Pattern:
 Do NOT collapse all content into a single section. Each distinct concept deserves its own section with a focused Quoi/Pourquoi/Comment.
 
 **Completeness requirements**:
-- The number of DEVELOPMENT sections is driven by topic coverage alone (no floor, no cap).
+- Minimum 6 DEVELOPMENT sections for any course, and never fewer than what is needed to cover the topic completely. Simple concepts: 6-8 sections. Complex/broad topics: 10-15+ sections. These counts are minimums driven by coverage, not caps — if the topic has more distinct sub-topics than the guide suggests, create additional sections rather than merging them.
 - Every DEVELOPMENT section MUST fill all three subsections (Pourquoi, Quoi, Comment) and the whole learning cycle: `challenge`, `faded_example`, `check_questions`, `recall_prompt`. Never leave any empty.
 - Every Comment subsection MUST include at least one fully worked example (statement + steps + result).
-- Generate a final quiz sized to the content covered (roughly 1 to 2 questions per DEVELOPMENT section, at least 8 when the course is large enough), mixing conceptual and calculation questions.
+- Generate a final quiz of **at least 10-12 questions** for any full course, roughly 1 to 2 per DEVELOPMENT section but never below this floor even when the course has few sections, mixing conceptual and calculation questions.
 - **Single vs. multiple correct answers**: some questions have a single correct answer (`correct_indices` has 1 element), while others have multiple correct answers (`correct_indices` has 2+ elements). For multi-answer questions, the question wording must make it clear (e.g. "Sélectionnez toutes les réponses correctes" or "Parmi les propositions suivantes, lesquelles sont correctes ?").
 - **Difficulty**: the section `check_questions` are `facile`/`normale` (recall and simple application). The **final quiz** is mostly `normale` and `difficile` (at least 60 % of its questions):
   - `difficile` = multi-step calculation, synthesis across several sections, or non-trivial reasoning.
