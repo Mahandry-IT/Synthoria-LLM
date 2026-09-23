@@ -92,15 +92,13 @@ def test_visual_issues():
     assert visual_issues(_section([long_text], type_="summary")) == []
 
 
-def test_visual_issues_image_block_never_satisfies_visual_first():
-    """IMAGE ne compte jamais comme le visuel de la règle : sa résolution peut échouer après coup
-    (app/services/media/visual_resolver.py) et retirer le bloc silencieusement."""
+def test_visual_issues_image_block_satisfies_visual_first_for_now():
+    """Tant qu'aucun résolveur d'images réel n'est branché (Lot 1 : tout bloc IMAGE est retiré),
+    IMAGE compte comme le visuel de la règle — sinon `_enforce_visual_first` regénère la section
+    via un appel Gemini payant qui ne peut de toute façon jamais aboutir à une image affichée.
+    À inverser une fois un résolveur réel branché (Lot 2/3/5, voir visual_validation.py)."""
     image_only = {"type": "image", "image_source": "web", "image_query": "chat noir"}
-    assert visual_issues(_section([image_only])) == [
-        "aucun bloc visuel (TABLE, LIST, DIAGRAM, CHART, FORMULA...)"
-    ]
-    visual = {"type": "list", "list_items": ["a"], "list_ordered": False}
-    assert visual_issues(_section([image_only, visual])) == []  # un autre vrai visuel suffit
+    assert visual_issues(_section([image_only])) == []
 
 
 @pytest.mark.asyncio

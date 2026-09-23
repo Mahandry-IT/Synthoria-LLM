@@ -12,10 +12,12 @@ TEXT_BLOCK_MAX_SENTENCES = 3
 
 _SENTENCE_END_RE = re.compile(r"[.!?…]+(?:\s|$)")
 _TEXTUAL = {BlockType.TEXT, BlockType.DEFINITION}
-# IMAGE ne compte jamais comme le bloc visuel de la règle : sa résolution (app/services/media/
-# visual_resolver.py) peut échouer et retirer le bloc après coup — la section ne doit pas dépendre
-# d'un visuel qui pourrait disparaître silencieusement.
-_NOT_A_VISUAL_GUARANTEE = _TEXTUAL | {BlockType.IMAGE}
+# TODO(supports visuels, Lot 2/3/5) : une fois un résolveur d'images réel branché
+# (app/services/media/visual_resolver.py), remettre IMAGE ici. Tant qu'aucun résolveur n'existe
+# (Lot 1), chaque bloc IMAGE est de toute façon retiré : l'exclure de cette règle ne fait ici que
+# déclencher un appel Gemini de régénération payant (_enforce_visual_first) sans jamais pouvoir
+# aboutir à une image réellement affichée — pur surcoût de quota tant que ce n'est pas le cas.
+_NOT_A_VISUAL_GUARANTEE = _TEXTUAL
 
 
 def _blocks(section: Section) -> list[ContentBlock]:
