@@ -682,6 +682,64 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "POST /courses/{session_id}/sections/{section_id}/regenerate",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/sections/{{sectionId}}/regenerate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "sections",
+                "{{sectionId}}",
+                "regenerate"
+              ]
+            },
+            "description": "Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération précédente), sans relancer tout le cours. Réponse : CourseSection mis à jour. 404 session/section inconnue, 409 la section n'est pas incomplète, 429 (6/min), 502/503 échec Gemini."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /courses/{session_id}/sections/{section_id}/note",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/sections/{{sectionId}}/note",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "sections",
+                "{{sectionId}}",
+                "note"
+              ]
+            },
+            "description": "Enregistre (ou efface avec une note vide) la note libre de l'apprenant sur une section, applicable à n'importe quelle section (≤ 2000 caractères, jamais générée par le modèle). Réponse : {note, updated_at}. 404 session/section inconnue, 422 trop longue, 429 (20/min).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"Revoir la partie sur les pertes par effet Joule.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         }
       ]
     }

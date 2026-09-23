@@ -49,6 +49,13 @@ _DEFAULT_PLAN_INSTRUCTIONS = (
 )
 _instructions_cache: dict[str, str] = {}
 
+# Marqueur d'une section de repli (génération en échec — voir course_plan_generator._incomplete_section)
+# et de son bloc "Comment" : partagé pour que la détection (mapping API, régénération) soit unique.
+INCOMPLETE_SECTION_NOTICE = (
+    "⚠️ Section incomplète : la génération de son contenu a échoué (erreur temporaire). "
+    "Relancez la génération du cours pour l'obtenir."
+)
+
 
 def _load_instruction(filename: str, fallback: str) -> str:
     """Charge (et met en cache) un fichier d'instructions Gemini, avec repli sur `fallback`."""
@@ -267,6 +274,27 @@ def _all_blocks(section: Section) -> list[Any]:
     return [*section.blocks, *(b for sub in section.subsections for b in sub.blocks)]
 
 
+def is_incomplete_section(section: Section) -> bool:
+    """Vrai si `section` est une section de repli (génération en échec, voir `_incomplete_section`)."""
+    return any(b.text == INCOMPLETE_SECTION_NOTICE for sub in section.subsections for b in sub.blocks)
+
+
+def is_incomplete_section_dict(section: dict[str, Any]) -> bool:
+    """Équivalent de `is_incomplete_section` sur une `CourseSection` déjà sérialisée (JSONB persisté).
+
+    Ne fait jamais confiance au seul champ `incomplete` stocké : une session persistée avant
+    l'existence de ce champ (ou de tout futur format de repli) ne l'aurait jamais eu calculé, alors
+    que son contenu est bien le texte de repli. Toujours recalculé depuis le contenu, à la lecture.
+    """
+    if section.get("comment", "").strip() == INCOMPLETE_SECTION_NOTICE:
+        return True
+    return any(
+        b.get("text") == INCOMPLETE_SECTION_NOTICE
+        for sub in section.get("subsections") or []
+        for b in sub.get("blocks") or []
+    )
+
+
 def _map_sections_to_course_sections(
     sections: list[Section],
     start_index: int = 0,
@@ -359,6 +387,7 @@ def _map_sections_to_course_sections(
                 faded_example=section.faded_example.model_dump(mode="json") if section.faded_example else None,
                 check_questions=[_map_quiz_question(q) for q in section.check_questions],
                 recall_prompt=section.recall_prompt.model_dump(mode="json") if section.recall_prompt else None,
+                incomplete=is_incomplete_section(section),
             ))
 
     return api_sections

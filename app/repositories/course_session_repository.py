@@ -64,3 +64,31 @@ async def get_by_id(
         select(CourseSession).where(CourseSession.id == session_id)
     )
     return result.scalar_one_or_none()
+
+
+async def update_section(
+    session: AsyncSession,
+    session_id: uuid.UUID,
+    section_id: str,
+    updated_section: dict[str, Any],
+) -> CourseSession | None:
+    """Remplace une section (par `id`) dans `gemini_response.sections`.
+
+    None si la session ou la section est introuvable. Réassigne tout le dict `gemini_response`
+    (plutôt qu'une mutation en place) : `Mapped[dict]` sans `MutableDict` ne détecterait pas une
+    mutation en place et ne la persisterait pas.
+    """
+    row = await get_by_id(session, session_id)
+    if row is None:
+        return None
+    sections = row.gemini_response.get("sections") or []
+    index = next((i for i, s in enumerate(sections) if str(s.get("id")) == section_id), None)
+    if index is None:
+        return None
+    row.gemini_response = {
+        **row.gemini_response,
+        "sections": [*sections[:index], updated_section, *sections[index + 1 :]],
+    }
+    await session.commit()
+    await session.refresh(row)
+    return row
