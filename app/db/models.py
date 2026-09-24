@@ -181,3 +181,23 @@ class MediaAsset(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("idx_media_assets_created_at", created_at),)
+
+
+class MediaQueryCache(Base):
+    """Cache d'une recherche d'image web (Wikimedia Commons / Openverse) par requête normalisée.
+
+    `asset_id` NULL = résultat négatif mis en cache (aucun candidat retenu) : un hit sur une ligne
+    à `asset_id` NULL retire le bloc sans nouvel appel réseau ni Gemini, au même titre qu'un hit
+    positif réutilise l'asset existant.
+    """
+
+    __tablename__ = "media_query_cache"
+
+    query_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("media_assets.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_media_query_cache_created_at", created_at),)

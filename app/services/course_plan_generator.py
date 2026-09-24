@@ -649,7 +649,9 @@ async def generate_course_from_validated_plan(
         _validate_and_map(structured, mode), settings, gemini_client,
         search_queries=structured["video_search_queries"], db_session_factory=db_session_factory,
     )
-    return await resolve_visuals(with_videos, settings=settings, db_session_factory=db_session_factory)
+    return await resolve_visuals(
+        with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
+    )
 
 
 # ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────

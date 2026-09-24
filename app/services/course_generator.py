@@ -1040,7 +1040,9 @@ async def generate_course_from_question(
             completed, settings, gemini_client,
             search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
         )
-        return await resolve_visuals(with_videos, settings=settings, db_session_factory=db_session_factory)
+        return await resolve_visuals(
+            with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
+        )
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -1081,4 +1083,6 @@ async def generate_course_from_question(
         completed, settings, gemini_client,
         search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
     )
-    return await resolve_visuals(with_videos, settings=settings, db_session_factory=db_session_factory)
+    return await resolve_visuals(
+        with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
+    )

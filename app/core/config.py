@@ -118,6 +118,25 @@ class Settings(BaseSettings):
     media_resolve_concurrency: int = 4
     media_resolve_timeout_seconds: float = 20.0
 
+    # Lot 3 : résolveur d'images web (Wikimedia Commons → Openverse).
+    media_web_enabled: bool = True
+    # Exigé par la politique Wikimedia (nom de l'app, URL du repo, contact) : résolveur désactivé si vide.
+    media_web_user_agent: str = ""
+    media_web_providers: list[str] = ["wikimedia", "openverse"]
+    media_web_max_candidates: int = 5
+    media_web_min_width: int = 400
+    media_web_allowed_licenses: list[str] = ["cc0", "pdm", "by", "by-sa"]
+    media_web_verify_enabled: bool = True
+    media_web_verify_min_score: int = 40
+    media_web_cache_ttl_hours: int = 168
+    media_web_timeout_seconds: float = 8.0
+    openverse_client_id: str | None = None
+    openverse_client_secret: SecretStr | None = None
+
+    @property
+    def media_web_cache_ttl(self) -> timedelta:
+        return timedelta(hours=self.media_web_cache_ttl_hours)
+
 
 @lru_cache
 def get_settings() -> Settings:

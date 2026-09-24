@@ -117,6 +117,47 @@ async def test_describe_image_raises_unavailable_without_api_key():
         await client.describe_image(b"fake-bytes", "image/png", "system")
 
 
+@pytest.mark.asyncio
+async def test_rank_images_sends_one_part_per_image_plus_prompt_uses_flash_lite():
+    response = SimpleNamespace(text='{"best_index": 1, "score": 80, "reason": "ok"}')
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    client = GeminiClient(settings, client=fake_client)
+
+    result = await client.rank_images(
+        [(b"img1", "image/webp"), (b"img2", "image/webp")],
+        "prompt texte",
+        system_instruction="system",
+        response_schema={"type": "object"},
+    )
+
+    assert result == {"best_index": 1, "score": 80, "reason": "ok"}
+    fake_client.models.generate_content.assert_called_once()
+    call = fake_client.models.generate_content.call_args
+    assert call.kwargs["model"] == "flash-lite"
+    contents = call.kwargs["contents"]
+    assert len(contents) == 3  # 2 images + le texte du prompt
+    assert contents[-1] == "prompt texte"
+
+
+@pytest.mark.asyncio
+async def test_rank_images_raises_invalid_response_on_non_json():
+    response = SimpleNamespace(text="not json")
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    client = GeminiClient(_settings(), client=fake_client)
+
+    with pytest.raises(GeminiInvalidResponseError):
+        await client.rank_images([(b"img", "image/webp")], "prompt", system_instruction="s", response_schema={})
+
+
+@pytest.mark.asyncio
+async def test_rank_images_raises_unavailable_without_api_key():
+    client = GeminiClient(Settings(gemini_api_key=None))
+
+    with pytest.raises(GeminiUnavailableError):
+        await client.rank_images([(b"img", "image/webp")], "prompt", system_instruction="s", response_schema={})
+
+
 def test_is_configured_reflects_api_key_presence():
     assert GeminiClient(_settings()).is_configured is True
     assert GeminiClient(Settings(gemini_api_key=None)).is_configured is False
