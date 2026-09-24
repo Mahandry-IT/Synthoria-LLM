@@ -61,3 +61,15 @@ class TTSInvalidVoiceError(TTSError):
 
 class AudioAssemblyError(Exception):
     """L'assemblage audio (ffmpeg) a échoué."""
+
+
+class MediaWebError(Exception):
+    """Erreur générique lors de la résolution d'une image web (Commons, Openverse)."""
+
+
+class MediaFetchRejected(MediaWebError):
+    """Téléchargement refusé avant toute lecture réseau : hôte hors liste blanche, IP privée, redirection interdite."""
+
+
+class MediaFetchTooLarge(MediaWebError):
+    """Le corps de la réponse dépasse `MEDIA_MAX_BYTES`, coupé en streaming avant lecture complète."""

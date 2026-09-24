@@ -18,6 +18,9 @@ services:
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
       MEDIA_STORAGE_DIR: /data/media
+      MEDIA_WEB_USER_AGENT: ${MEDIA_WEB_USER_AGENT:-}
+      OPENVERSE_CLIENT_ID: ${OPENVERSE_CLIENT_ID:-}
+      OPENVERSE_CLIENT_SECRET: ${OPENVERSE_CLIENT_SECRET:-}
     depends_on:
       ollama:
         condition: service_healthy

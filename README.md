@@ -190,11 +190,20 @@ Créer la clé : [Google Cloud Console](https://console.cloud.google.com/apis/cr
 Comme pour les vidéos, Gemini ne produit jamais d'URL ni de nom de fichier d'image (il en invente régulièrement) : un bloc `image` porte seulement une **intention** — `image_source` (`pdf` / `web` / `generated`), `image_query` (recherche web) ou `image_reference` (figure d'un PDF source), `image_alt` — résolue déterministiquement côté serveur (`app/services/media/visual_resolver.py`).
 
 - **Jamais de hotlink** : toute image retenue est téléchargée, vérifiée par sa signature réelle (pas par le `Content-Type` déclaré), ré-encodée en WebP (EXIF retiré, dimension bornée) et stockée localement (table `media_assets`, migration `008_add_media_assets`) ; le cours ne référence que `GET /media/{asset_id}`.
-- **Best-effort** : la résolution (téléchargement, re-recherche, génération) a un budget de temps et de concurrence dédié (`MEDIA_RESOLVE_TIMEOUT_SECONDS`, `MEDIA_RESOLVE_CONCURRENCY`) ; un bloc `image` dont la résolution échoue est simplement retiré du cours, jamais laissé sans image. À terme (une fois un résolveur par source réellement branché), un bloc `image` ne devra pas non plus compter comme le visuel de la règle « visuel d'abord » (`app/services/visual_validation.py`), puisque sa résolution peut échouer — désactivé pour l'instant (Lot 1 : aucun résolveur actif, ce contrôle ne ferait que payer un appel Gemini de régénération sans jamais pouvoir aboutir à une image affichée).
+- **Best-effort** : la résolution (téléchargement, re-recherche, génération) a un budget de temps et de concurrence dédié (`MEDIA_RESOLVE_TIMEOUT_SECONDS`, `MEDIA_RESOLVE_CONCURRENCY`) ; un bloc `image` dont la résolution échoue est simplement retiré du cours, jamais laissé sans image. À terme (une fois `pdf` et `generated` branchés aussi), un bloc `image` ne devra pas non plus compter comme le visuel de la règle « visuel d'abord » (`app/services/visual_validation.py`) — désactivé pour l'instant, ce contrôle ferait encore payer un appel Gemini de régénération pour les sources non branchées sans jamais pouvoir aboutir.
 - **Déduplication** : les images sont indexées par sha256 du contenu ré-encodé ; deux blocs qui résolvent vers la même image (même figure PDF réutilisée, même image web) partagent une seule ligne.
 - **Attribution** : les images sous licence CC BY / CC BY-SA affichent obligatoirement leur auteur et leur licence ; un bloc sans licence connue n'est pas retenu.
 
-Cette version (Lot 1 — fondations) pose le schéma, le stockage et le routage ; aucun résolveur par source n'est encore branché (`pdf`, `web`, `generated` retournent toujours « non résolu »), donc tout bloc `image` est retiré du cours pour le moment. Les lots suivants brancheront successivement les figures de PDF sources, la recherche d'images web (Wikimedia Commons puis Openverse) et la génération IA.
+Lot 1 (fondations) pose le schéma, le stockage et le routage. `pdf` (figures de PDF sources) et `generated` (génération IA) restent non branchés.
+
+**Lot 3 — images web (Wikimedia Commons → Openverse), actif** :
+- `image_source: "web"` avec une `image_query` déclenche une recherche Wikimedia Commons, puis Openverse seulement si Commons n'a pas fourni assez de candidats (`MEDIA_WEB_MAX_CANDIDATES`). Chaque candidat est téléchargé depuis un **hôte en liste blanche uniquement** (`upload.wikimedia.org`, `api.openverse.org` — jamais l'hôte d'origine d'une photo Openverse, ex. Flickr), filtré par licence (`MEDIA_WEB_ALLOWED_LICENSES`, ND/NC exclus par défaut) et taille minimale (`MEDIA_WEB_MIN_WIDTH`).
+- **Vérification de pertinence** : un appel Gemini Flash-Lite (`rank_images`) reçoit les miniatures déjà téléchargées + `image_alt`/`image_query`/le titre de section, et choisit la meilleure (ou aucune) — jamais l'URL des candidats, jamais leurs métadonnées traitées comme des instructions (`instruction/image_ranking_instructions.md`). Désactivable (`MEDIA_WEB_VERIFY_ENABLED=false`) : repli sur le premier candidat filtré.
+- **Cache** (`media_query_cache`, TTL `MEDIA_WEB_CACHE_TTL_HOURS`) : un résultat positif comme négatif est mis en cache par requête normalisée — un hit ne fait ni appel réseau ni appel Gemini.
+- `MEDIA_WEB_USER_AGENT` est **obligatoire** (nom de l'app, URL du repo, contact — exigé par la politique Wikimedia) : le résolveur reste inactif tant qu'il est vide.
+- `OPENVERSE_CLIENT_ID`/`OPENVERSE_CLIENT_SECRET` sont optionnels (quota anonyme sinon, ou repli automatique si l'authentification échoue).
+
+Les lots suivants brancheront les figures de PDF sources (Lot 2) et la génération IA (Lot 5).
 
 ## Développement local (sans Docker)
 
@@ -221,6 +230,7 @@ app/
 ├── services/         # Ollama, chunking, extraction PDF, vector store, Gemini Vision
 │   ├── podcast/      # sérialisation du cours, script, normalisation TTS, client Piper, assemblage ffmpeg, pipeline
 │   └── media/        # supports visuels : normalisation/stockage (Pillow), résolveur (GET /media/{asset_id})
+│       └── providers/  # fournisseurs d'images web (Wikimedia Commons, Openverse)
 ├── workers/          # worker de jobs podcast (python -m app.workers.podcast_worker)
 ├── cli.py            # CLI (python -m app.cli podcast ...)
 ├── main.py           # bootstrap FastAPI
@@ -232,6 +242,7 @@ instruction/
 ├── course_plan_instructions.md  # instructions LLM (plan de cours)
 ├── vision_instructions.md  # instructions système Gemini
 ├── podcast_script_instructions.md  # instructions LLM (script de podcast)
+├── image_ranking_instructions.md  # instructions LLM (vérification de pertinence des images web)
 docker/
 ├── piper/            # image du serveur TTS Piper
 migrations/

@@ -398,3 +398,40 @@ class GeminiClient:
 
         response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
         return getattr(response, "text", "") or ""
+
+    async def rank_images(
+        self, image_bytes_list: list[tuple[bytes, str]], prompt: str, *, system_instruction: str, response_schema: Any
+    ) -> dict:
+        """Appel structuré multimodal (images + texte) : vérifie la pertinence de candidats d'image.
+
+        `image_bytes_list` : une entrée `(bytes, mime_type)` par candidat numéroté dans `prompt`
+        (même ordre). `gemini_model_flash_lite` uniquement — jamais flash, ce jugement de
+        pertinence ne justifie pas le coût du modèle complet. Passe par `_call_with_retry` comme
+        tout appel Gemini (rate limiter, retry-backoff, timeout).
+        """
+        self._ensure_configured()
+        clean_schema = _strip_additional_properties(
+            response_schema.model_json_schema() if hasattr(response_schema, "model_json_schema") else response_schema
+        )
+        parts: list[Any] = [
+            types.Part.from_bytes(data=data, mime_type=mime) for data, mime in image_bytes_list
+        ]
+        parts.append(prompt)
+
+        def _run(model: str) -> Any:
+            return self._client.models.generate_content(
+                model=model,
+                contents=parts,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    response_json_schema=clean_schema,
+                ),
+            )
+
+        response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
+        text = getattr(response, "text", "") or ""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise GeminiInvalidResponseError(f"Réponse Gemini non-JSON: {exc}") from exc

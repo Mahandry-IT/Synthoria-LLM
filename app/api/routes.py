@@ -812,7 +812,9 @@ async def regenerate_course_section(
     mapped = _map_sections_to_course_sections([regenerated])
     if not mapped:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Section régénérée vide")
-    mapped = await resolve_visuals_in_sections(mapped, settings=settings, db_session_factory=session_factory)
+    mapped = await resolve_visuals_in_sections(
+        mapped, settings=settings, db_session_factory=session_factory, gemini_client=gemini_client,
+    )
     updated = mapped[0].model_copy(update={"id": section_id})
 
     async with session_factory() as db:
