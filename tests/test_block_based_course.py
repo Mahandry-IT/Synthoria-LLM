@@ -1,14 +1,7 @@
-from unittest.mock import AsyncMock
-
-import pytest
-
 from app.api.schemas import CourseSection
-from app.core.exceptions import GeminiUnavailableError
 from app.schemas.course_generation import Section
 from app.services.course_generator import _map_blocks, _map_sections_to_course_sections
-from app.services.course_plan_generator import _enforce_visual_first
 from app.services.visual_validation import visual_issues
-from app.api.schemas import ApiPlannedSection
 
 
 def _section(blocks: list[dict], type_: str = "development", title: str = "S") -> Section:
@@ -94,43 +87,9 @@ def test_visual_issues():
 
 def test_visual_issues_image_block_satisfies_visual_first_for_now():
     """Tant qu'aucun résolveur d'images réel n'est branché (Lot 1 : tout bloc IMAGE est retiré),
-    IMAGE compte comme le visuel de la règle — sinon `_enforce_visual_first` regénère la section
-    via un appel Gemini payant qui ne peut de toute façon jamais aboutir à une image affichée.
-    À inverser une fois un résolveur réel branché (Lot 2/3/5, voir visual_validation.py)."""
+    IMAGE compte comme le visuel de la règle — sinon la réparation de complétude (voir
+    `test_course_plan_completeness.py`) regénère la section via un appel Gemini payant qui ne peut
+    de toute façon jamais aboutir à une image affichée. À inverser une fois un résolveur réel
+    branché (Lot 2/3/5, voir visual_validation.py)."""
     image_only = {"type": "image", "image_source": "web", "image_query": "chat noir"}
     assert visual_issues(_section([image_only])) == []
-
-
-@pytest.mark.asyncio
-async def test_enforce_visual_first_regenerates_only_flagged_sections():
-    bad = _section([{"type": "text", "text": "Juste du texte."}], title="A")
-    good = _section([{"type": "text", "text": "Ok."}, {"type": "list", "list_items": ["x"]}], title="B")
-    batch = [
-        ApiPlannedSection(type="development", title="A", objective="", subtopics=[], order=1),
-        ApiPlannedSection(type="development", title="B", objective="", subtopics=[], order=2),
-    ]
-    fixed = _section([{"type": "text", "text": "Ok."}, {"type": "diagram",
-                                                         "diagram": {"kind": "flowchart", "mermaid": "flowchart TD; A-->B"}}], title="A")
-    client = AsyncMock()
-    client.format_structured.return_value = {"sections": [fixed.model_dump(mode="json")]}
-
-    result = await _enforce_visual_first(
-        [bad, good], batch, question="q", mode="question_only", context_block="c", outline="o", gemini_client=client
-    )
-
-    assert client.format_structured.await_count == 1
-    assert visual_issues(result[0]) == [] and result[1] is good
-
-
-@pytest.mark.asyncio
-async def test_enforce_visual_first_keeps_original_on_failure():
-    bad = _section([{"type": "text", "text": "Juste du texte."}], title="A")
-    batch = [ApiPlannedSection(type="development", title="A", objective="", subtopics=[], order=1)]
-    client = AsyncMock()
-    client.format_structured.side_effect = GeminiUnavailableError("indisponible")
-
-    result = await _enforce_visual_first(
-        [bad], batch, question="q", mode="m", context_block="c", outline="o", gemini_client=client
-    )
-
-    assert result == [bad]

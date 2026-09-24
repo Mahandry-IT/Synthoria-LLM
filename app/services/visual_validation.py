@@ -15,8 +15,9 @@ _TEXTUAL = {BlockType.TEXT, BlockType.DEFINITION}
 # TODO(supports visuels, Lot 2/3/5) : une fois un résolveur d'images réel branché
 # (app/services/media/visual_resolver.py), remettre IMAGE ici. Tant qu'aucun résolveur n'existe
 # (Lot 1), chaque bloc IMAGE est de toute façon retiré : l'exclure de cette règle ne fait ici que
-# déclencher un appel Gemini de régénération payant (_enforce_visual_first) sans jamais pouvoir
-# aboutir à une image réellement affichée — pur surcoût de quota tant que ce n'est pas le cas.
+# déclencher un appel Gemini de régénération payant (_repair_incomplete_sections dans
+# course_plan_generator.py) sans jamais pouvoir aboutir à une image réellement affichée — pur
+# surcoût de quota tant que ce n'est pas le cas.
 _NOT_A_VISUAL_GUARANTEE = _TEXTUAL
 
 

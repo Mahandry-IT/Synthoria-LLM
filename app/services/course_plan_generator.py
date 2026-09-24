@@ -316,72 +316,50 @@ async def _generate_batch(
         response_schema=SectionsBatchSchema,
     )
     aligned = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, batch)
-    filled = await _fill_subtopic_gaps(
+    repaired = await _repair_incomplete_sections(
         aligned, batch, question=question, mode=mode, context_block=context_block,
         outline=outline, gemini_client=gemini_client,
     )
-    return await _enforce_visual_first(
-        filled, batch, question=question, mode=mode, context_block=context_block,
-        outline=outline, gemini_client=gemini_client,
-    )
+    return _finalize_incomplete(repaired, batch)
 
 
-async def _enforce_visual_first(
-    sections: list[Section],
-    batch: list[ApiPlannedSection],
-    *,
-    question: str,
-    mode: str,
-    context_block: str,
-    outline: str,
-    gemini_client: GeminiClient,
-) -> list[Section]:
-    """Régénère UNE fois les seules sections peu visuelles du lot (jamais le cours entier).
+_DEVELOPMENT_SUBSECTIONS = ("Pourquoi", "Quoi", "Comment")
 
-    Le remplaçant n'est retenu que s'il a strictement moins de problèmes ; en cas d'échec,
-    la section d'origine est conservée.
-    """
-    flagged = {
-        i: issues
-        for i, s in enumerate(sections)
-        if not is_incomplete_section(s) and (issues := visual_issues(s))
-    }
-    if not flagged:
-        return sections
 
-    logger.info(
-        "course_section_not_visual",
-        extra={"sections": {batch[i].title: issues for i, issues in flagged.items()}},
-    )
-    targets = [batch[i] for i in flagged]
-    requirements = "\n".join(f"- « {batch[i].title} » : {' ; '.join(issues)}" for i, issues in flagged.items())
-    prompt = (
-        f'mode="{mode}"\n'
-        f"Question de l'utilisateur : {question}\n\n"
-        f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
-        f"--- Plan complet validé (ne développe PAS les sections hors lot) ---\n{outline}\n\n"
-        f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True)}\n\n"
-        "Une première version de ces sections était trop textuelle :\n"
-        f"{requirements}\n\n"
-        f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre, avec au moins un "
-        "bloc visuel (TABLE, LIST, DIAGRAM, CHART ou FORMULA) par section et des blocs TEXT de 3 phrases maximum."
-    )
-    try:
-        structured = await gemini_client.format_structured(
-            raw_answer=prompt,
-            system_instruction=_get_teacher_instructions(),
-            response_schema=SectionsBatchSchema,
-        )
-        replacements = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, targets)
-    except (GeminiServiceError, ValidationError) as exc:
-        logger.warning("course_section_visual_regen_failed", extra={"error": str(exc)})
-        return sections
+def _structural_gaps(section: Section) -> list[str]:
+    """Sous-sections Pourquoi/Quoi/Comment sans aucun bloc — jamais détecté avant : `_has_content`
+    n'exige qu'un bloc *quelque part* dans la section, pas dans chacune des trois sous-sections
+    exigées par les instructions."""
+    with_blocks = {sub.title for sub in section.subsections if sub.blocks}
+    return [name for name in _DEVELOPMENT_SUBSECTIONS if name not in with_blocks]
 
-    result = list(sections)
-    for (index, issues), new in zip(flagged.items(), replacements):
-        if _has_content(new) and len(visual_issues(new)) < len(issues):
-            result[index] = new
-    return result
+
+def _section_text(section: Section) -> str:
+    """Concatène tout le texte exploitable d'une section (blocs texte, tableaux, formules, légendes,
+    diagrammes, graphiques) — utilisé pour la vérification déterministe de couverture (repli quand
+    `covered_subtopics` n'a pas été rempli par le modèle)."""
+    parts: list[str] = []
+    for sub in section.subsections:
+        for b in sub.blocks:
+            if b.text:
+                parts.append(b.text)
+            if b.image_caption:
+                parts.append(b.image_caption)
+            if b.table:
+                parts.append(b.table.caption)
+                parts.extend(b.table.headers)
+                for row in b.table.rows:
+                    parts.extend(row)
+            if b.formula:
+                parts.append(b.formula.latex)
+                if b.formula.description:
+                    parts.append(b.formula.description)
+            if b.diagram:
+                parts.append(b.diagram.caption)
+            if b.chart:
+                parts.append(b.chart.caption)
+                parts.extend(b.chart.labels)
+    return " ".join(parts)
 
 
 def _norm(text: str) -> str:
@@ -392,24 +370,52 @@ def _norm(text: str) -> str:
 
 
 def _missing_subtopics(section: Section, planned: ApiPlannedSection) -> list[str]:
-    """Sous-thèmes du plan que la section ne déclare pas avoir développés.
+    """Sous-thèmes du plan que la section ne traite pas.
 
-    Renvoie [] quand la section ne déclare rien (section « incomplète » de repli, ou
-    modèle n'ayant pas rempli `covered_subtopics`) : sans information, on ne
-    déclenche pas de régénération coûteuse.
+    Priorité à la déclaration du modèle (`covered_subtopics`, plus fiable qu'un mot-clé). Si elle
+    n'a pas été remplie mais que la section a du contenu, repli sur une vérification déterministe
+    du texte réel — auparavant l'absence de déclaration désactivait purement le contrôle, laissant
+    passer des sous-thèmes jamais traités. Une section sans aucun contenu (échec de génération,
+    repli déjà marqué incomplet) ne déclenche jamais ce contrôle coûteux.
     """
-    declared = [_norm(s) for s in section.covered_subtopics if s.strip()]
-    if not declared:
+    if not _has_content(section):
         return []
-    return [
-        topic
-        for topic in planned.subtopics
-        if not any(_norm(topic) in d or d in _norm(topic) for d in declared)
-    ]
+    declared = [_norm(s) for s in section.covered_subtopics if s.strip()]
+    if declared:
+        return [
+            topic
+            for topic in planned.subtopics
+            if not any(_norm(topic) in d or d in _norm(topic) for d in declared)
+        ]
+    content = _norm(_section_text(section))
+    missing = []
+    for topic in planned.subtopics:
+        words = [w for w in _norm(topic).split() if len(w) >= 4]
+        if words and sum(1 for w in words if w in content) / len(words) < 0.5:
+            missing.append(topic)
+    return missing
 
 
-async def _fill_subtopic_gaps(
-    aligned: list[Section],
+def _completeness_issues(section: Section, planned: ApiPlannedSection) -> list[str]:
+    """Tous les problèmes de complétude d'une section par rapport au plan : sous-section
+    Pourquoi/Quoi/Comment vide, sous-thème du plan non traité, absence de bloc visuel. Une section
+    de repli déjà marquée incomplète (voir `is_incomplete_section`) n'est jamais re-signalée ici :
+    son remplacement relève de la régénération explicite par l'apprenant, pas de cette boucle."""
+    if is_incomplete_section(section):
+        return []
+    issues = [f"sous-section « {name} » vide, à écrire" for name in _structural_gaps(section)]
+    missing_topics = _missing_subtopics(section, planned)
+    if missing_topics:
+        issues.append("sous-thèmes non traités : " + " ; ".join(missing_topics))
+    issues.extend(visual_issues(section))
+    return issues
+
+
+_MAX_REPAIR_ATTEMPTS = 2
+
+
+async def _repair_incomplete_sections(
+    sections: list[Section],
     batch: list[ApiPlannedSection],
     *,
     question: str,
@@ -418,58 +424,71 @@ async def _fill_subtopic_gaps(
     outline: str,
     gemini_client: GeminiClient,
 ) -> list[Section]:
-    """Régénère UNE fois les sections dont des sous-thèmes du plan ne sont pas traités.
+    """Répare les sections du lot ayant des `_completeness_issues`, dans la limite de
+    `_MAX_REPAIR_ATTEMPTS` appels Gemini (jamais une boucle illimitée — coût de quota borné).
 
-    Un seul appel Gemini par lot, limité aux sections incomplètes. Le remplaçant n'est
-    retenu que s'il manque strictement moins de sous-thèmes ; en cas d'échec, la
-    section d'origine est conservée (la génération ne doit jamais échouer ici).
+    S'arrête dès que le lot est complet. Un remplaçant n'est retenu que s'il a strictement moins
+    de problèmes que l'original ; en cas d'échec Gemini, les sections en cours sont conservées
+    telles quelles. Les sections encore incomplètes après la dernière tentative restent gérées par
+    `_finalize_incomplete` (jamais livrées silencieusement avec des trous).
     """
-    gaps = {
-        i: missing
-        for i, (section, planned) in enumerate(zip(aligned, batch))
-        if (missing := _missing_subtopics(section, planned))
-    }
-    if not gaps:
-        return aligned
+    current = list(sections)
+    for attempt in range(_MAX_REPAIR_ATTEMPTS):
+        flagged = {
+            i: issues
+            for i, (s, planned) in enumerate(zip(current, batch))
+            if (issues := _completeness_issues(s, planned))
+        }
+        if not flagged:
+            break
 
-    logger.info(
-        "course_plan_subtopic_gaps",
-        extra={"sections": {batch[i].title: len(m) for i, m in gaps.items()}},
-    )
-    targets = [batch[i] for i in gaps]
-    requirements = "\n".join(
-        f"- « {batch[i].title} » — sous-thèmes NON traités à développer explicitement : " + " ; ".join(missing)
-        for i, missing in gaps.items()
-    )
-    prompt = (
-        f'mode="{mode}"\n'
-        f"Question de l'utilisateur : {question}\n\n"
-        f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
-        f"--- Plan complet validé (ne développe PAS les sections hors lot) ---\n{outline}\n\n"
-        f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True)}\n\n"
-        "Une première version de ces sections omettait ou survolait certains sous-thèmes :\n"
-        f"{requirements}\n\n"
-        f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre, couvrant "
-        "TOUS les sous-thèmes listés (y compris ceux ci-dessus, expliqués en détail avec éléments concrets), "
-        "et renseigne `covered_subtopics`."
-    )
-    try:
-        structured = await gemini_client.format_structured(
-            raw_answer=prompt,
-            system_instruction=_get_teacher_instructions(),
-            response_schema=SectionsBatchSchema,
+        logger.info(
+            "course_section_incomplete",
+            extra={"attempt": attempt + 1, "sections": {batch[i].title: issues for i, issues in flagged.items()}},
         )
-        replacements = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, targets)
-    except (GeminiServiceError, ValidationError) as exc:
-        logger.warning("course_plan_subtopic_regen_failed", extra={"error": str(exc)})
-        return aligned
+        targets = [batch[i] for i in flagged]
+        requirements = "\n".join(f"- « {batch[i].title} » : {' ; '.join(issues)}" for i, issues in flagged.items())
+        prompt = (
+            f'mode="{mode}"\n'
+            f"Question de l'utilisateur : {question}\n\n"
+            f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
+            f"--- Plan complet validé (ne développe PAS les sections hors lot) ---\n{outline}\n\n"
+            f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True)}\n\n"
+            "Une première version de ces sections avait des lacunes :\n"
+            f"{requirements}\n\n"
+            f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre : remplis "
+            "TOUTES les sous-sections Pourquoi/Quoi/Comment (jamais vide), couvre en détail tous les sous-thèmes "
+            "listés, inclus au moins un bloc visuel (TABLE, LIST, DIAGRAM, CHART ou FORMULA) et renseigne "
+            "`covered_subtopics`."
+        )
+        try:
+            structured = await gemini_client.format_structured(
+                raw_answer=prompt,
+                system_instruction=_get_teacher_instructions(),
+                response_schema=SectionsBatchSchema,
+            )
+            replacements = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, targets)
+        except (GeminiServiceError, ValidationError) as exc:
+            logger.warning("course_section_repair_failed", extra={"attempt": attempt + 1, "error": str(exc)})
+            break
 
-    result = list(aligned)
-    for (index, missing), new in zip(gaps.items(), replacements):
-        still_missing = _missing_subtopics(new, batch[index])
-        if _has_content(new) and len(still_missing) < len(missing):
-            result[index] = new
-    return result
+        updated = list(current)
+        for (index, issues), new in zip(flagged.items(), replacements):
+            if _has_content(new) and len(_completeness_issues(new, batch[index])) < len(issues):
+                updated[index] = new
+        current = updated
+    return current
+
+
+def _finalize_incomplete(sections: list[Section], batch: list[ApiPlannedSection]) -> list[Section]:
+    """Filet de sécurité sans appel Gemini supplémentaire : toute section encore incomplète après
+    la boucle de réparation bornée devient une section de repli visiblement incomplète (même
+    convention que `_align_batch_sections` — voir `is_incomplete_section`), au lieu d'être livrée
+    silencieusement avec des trous. L'apprenant la régénère lui-même (`POST .../regenerate`)."""
+    return [
+        section if not _completeness_issues(section, planned) else _incomplete_section(planned)
+        for section, planned in zip(sections, batch)
+    ]
 
 
 async def _generate_wrap_up(
