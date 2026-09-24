@@ -32,7 +32,12 @@ def _planned(order: int, type_: str, title: str, subtopics: list[str] | None = N
         "type": type_,
         "title": title,
         "objective": f"Objectif de {title}",
-        "subtopics": subtopics or ["notion a", "notion b"],
+        # Vide par défaut : `_dev_section` ne déclare jamais `covered_subtopics` et son contenu
+        # générique ("quoi <titre>"...) ne développe aucun sous-thème réel — avec un défaut non
+        # vide, le repli déterministe de `_missing_subtopics` (à raison) le signalerait toujours
+        # incomplet. Les tests qui exercent spécifiquement la détection de sous-thèmes passent
+        # leur propre liste.
+        "subtopics": subtopics or [],
         "order": order,
     }
 
@@ -354,7 +359,11 @@ async def test_from_plan_regenerates_section_with_uncovered_subtopics(settings):
 
 
 @pytest.mark.asyncio
-async def test_from_plan_keeps_original_when_regeneration_fails(settings):
+async def test_from_plan_marks_section_incomplete_when_repair_fails_and_gap_remains(settings):
+    """Un sous-thème du plan reste non traité et la tentative de réparation échoue (Gemini
+    indisponible) : la section n'est plus renvoyée telle quelle avec son trou silencieux (ancien
+    comportement) mais remplacée par le filet de sécurité `_finalize_incomplete` — visiblement
+    incomplète, régénérable par l'apprenant."""
     sections = [
         ApiPlannedSection(**_planned(1, "introduction", "Introduction")),
         ApiPlannedSection(**_planned(2, "development", "Normes", ["ISO 14001", "ISO 50001"])),
@@ -381,7 +390,7 @@ async def test_from_plan_keeps_original_when_regeneration_fails(settings):
     result = await generate_course_from_validated_plan(_plan_row(), sections, client, settings)
 
     normes = next(s for s in result.sections if s.title == "Normes")
-    assert normes.quoi == "quoi Normes"
+    assert normes.incomplete is True
 
 
 def test_align_batch_sections_pads_missing_with_incomplete_placeholder():
