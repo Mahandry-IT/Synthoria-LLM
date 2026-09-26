@@ -276,5 +276,3 @@ Chaque question de quiz dans `CourseGenerationResponse.quiz` suit ce schéma :
 | `difficulty` | `"facile"` / `"normale"` / `"difficile"` | Niveau de difficulté. Répartition calculée : difficile = round(N/2), normale = round(N/4), facile = N − les deux. Réessayé puis rééquilibré automatiquement si Gemini échoue. |
 | `points` | `float` | Points alloués (calculé côté serveur). Total = 20/20, borne min 0.5 |
 | `time_limit_seconds` | `int` | 45s par défaut, 80s si la question implique un calcul |
-
-> **⚠️ Breaking change** : `correct_option_index` (int) a été remplacé par `correct_option_indices` (list[int]). Mettre à jour le frontend en conséquence.
