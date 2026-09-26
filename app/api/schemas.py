@@ -247,6 +247,9 @@ class CourseVideo(BaseModel):
     category: str | None = Field(None, description="Catégorie pédagogique (V2 : classement Gemini).")
     level: str | None = Field(None, description="Niveau estimé (V2 : classement Gemini).")
     relevance_reason: str | None = Field(None, description="Pourquoi cette vidéo a été retenue (V2).")
+    note: str = Field(
+        "", description="Note libre de l'apprenant sur cette vidéo (pense-bête, idées) ; jamais générée par le modèle."
+    )
 
 
 class ApiFadedExample(BaseModel):
@@ -569,6 +572,20 @@ class SectionNoteRequest(BaseModel):
 
 
 class SectionNoteResponse(BaseModel):
+    note: str
+    updated_at: str
+
+
+class VideoNoteRequest(BaseModel):
+    note: str = Field("", max_length=2000, description="Note libre de l'apprenant ; chaîne vide pour l'effacer.")
+
+    @field_validator("note")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+
+class VideoNoteResponse(BaseModel):
     note: str
     updated_at: str
 

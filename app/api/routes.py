@@ -40,6 +40,8 @@ from app.api.schemas import (
     RefineSectionRequest,
     SectionNoteRequest,
     SectionNoteResponse,
+    VideoNoteRequest,
+    VideoNoteResponse,
 )
 from app.core.config import Settings, get_settings
 from app.core.rate_limit import SlidingWindowLimiter
@@ -50,7 +52,12 @@ from app.core.exceptions import (
     OllamaModelNotFoundError,
     OllamaUnavailableError,
 )
-from app.repositories import course_plan_repository, course_section_note_repository, course_session_repository
+from app.repositories import (
+    course_plan_repository,
+    course_section_note_repository,
+    course_session_repository,
+    course_video_note_repository,
+)
 from app.schemas.course_generation import CoursePlanSchema, SectionType
 from app.services.course_generator import (
     _map_quiz_question,
@@ -586,6 +593,16 @@ async def get_course_plan(request: Request, plan_id: UUID) -> CoursePlanDetail:
     )
 
 
+@router.delete("/courses/plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_course_plan(request: Request, plan_id: UUID) -> None:
+    """Supprime un plan proposé. 404 si inconnu (un plan expiré peut être supprimé)."""
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        deleted = await course_plan_repository.delete(db, plan_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plan introuvable")
+
+
 @router.post("/courses/generate/from-plan", response_model=CourseGenerationResponse)
 async def generate_course_from_plan(
     request: Request,
@@ -674,15 +691,17 @@ async def get_course_history(
     session_id: UUID,
     request: Request,
 ) -> CourseHistoryDetail:
-    """Détail d'une session de cours (404 si introuvable). Les notes de l'apprenant (table séparée,
-    jamais générées) sont fusionnées dans `gemini_response.sections[].note`, et `incomplete` est
-    recalculé depuis le contenu (jamais la seule valeur stockée, qui peut dater d'avant ce champ)."""
+    """Détail d'une session de cours (404 si introuvable). Les notes de l'apprenant (tables séparées,
+    jamais générées) sont fusionnées dans `gemini_response.sections[].note` et
+    `gemini_response.videos[].note`, et `incomplete` est recalculé depuis le contenu (jamais la
+    seule valeur stockée, qui peut dater d'avant ce champ)."""
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         row = await course_session_repository.get_by_id(db, session_id)
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
         notes = await course_section_note_repository.get_for_session(db, session_id)
+        video_notes = await course_video_note_repository.get_for_session(db, session_id)
 
     gemini_response = row.gemini_response
     if gemini_response.get("sections"):
@@ -697,6 +716,13 @@ async def get_course_history(
                 for s in gemini_response["sections"]
             ],
         }
+    if gemini_response.get("videos"):
+        gemini_response = {
+            **gemini_response,
+            "videos": [
+                {**v, "note": video_notes.get(v.get("video_id"), "")} for v in gemini_response["videos"]
+            ],
+        }
 
     return CourseHistoryDetail(
         id=row.id,
@@ -706,6 +732,17 @@ async def get_course_history(
         mode=row.mode,
         gemini_response=gemini_response,
     )
+
+
+@router.delete("/courses/history/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_course_history(session_id: UUID, request: Request) -> None:
+    """Supprime une session de cours et tout son contenu associé (podcast, révisions de
+    flashcards, notes de section/vidéo — cascade via les FK). 404 si introuvable."""
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        deleted = await course_session_repository.delete(db, session_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
 
 
 def _limit_recall(request: Request, settings: Settings = Depends(get_settings)) -> None:
@@ -860,3 +897,31 @@ async def save_section_note(
 
         saved = await course_section_note_repository.upsert(db, session_id, section_id, body.note)
     return SectionNoteResponse(note=saved.note, updated_at=saved.updated_at.isoformat())
+
+
+@router.put(
+    "/courses/{session_id}/videos/{video_id}/note",
+    response_model=VideoNoteResponse,
+    dependencies=[Depends(_limit_note)],
+)
+async def save_video_note(
+    session_id: UUID,
+    video_id: str,
+    body: VideoNoteRequest,
+    request: Request,
+) -> VideoNoteResponse:
+    """Enregistre (ou efface, avec une note vide) la note libre de l'apprenant sur une vidéo.
+
+    404 si la session ou la vidéo n'existe pas ; 429 au-delà de `course_note_rate_limit_per_minute`
+    (limite partagée avec les notes de section).
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+        if not any(v.get("video_id") == video_id for v in (row.gemini_response.get("videos") or [])):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vidéo introuvable")
+
+        saved = await course_video_note_repository.upsert(db, session_id, video_id, body.note)
+    return VideoNoteResponse(note=saved.note, updated_at=saved.updated_at.isoformat())

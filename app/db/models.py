@@ -154,6 +154,26 @@ class CourseSectionNote(Base):
     )
 
 
+class CourseVideoNote(Base):
+    """Note libre de l'apprenant sur une vidéo YouTube d'un cours persisté (pense-bête, idées).
+
+    Même principe que `CourseSectionNote` : table séparée, jamais écrite par la génération. Les
+    vidéos n'ont pas d'id propre en base (elles vivent dans `gemini_response.videos`, JSONB) ; on
+    clé donc sur `video_id`, l'id YouTube, déjà dédupliqué par session à l'attache des vidéos.
+    """
+
+    __tablename__ = "course_video_notes"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    video_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
 class MediaAsset(Base):
     """Image ré-hébergée (jamais de hotlink) : téléchargée, ré-encodée, servie par `GET /media/{id}`.
 

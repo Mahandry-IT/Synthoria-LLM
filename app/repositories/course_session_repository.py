@@ -66,6 +66,20 @@ async def get_by_id(
     return result.scalar_one_or_none()
 
 
+async def delete(session: AsyncSession, session_id: uuid.UUID) -> bool:
+    """Supprime une session de cours (les jobs podcast, révisions de flashcards et notes de
+    section/vidéo liés sont supprimés en cascade par les FK `ON DELETE CASCADE`).
+
+    Retourne False si la session est déjà absente.
+    """
+    row = await get_by_id(session, session_id)
+    if row is None:
+        return False
+    await session.delete(row)
+    await session.commit()
+    return True
+
+
 async def update_section(
     session: AsyncSession,
     session_id: uuid.UUID,
