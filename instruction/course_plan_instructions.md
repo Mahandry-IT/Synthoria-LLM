@@ -41,7 +41,7 @@ For every section provide **structure only**:
 
 - `title`: a real, precise, thematic title. **Forbidden**: generic titles such as "Contenu complémentaire", "Suite", "Divers", "Autres notions".
 - `objective`: one or two sentences — what the learner must understand or be able to do after the section.
-- `subtopics`: the specific notions, mechanisms, formulas or cases the section will have to develop (3-8 items for a `development` section).
+- `subtopics`: the specific notions, mechanisms, formulas, pitfalls, takeaways or follow-up topics the section will have to cover — **at least 7 items, for every section regardless of its type** (`introduction`, `development`, `common_pitfalls`, `summary`, `next_steps`), up to 20. Each item must be a genuinely distinct point grounded in the context or the question; never pad the list with rewordings, trivial variants or near-duplicates of the same point just to reach the count. If a `development` section's real scope truly cannot sustain 7 distinct notions, split it into two narrower `development` sections instead of listing filler.
 - `order`: 1-based position, consecutive, following the dependency order.
 
 **Never write Quoi / Pourquoi / Comment content, worked examples or quiz questions at this stage.**

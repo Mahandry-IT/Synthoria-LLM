@@ -874,8 +874,8 @@ async def _refreshed_next_steps(
                 raw_answer=(
                     f"Question de l'utilisateur : {question}\n\n"
                     f"Plan courant :\n{_format_sections([*current_sections, *created], detailed=False)}\n\n"
-                    "Propose 3 à 5 pistes « Pour aller plus loin » NOUVELLES uniquement : aucune ne doit reprendre "
-                    "un sujet déjà présent dans ce plan. Retourne le JSON selon le schéma fourni."
+                    "Propose au moins 7 pistes « Pour aller plus loin » (jusqu'à 20) NOUVELLES uniquement : aucune ne "
+                    "doit reprendre un sujet déjà présent dans ce plan. Retourne le JSON selon le schéma fourni."
                 ),
                 system_instruction=_get_plan_instructions(),
                 response_schema=NextStepsSchema,
@@ -929,11 +929,12 @@ async def generate_more_sections(
         f"--- Plan actuel (ne PAS répéter ces sections) ---\n{_format_sections(current_sections, detailed=False)}\n\n"
         f"--- Pistes « Pour aller plus loin » à développer ---\n{leads}\n\n"
         f"Crée de 3 à {_MORE_SECTIONS_MAX} NOUVELLES sections de type development qui développent ces pistes : "
-        "titres thématiques précis (jamais génériques), objectif, 3 à 8 sous-thèmes chacune, ordonnées par "
+        "titres thématiques précis (jamais génériques), objectif, au moins 7 sous-thèmes chacune (jusqu'à 20, "
+        "sans remplissage : une notion distincte par sous-thème), ordonnées par "
         "dépendances logiques. Structure uniquement, aucun contenu rédigé. "
         "Mets ensuite à jour la section « Pour aller plus loin » (champ `next_steps`) : ces pistes viennent d'être "
-        "transformées en sections, propose donc 3 à 5 NOUVELLES pistes qui prolongent le plan APRÈS ces sections, "
-        "sans reprendre aucune piste ni aucun sujet déjà présent dans le plan. "
+        "transformées en sections, propose donc au moins 7 NOUVELLES pistes (jusqu'à 20, sans remplissage) qui "
+        "prolongent le plan APRÈS ces sections, sans reprendre aucune piste ni aucun sujet déjà présent dans le plan. "
         "Retourne le JSON selon le schéma fourni."
     )
     structured = await gemini_client.format_structured(
