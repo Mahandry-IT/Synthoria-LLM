@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import asc, desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import CourseGenerationResponse
@@ -78,18 +78,58 @@ async def list_folders(session: AsyncSession) -> list[tuple[str, str, int]]:
     return list(result.all())
 
 
+async def resolve_folder_casing(
+    session: AsyncSession, folder: str, subfolder: str | None = None
+) -> tuple[str, str | None]:
+    """Résout la casse canonique d'un dossier (et d'un sous-dossier) déjà utilisés en base, par
+    comparaison insensible à la casse — pour que « sfi » tapé quand « Sfi » existe déjà rejoigne
+    « Sfi » au lieu de créer un dossier distinct qui ne diffère que par la casse.
+
+    Casse canonique = celle utilisée par le plus de cours (égalité : la plus ancienne). Retourne la
+    valeur fournie telle quelle si aucune variante n'existe déjà (nouveau dossier/sous-dossier).
+    """
+    folder_stmt = (
+        select(CourseSession.folder, func.count().label("n"), func.min(CourseSession.created_at).label("first"))
+        .where(func.lower(CourseSession.folder) == folder.lower())
+        .group_by(CourseSession.folder)
+        .order_by(desc("n"), asc("first"))
+        .limit(1)
+    )
+    folder_row = (await session.execute(folder_stmt)).first()
+    canonical_folder = folder_row.folder if folder_row else folder
+
+    if not subfolder:
+        return canonical_folder, subfolder
+
+    subfolder_stmt = (
+        select(CourseSession.subfolder, func.count().label("n"), func.min(CourseSession.created_at).label("first"))
+        .where(
+            func.lower(CourseSession.folder) == canonical_folder.lower(),
+            func.lower(CourseSession.subfolder) == subfolder.lower(),
+        )
+        .group_by(CourseSession.subfolder)
+        .order_by(desc("n"), asc("first"))
+        .limit(1)
+    )
+    subfolder_row = (await session.execute(subfolder_stmt)).first()
+    canonical_subfolder = subfolder_row.subfolder if subfolder_row else subfolder
+    return canonical_folder, canonical_subfolder
+
+
 async def move_to_folder(
     session: AsyncSession, session_id: uuid.UUID, *, folder: str, subfolder: str
 ) -> CourseSession | None:
-    """Déplace un cours vers un dossier/sous-dossier (créé implicitement s'il n'existe pas encore).
+    """Déplace un cours vers un dossier/sous-dossier (créé implicitement s'il n'existe pas encore ;
+    réutilise la casse existante d'un dossier/sous-dossier proche, voir `resolve_folder_casing`).
 
     None si la session est introuvable.
     """
     row = await get_by_id(session, session_id)
     if row is None:
         return None
-    row.folder = folder
-    row.subfolder = subfolder
+    resolved_folder, resolved_subfolder = await resolve_folder_casing(session, folder, subfolder)
+    row.folder = resolved_folder
+    row.subfolder = resolved_subfolder or DEFAULT_COURSE_SUBFOLDER
     await session.commit()
     await session.refresh(row)
     return row
@@ -101,7 +141,7 @@ async def delete_folder(session: AsyncSession, folder: str) -> int:
     de cours déplacés."""
     result = await session.execute(
         update(CourseSession)
-        .where(CourseSession.folder == folder)
+        .where(func.lower(CourseSession.folder) == folder.lower())
         .values(folder=DEFAULT_COURSE_FOLDER, subfolder=DEFAULT_COURSE_SUBFOLDER)
     )
     await session.commit()
@@ -113,7 +153,10 @@ async def delete_subfolder(session: AsyncSession, folder: str, subfolder: str) -
     même dossier. Retourne le nombre de cours déplacés."""
     result = await session.execute(
         update(CourseSession)
-        .where(CourseSession.folder == folder, CourseSession.subfolder == subfolder)
+        .where(
+            func.lower(CourseSession.folder) == folder.lower(),
+            func.lower(CourseSession.subfolder) == subfolder.lower(),
+        )
         .values(subfolder=DEFAULT_COURSE_SUBFOLDER)
     )
     await session.commit()

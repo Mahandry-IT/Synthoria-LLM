@@ -830,7 +830,7 @@ async def delete_course_folder(folder_name: str, request: Request) -> FolderMove
     """Supprime un dossier : ses cours (et ceux de ses sous-dossiers) rejoignent le dossier par
     défaut (aucun cours n'est jamais supprimé par cette opération). 400 si `folder_name` est le
     dossier par défaut lui-même — il n'est jamais supprimable, c'est la racine de repli."""
-    if folder_name == DEFAULT_COURSE_FOLDER:
+    if folder_name.strip().casefold() == DEFAULT_COURSE_FOLDER.casefold():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Le dossier par défaut « {DEFAULT_COURSE_FOLDER} » ne peut pas être supprimé",
@@ -850,7 +850,7 @@ async def delete_course_subfolder(
     """Supprime un sous-dossier : ses cours rejoignent le sous-dossier par défaut, dans le même
     dossier (aucun cours n'est jamais supprimé). 400 si `subfolder_name` est le sous-dossier par
     défaut lui-même."""
-    if subfolder_name == DEFAULT_COURSE_SUBFOLDER:
+    if subfolder_name.strip().casefold() == DEFAULT_COURSE_SUBFOLDER.casefold():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Le sous-dossier par défaut « {DEFAULT_COURSE_SUBFOLDER} » ne peut pas être supprimé",
