@@ -197,7 +197,7 @@ def test_save_note_is_rate_limited(env):
 # ─── GET /courses/history/{id} — fusion des notes ─────────────
 
 
-def _history_env(monkeypatch, sections: list[dict], notes: dict[str, str]):
+def _history_env(monkeypatch, sections: list[dict], notes: dict[str, str], videos: list[dict] | None = None, video_notes: dict[str, str] | None = None):
     app = FastAPI()
     app.include_router(routes.router)
 
@@ -209,7 +209,7 @@ def _history_env(monkeypatch, sections: list[dict], notes: dict[str, str]):
     gemini_response = {
         "mode": "file_question", "format": "full_course", "introduction": {"quoi": "x"},
         "meta": {"title": "T", "subject": "S", "language": "fr", "generated_at": "2026-01-01T00:00:00Z"},
-        "sources": [], "summary": "résumé", "sections": sections,
+        "sources": [], "summary": "résumé", "sections": sections, "videos": videos or [],
     }
     row = SimpleNamespace(
         id=uuid.uuid4(), created_at=__import__("datetime").datetime(2026, 1, 1),
@@ -217,6 +217,9 @@ def _history_env(monkeypatch, sections: list[dict], notes: dict[str, str]):
     )
     monkeypatch.setattr(routes.course_session_repository, "get_by_id", AsyncMock(return_value=row))
     monkeypatch.setattr(routes.course_section_note_repository, "get_for_session", AsyncMock(return_value=notes))
+    monkeypatch.setattr(
+        routes.course_video_note_repository, "get_for_session", AsyncMock(return_value=video_notes or {})
+    )
     return SimpleNamespace(client=TestClient(app), row=row)
 
 
@@ -235,6 +238,15 @@ def test_history_without_notes_leaves_sections_untouched(monkeypatch):
     body = env.client.get(f"/courses/history/{env.row.id}").json()
 
     assert body["gemini_response"]["sections"][0]["note"] == ""
+
+
+def test_history_merges_notes_into_their_matching_videos(monkeypatch):
+    videos = [{"video_id": "abc123", "url": "u", "embed_url": "e", "thumbnail_url": "t", "title": "V1", "channel": ""}]
+    env = _history_env(monkeypatch, [], {}, videos=videos, video_notes={"abc123": "À revoir."})
+
+    body = env.client.get(f"/courses/history/{env.row.id}").json()
+
+    assert body["gemini_response"]["videos"][0]["note"] == "À revoir."
 
 
 def test_history_recomputes_incomplete_for_a_session_predating_the_field(monkeypatch):

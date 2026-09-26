@@ -43,6 +43,17 @@ async def get_by_id(session: AsyncSession, plan_id: uuid.UUID) -> CoursePlan | N
     return result.scalar_one_or_none()
 
 
+async def delete(session: AsyncSession, plan_id: uuid.UUID) -> bool:
+    """Supprime un plan proposé. Retourne False si déjà absent (y compris expiré : la suppression
+    n'a pas la même contrainte de validité que la lecture)."""
+    row = await get_by_id(session, plan_id)
+    if row is None:
+        return False
+    await session.delete(row)
+    await session.commit()
+    return True
+
+
 async def mark_generated(session: AsyncSession, plan_id: uuid.UUID) -> None:
     """Marque un plan comme ayant servi à générer un cours (no-op si absent)."""
     course_plan = await get_by_id(session, plan_id)
