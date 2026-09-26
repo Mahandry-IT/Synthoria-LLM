@@ -1,7 +1,13 @@
 import re
 
+# Octets de contrôle (dont NUL, \x00) que certains PDF (polices/cmap corrompues) glissent dans le
+# texte extrait par PyMuPDF. Postgres refuse `\u0000` dans un `text`/`jsonb` (UntranslatableCharacterError),
+# donc tout texte destiné à être persisté doit d'abord passer par ce nettoyage.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 
 def normalize_whitespace(text: str) -> str:
+    text = _CONTROL_CHARS_RE.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
