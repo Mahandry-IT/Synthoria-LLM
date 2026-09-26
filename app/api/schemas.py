@@ -653,6 +653,8 @@ class CourseHistoryItem(BaseModel):
     question: str
     filenames: list[str]
     mode: str
+    folder: str
+    subfolder: str
 
 
 class CourseHistoryDetail(BaseModel):
@@ -662,7 +664,48 @@ class CourseHistoryDetail(BaseModel):
     question: str
     filenames: list[str]
     mode: str
+    folder: str
+    subfolder: str
     gemini_response: CourseGenerationResponse
+
+
+# ─── Dossiers de cours (rangement virtuel : un attribut sur le cours, pas une entité séparée) ──
+
+
+class SubfolderSummary(BaseModel):
+    name: str
+    course_count: int
+
+
+class FolderSummary(BaseModel):
+    name: str
+    course_count: int
+    subfolders: list[SubfolderSummary]
+
+
+class MoveCourseFolderRequest(BaseModel):
+    """`subfolder` omis ou vide = sous-dossier par défaut du dossier cible."""
+    folder: str = Field(..., min_length=1, max_length=200)
+    subfolder: str | None = Field(None, max_length=200)
+
+    @field_validator("folder")
+    @classmethod
+    def strip_folder(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Le nom du dossier ne peut pas être vide")
+        return v
+
+    @field_validator("subfolder")
+    @classmethod
+    def strip_subfolder(cls, v: str | None) -> str | None:
+        v = v.strip() if v else None
+        return v or None
+
+
+class FolderMoveResult(BaseModel):
+    """Nombre de cours déplacés vers le dossier/sous-dossier par défaut après une suppression."""
+    moved: int
 
 # ─── Podcast ────────────────────────────────────────────────
 

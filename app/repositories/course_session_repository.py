@@ -1,11 +1,11 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import CourseGenerationResponse
-from app.db.models import CourseSession
+from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER, CourseSession
 
 
 async def save(
@@ -34,17 +34,25 @@ async def list_paginated(
     *,
     page: int,
     limit: int,
+    folder: str | None = None,
+    subfolder: str | None = None,
 ) -> tuple[list[CourseSession], int]:
-    """Liste paginée des sessions (plus récentes en premier)."""
+    """Liste paginée des sessions (plus récentes en premier), filtrable par dossier/sous-dossier."""
     offset = (page - 1) * limit
+    conditions = []
+    if folder is not None:
+        conditions.append(CourseSession.folder == folder)
+    if subfolder is not None:
+        conditions.append(CourseSession.subfolder == subfolder)
 
     # Total
-    count_result = await session.execute(select(func.count(CourseSession.id)))
+    count_result = await session.execute(select(func.count(CourseSession.id)).where(*conditions))
     total = count_result.scalar_one()
 
     # Data
     stmt = (
         select(CourseSession)
+        .where(*conditions)
         .order_by(CourseSession.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -53,6 +61,63 @@ async def list_paginated(
     rows = list(result.scalars().all())
 
     return rows, total
+
+
+async def list_folders(session: AsyncSession) -> list[tuple[str, str, int]]:
+    """Dossiers/sous-dossiers réellement utilisés (au moins un cours), avec leur nombre de cours.
+
+    Un dossier n'est qu'un attribut des cours (aucune entité dossier séparée) : il n'existe qu'en
+    tant que valeur portée par au moins un cours, et sort de cette liste dès qu'aucun cours n'y est
+    plus rangé.
+    """
+    stmt = (
+        select(CourseSession.folder, CourseSession.subfolder, func.count(CourseSession.id))
+        .group_by(CourseSession.folder, CourseSession.subfolder)
+    )
+    result = await session.execute(stmt)
+    return list(result.all())
+
+
+async def move_to_folder(
+    session: AsyncSession, session_id: uuid.UUID, *, folder: str, subfolder: str
+) -> CourseSession | None:
+    """Déplace un cours vers un dossier/sous-dossier (créé implicitement s'il n'existe pas encore).
+
+    None si la session est introuvable.
+    """
+    row = await get_by_id(session, session_id)
+    if row is None:
+        return None
+    row.folder = folder
+    row.subfolder = subfolder
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def delete_folder(session: AsyncSession, folder: str) -> int:
+    """Réaffecte tous les cours d'un dossier supprimé vers le dossier par défaut (et son sous-dossier
+    par défaut, l'ancien sous-dossier n'ayant plus de sens hors de ce dossier). Retourne le nombre
+    de cours déplacés."""
+    result = await session.execute(
+        update(CourseSession)
+        .where(CourseSession.folder == folder)
+        .values(folder=DEFAULT_COURSE_FOLDER, subfolder=DEFAULT_COURSE_SUBFOLDER)
+    )
+    await session.commit()
+    return result.rowcount or 0
+
+
+async def delete_subfolder(session: AsyncSession, folder: str, subfolder: str) -> int:
+    """Réaffecte tous les cours d'un sous-dossier supprimé vers le sous-dossier par défaut, dans le
+    même dossier. Retourne le nombre de cours déplacés."""
+    result = await session.execute(
+        update(CourseSession)
+        .where(CourseSession.folder == folder, CourseSession.subfolder == subfolder)
+        .values(subfolder=DEFAULT_COURSE_SUBFOLDER)
+    )
+    await session.commit()
+    return result.rowcount or 0
 
 
 async def get_by_id(

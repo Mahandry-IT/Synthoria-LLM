@@ -214,6 +214,7 @@ def _history_env(monkeypatch, sections: list[dict], notes: dict[str, str], video
     row = SimpleNamespace(
         id=uuid.uuid4(), created_at=__import__("datetime").datetime(2026, 1, 1),
         question="Q ?", filenames=[], mode="file_question", gemini_response=gemini_response,
+        folder="Général", subfolder="Non classé",
     )
     monkeypatch.setattr(routes.course_session_repository, "get_by_id", AsyncMock(return_value=row))
     monkeypatch.setattr(routes.course_section_note_repository, "get_for_session", AsyncMock(return_value=notes))
