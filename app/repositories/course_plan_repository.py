@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.text_sanitize import sanitize_json
 from app.db.models import CoursePlan
 
 
@@ -20,15 +21,20 @@ async def save(
     plan: dict[str, Any],
     expires_at: datetime,
 ) -> CoursePlan:
-    """Persiste un plan de cours proposé (statut `pending`)."""
+    """Persiste un plan de cours proposé (statut `pending`).
+
+    `retrieval_context`/`plan` mélangent du contenu extrait de PDF et du texte généré par le
+    LLM : l'un ou l'autre peut contenir un caractère de contrôle (ex. NUL) que Postgres refuse
+    dans une colonne `jsonb` (`UntranslatableCharacterError`) — voir `sanitize_json`.
+    """
     course_plan = CoursePlan(
         question=question,
         mode=mode,
         filenames=filenames,
         top_k=top_k,
         full_document=full_document,
-        retrieval_context=retrieval_context,
-        plan=plan,
+        retrieval_context=sanitize_json(retrieval_context),
+        plan=sanitize_json(plan),
         expires_at=expires_at,
     )
     session.add(course_plan)

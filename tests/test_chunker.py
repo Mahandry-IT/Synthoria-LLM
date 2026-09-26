@@ -1,4 +1,22 @@
-from app.services.chunker import chunk_text
+from app.services.chunker import chunk_text, normalize_whitespace
+
+
+def test_normalize_whitespace_strips_null_and_control_chars():
+    """PyMuPDF glisse parfois du \\x00 (police/cmap corrompue sur un gros PDF) : Postgres
+    rejette ce caractère dans un text/jsonb (UntranslatableCharacterError), donc il ne doit
+    jamais survivre au-delà de cette étape."""
+    text = "Préface\x00 du \x0blivre\x1f."
+
+    assert normalize_whitespace(text) == "Préface du livre."
+
+
+def test_chunk_text_strips_null_bytes_from_content():
+    text = "mot1 mot2\x00 mot3"
+
+    chunks = chunk_text(text)
+
+    assert chunks == ["mot1 mot2 mot3"]
+    assert "\x00" not in chunks[0]
 
 
 def test_chunk_text_uses_target_size_and_overlap():

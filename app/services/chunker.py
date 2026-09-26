@@ -1,7 +1,10 @@
 import re
 
+from app.core.text_sanitize import strip_control_chars
+
 
 def normalize_whitespace(text: str) -> str:
+    text = strip_control_chars(text)
     return re.sub(r"\s+", " ", text).strip()
 
 

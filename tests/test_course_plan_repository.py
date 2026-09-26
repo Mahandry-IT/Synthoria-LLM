@@ -39,6 +39,30 @@ async def test_save_persists_pending_plan_and_commits():
 
 
 @pytest.mark.asyncio
+async def test_save_strips_control_chars_from_retrieval_context_and_plan():
+    """Un chunk PDF ou une réponse Gemini peut contenir un \\x00 (police corrompue, texte source
+    mal décodé recopié par le modèle) : Postgres le refuse dans une colonne jsonb
+    (UntranslatableCharacterError), donc `save` doit le retirer avant l'insert."""
+    session = _session()
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    row = await course_plan_repository.save(
+        session,
+        question="Q",
+        mode="file_question",
+        filenames=["doc.pdf"],
+        top_k=6,
+        full_document=False,
+        retrieval_context={"chunks": [{"content": "Préface\x00 du livre", "metadata": {}}]},
+        plan={"meta": {"title": "Titre\x00 corrompu"}},
+        expires_at=expires_at,
+    )
+
+    assert row.retrieval_context["chunks"][0]["content"] == "Préface du livre"
+    assert row.plan["meta"]["title"] == "Titre corrompu"
+
+
+@pytest.mark.asyncio
 async def test_get_by_id_returns_row_or_none():
     session = _session()
     plan = CoursePlan(question="Q")
