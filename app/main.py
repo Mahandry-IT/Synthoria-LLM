@@ -2,8 +2,9 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.media_routes import router as media_router
 from app.api.podcast_routes import router as podcast_router
@@ -24,6 +25,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
     force=True,
 )
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -57,6 +59,15 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_per_minute)
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        """Filet de sécurité : une exception qu'aucune route n'a catchée (ex. crash natif d'une
+        dépendance PDF, OOM partiel) ne doit jamais atteindre le client comme un 500 sans corps —
+        le frontend a besoin d'un JSON exploitable pour distinguer « en cours » de « vraiment
+        échoué », notamment lors de l'ingestion de gros fichiers."""
+        logger.exception("unhandled_exception", extra={"path": request.url.path})
+        return JSONResponse(status_code=500, content={"status": "error", "detail": "Erreur interne inattendue"})
 
     app.include_router(router)
     app.include_router(podcast_router)

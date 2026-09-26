@@ -1,10 +1,12 @@
 import logging
+import time
+from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.schemas import (
@@ -24,11 +26,14 @@ from app.api.schemas import (
     DocumentQueryRequest,
     DocumentQueryResponse,
     FileListResponse,
+    FolderMoveResult,
+    FolderSummary,
     GenerateRequest,
     GenerateResponse,
     HealthResponse,
     MoreSectionsRequest,
     MoreSectionsResponse,
+    MoveCourseFolderRequest,
     PageParams,
     PaginatedResponse,
     PaginationMeta,
@@ -40,6 +45,7 @@ from app.api.schemas import (
     RefineSectionRequest,
     SectionNoteRequest,
     SectionNoteResponse,
+    SubfolderSummary,
     VideoNoteRequest,
     VideoNoteResponse,
 )
@@ -52,6 +58,7 @@ from app.core.exceptions import (
     OllamaModelNotFoundError,
     OllamaUnavailableError,
 )
+from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER
 from app.repositories import (
     course_plan_repository,
     course_section_note_repository,
@@ -157,10 +164,13 @@ async def _ingest_single_pdf(
             message="File already uploaded",
         )
 
+    started_at = time.perf_counter()
     try:
         content = await file.read()
+        log_extra = {"pdf_filename": file.filename, "bytes": len(content)}
         chunks = await extract_pdf_chunks(content, file.filename, settings, request.app.state.gemini_client)
         if not chunks:
+            logger.warning("pdf_ingest_no_chunks", extra=log_extra)
             return PDFIngestResponse(
                 status="error",
                 filename=file.filename,
@@ -169,6 +179,10 @@ async def _ingest_single_pdf(
             )
 
         added = await vector_store.add_chunks(chunks)
+        logger.info(
+            "pdf_ingest_succeeded",
+            extra={**log_extra, "chunks": len(chunks), "elapsed_seconds": round(time.perf_counter() - started_at, 1)},
+        )
         return PDFIngestResponse(
             status="ok",
             filename=file.filename,
@@ -176,9 +190,16 @@ async def _ingest_single_pdf(
             documents_added=len(chunks),
         )
     except (OllamaUnavailableError, OllamaModelNotFoundError) as exc:
+        logger.warning(
+            "pdf_ingest_ollama_unavailable",
+            extra={"pdf_filename": file.filename, "elapsed_seconds": round(time.perf_counter() - started_at, 1), "error": str(exc)},
+        )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except Exception:
-        logger.exception("pdf_ingest_failed", extra={"pdf_filename": file.filename})
+        logger.exception(
+            "pdf_ingest_failed",
+            extra={"pdf_filename": file.filename, "elapsed_seconds": round(time.perf_counter() - started_at, 1)},
+        )
         return PDFIngestResponse(
             status="error",
             filename=file.filename or "unknown",
@@ -653,12 +674,14 @@ async def generate_course_from_plan(
 async def list_course_history(
     request: Request,
     pagination: PageParams = Depends(),
+    folder: str | None = Query(None, description="Filtrer par dossier"),
+    subfolder: str | None = Query(None, description="Filtrer par sous-dossier"),
 ) -> PaginatedResponse[CourseHistoryItem]:
-    """Historique paginé des sessions de génération de cours."""
+    """Historique paginé des sessions de génération de cours, filtrable par dossier/sous-dossier."""
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         rows, total = await course_session_repository.list_paginated(
-            db, page=pagination.page, limit=pagination.limit
+            db, page=pagination.page, limit=pagination.limit, folder=folder, subfolder=subfolder,
         )
 
     total_pages = max(1, (total + pagination.limit - 1) // pagination.limit)
@@ -671,6 +694,8 @@ async def list_course_history(
             question=row.question,
             filenames=row.filenames,
             mode=row.mode,
+            folder=row.folder,
+            subfolder=row.subfolder,
         )
         for row in rows
     ]
@@ -730,6 +755,8 @@ async def get_course_history(
         question=row.question,
         filenames=row.filenames,
         mode=row.mode,
+        folder=row.folder,
+        subfolder=row.subfolder,
         gemini_response=gemini_response,
     )
 
@@ -743,6 +770,95 @@ async def delete_course_history(session_id: UUID, request: Request) -> None:
         deleted = await course_session_repository.delete(db, session_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+
+
+@router.get("/courses/folders", response_model=list[FolderSummary])
+async def list_course_folders(request: Request) -> list[FolderSummary]:
+    """Dossiers/sous-dossiers utilisés par au moins un cours, avec leur nombre de cours.
+
+    Un dossier n'est qu'un attribut de rangement porté par chaque cours (aucune entité dossier
+    séparée, aucun dossier physique) : il n'apparaît ici qu'autant qu'au moins un cours y est
+    rangé, et en sort dès que ce n'est plus le cas.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        rows = await course_session_repository.list_folders(db)
+
+    grouped: dict[str, dict[str, int]] = defaultdict(dict)
+    for folder_name, subfolder_name, count in rows:
+        grouped[folder_name][subfolder_name] = count
+
+    return [
+        FolderSummary(
+            name=folder_name,
+            course_count=sum(subfolder_counts.values()),
+            subfolders=[
+                SubfolderSummary(name=subfolder_name, course_count=count)
+                for subfolder_name, count in subfolder_counts.items()
+            ],
+        )
+        for folder_name, subfolder_counts in grouped.items()
+    ]
+
+
+@router.put("/courses/history/{session_id}/folder", response_model=CourseHistoryItem)
+async def move_course_folder(
+    session_id: UUID, body: MoveCourseFolderRequest, request: Request,
+) -> CourseHistoryItem:
+    """Déplace un cours vers un dossier/sous-dossier — créés implicitement s'ils n'existent pas
+    encore (un dossier n'est qu'un attribut du cours). 404 si la session est introuvable."""
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.move_to_folder(
+            db, session_id, folder=body.folder, subfolder=body.subfolder or DEFAULT_COURSE_SUBFOLDER,
+        )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+    return CourseHistoryItem(
+        id=row.id,
+        created_at=row.created_at.isoformat(),
+        question=row.question,
+        filenames=row.filenames,
+        mode=row.mode,
+        folder=row.folder,
+        subfolder=row.subfolder,
+    )
+
+
+@router.delete("/courses/folders/{folder_name}", response_model=FolderMoveResult)
+async def delete_course_folder(folder_name: str, request: Request) -> FolderMoveResult:
+    """Supprime un dossier : ses cours (et ceux de ses sous-dossiers) rejoignent le dossier par
+    défaut (aucun cours n'est jamais supprimé par cette opération). 400 si `folder_name` est le
+    dossier par défaut lui-même — il n'est jamais supprimable, c'est la racine de repli."""
+    if folder_name == DEFAULT_COURSE_FOLDER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Le dossier par défaut « {DEFAULT_COURSE_FOLDER} » ne peut pas être supprimé",
+        )
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        moved = await course_session_repository.delete_folder(db, folder_name)
+    return FolderMoveResult(moved=moved)
+
+
+@router.delete(
+    "/courses/folders/{folder_name}/subfolders/{subfolder_name}", response_model=FolderMoveResult
+)
+async def delete_course_subfolder(
+    folder_name: str, subfolder_name: str, request: Request,
+) -> FolderMoveResult:
+    """Supprime un sous-dossier : ses cours rejoignent le sous-dossier par défaut, dans le même
+    dossier (aucun cours n'est jamais supprimé). 400 si `subfolder_name` est le sous-dossier par
+    défaut lui-même."""
+    if subfolder_name == DEFAULT_COURSE_SUBFOLDER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Le sous-dossier par défaut « {DEFAULT_COURSE_SUBFOLDER} » ne peut pas être supprimé",
+        )
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        moved = await course_session_repository.delete_subfolder(db, folder_name, subfolder_name)
+    return FolderMoveResult(moved=moved)
 
 
 def _limit_recall(request: Request, settings: Settings = Depends(get_settings)) -> None:

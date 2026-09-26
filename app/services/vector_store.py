@@ -1,3 +1,4 @@
+import asyncio
 import json
 import math
 from pathlib import Path
@@ -37,18 +38,33 @@ class NumpyVectorStore:
         return float(np.dot(a_arr, b_arr) / (np.linalg.norm(a_arr) * np.linalg.norm(b_arr)))
 
     async def add_chunks(self, chunks: list[dict[str, Any]]) -> int:
+        """Calcule les embeddings (en parallèle, borné) et persiste les chunks — tout ou rien.
+
+        Les enregistrements sont d'abord construits dans une liste locale : `self._documents`
+        n'est étendu et `_save()` appelé qu'une fois TOUS les embeddings obtenus. Si un seul
+        échoue (Ollama indisponible en cours de route sur un gros document), l'exception se
+        propage sans qu'aucun chunk du lot n'ait été ajouté ni sauvegardé : `has_file` reste donc
+        fiable (pas d'état fantôme qui bloquerait un nouvel essai) et le fichier peut être
+        réuploadé tel quel.
+        """
         if not chunks:
             return 0
 
-        for chunk in chunks:
-            embedding = await self._ollama_client.embed(chunk["content"])
-            self._documents.append({
+        semaphore = asyncio.Semaphore(max(1, self._settings.pdf_embedding_concurrency))
+
+        async def _embed(chunk: dict[str, Any]) -> dict[str, Any]:
+            async with semaphore:
+                embedding = await self._ollama_client.embed(chunk["content"])
+            return {
                 "id": chunk["id"],
                 "content": chunk["content"],
                 "metadata": chunk["metadata"],
                 "embedding": embedding,
-            })
+            }
 
+        records = await asyncio.gather(*(_embed(chunk) for chunk in chunks))
+
+        self._documents.extend(records)
         self._save()
         return len(chunks)
 

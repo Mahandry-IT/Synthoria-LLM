@@ -7,6 +7,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
+# Dossier/sous-dossier ne sont qu'un attribut de rangement sur le cours (aucune entité dossier
+# séparée, aucun dossier physique) : ces valeurs par défaut jouent le rôle de « racine » toujours
+# existante, jamais supprimable — supprimer un dossier/sous-dossier n'efface aucun cours, ça y
+# replace juste ses cours (voir course_session_repository.delete_folder/delete_subfolder).
+DEFAULT_COURSE_FOLDER = "Général"
+DEFAULT_COURSE_SUBFOLDER = "Non classé"
+
 
 class CourseSession(Base):
     """Session de génération de cours, persistée en PostgreSQL."""
@@ -23,9 +30,12 @@ class CourseSession(Base):
     filenames: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     mode: Mapped[str] = mapped_column(String(20), nullable=False)
     gemini_response: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    folder: Mapped[str] = mapped_column(String(200), nullable=False, default=DEFAULT_COURSE_FOLDER)
+    subfolder: Mapped[str] = mapped_column(String(200), nullable=False, default=DEFAULT_COURSE_SUBFOLDER)
 
     __table_args__ = (
         Index("idx_course_sessions_created_at", created_at.desc()),
+        Index("idx_course_sessions_folder", "folder", "subfolder"),
     )
 
 

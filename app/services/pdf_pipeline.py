@@ -1,4 +1,6 @@
+import asyncio
 import io
+import logging
 import re
 from typing import Any
 
@@ -8,6 +10,8 @@ from app.core.config import Settings
 from app.services.chunker import chunk_text
 from app.services.gemini_client import GeminiClient
 from app.services.gemini_vision import extract_key_image_descriptions
+
+logger = logging.getLogger(__name__)
 
 try:
     import camelot
@@ -51,8 +55,12 @@ def _extract_tables_from_pdf(pdf_bytes: bytes) -> list[str]:
 async def extract_pdf_chunks(
     pdf_bytes: bytes, filename: str, settings: Settings, gemini_client: GeminiClient | None = None
 ) -> list[dict[str, Any]]:
-    text_pages = _extract_text_from_pdf(pdf_bytes)
-    table_pages = _extract_tables_from_pdf(pdf_bytes)
+    # `fitz`/`camelot` sont synchrones et purement CPU-bound : sur un PDF de plusieurs centaines de
+    # pages, les exécuter directement dans la coroutine bloquerait la boucle événementielle (donc
+    # tout le serveur, y compris les autres requêtes) pendant potentiellement plusieurs minutes.
+    # `asyncio.to_thread` les délègue à un thread, le event loop reste réactif entre-temps.
+    text_pages = await asyncio.to_thread(_extract_text_from_pdf, pdf_bytes)
+    table_pages = await asyncio.to_thread(_extract_tables_from_pdf, pdf_bytes)
     image_descriptions = await extract_key_image_descriptions(pdf_bytes, gemini_client)
     content_parts = text_pages + table_pages + image_descriptions
 
@@ -75,4 +83,14 @@ async def extract_pdf_chunks(
                 }
             )
 
+    logger.info(
+        "pdf_chunks_extracted",
+        extra={
+            "pdf_filename": filename,
+            "text_pages": len(text_pages),
+            "table_pages": len(table_pages),
+            "image_descriptions": len(image_descriptions),
+            "chunks": len(chunks),
+        },
+    )
     return chunks

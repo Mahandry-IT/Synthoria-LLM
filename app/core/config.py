@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     pdf_chunk_target_tokens: int = 400
     pdf_chunk_overlap_tokens: int = 50
     pdf_chunk_min_tokens: int = 80
+    # Embeddings calculés en parallèle (borné) plutôt qu'un par un : un PDF de plusieurs centaines
+    # de pages peut produire des centaines de chunks, et les enchaîner séquentiellement (1 aller-retour
+    # Ollama chacun) fait facilement dépasser le timeout HTTP du proxy/client avant la fin.
+    pdf_embedding_concurrency: int = 4
     course_full_document_mode: bool = False
     gemini_api_key: str | None = None
     gemini_model_flash: str = "gemini-3.6-flash"
