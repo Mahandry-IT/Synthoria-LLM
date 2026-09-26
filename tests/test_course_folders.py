@@ -31,7 +31,16 @@ def _session(row=None, execute_result=None) -> MagicMock:
 @pytest.mark.asyncio
 async def test_move_to_folder_updates_row_and_commits():
     row = SimpleNamespace(id=SID, folder=DEFAULT_COURSE_FOLDER, subfolder=DEFAULT_COURSE_SUBFOLDER)
-    session = _session(row)
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            MagicMock(scalar_one_or_none=lambda: row),  # get_by_id
+            MagicMock(first=lambda: None),  # resolve_folder_casing : dossier inédit
+            MagicMock(first=lambda: None),  # resolve_folder_casing : sous-dossier inédit
+        ]
+    )
 
     result = await repo.move_to_folder(session, SID, folder="SFI", subfolder="2026")
 
@@ -79,6 +88,64 @@ async def test_list_folders_returns_grouped_rows():
     result = await repo.list_folders(session)
 
     assert result == rows
+
+
+# ─── resolve_folder_casing ─────────────────────────────────────
+
+
+def _row(**kwargs):
+    return SimpleNamespace(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_resolve_folder_casing_reuses_existing_casing_case_insensitively():
+    session = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            MagicMock(first=lambda: _row(folder="Sfi", n=4, first=__import__("datetime").datetime(2026, 1, 1))),
+        ]
+    )
+
+    folder, subfolder = await repo.resolve_folder_casing(session, "sfi")
+
+    assert (folder, subfolder) == ("Sfi", None)
+
+
+@pytest.mark.asyncio
+async def test_resolve_folder_casing_keeps_input_when_no_existing_match():
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[MagicMock(first=lambda: None)])
+
+    folder, subfolder = await repo.resolve_folder_casing(session, "Nouveau dossier")
+
+    assert (folder, subfolder) == ("Nouveau dossier", None)
+
+
+@pytest.mark.asyncio
+async def test_resolve_folder_casing_resolves_subfolder_within_resolved_folder():
+    session = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            MagicMock(first=lambda: _row(folder="Sfi", n=4, first=__import__("datetime").datetime(2026, 1, 1))),
+            MagicMock(first=lambda: _row(subfolder="2026", n=2, first=__import__("datetime").datetime(2026, 1, 1))),
+        ]
+    )
+
+    folder, subfolder = await repo.resolve_folder_casing(session, "SFI", "2026")
+
+    assert (folder, subfolder) == ("Sfi", "2026")
+
+
+@pytest.mark.asyncio
+async def test_resolve_folder_casing_without_subfolder_skips_second_query():
+    session = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[MagicMock(first=lambda: _row(folder="Sfi", n=1, first=__import__("datetime").datetime(2026, 1, 1)))]
+    )
+
+    await repo.resolve_folder_casing(session, "sfi", None)
+
+    assert session.execute.await_count == 1
 
 
 # ─── Routes ────────────────────────────────────────────────────
@@ -169,6 +236,12 @@ def test_delete_default_folder_rejected(client):
     assert res.status_code == 400
 
 
+def test_delete_default_folder_rejected_case_insensitively(client):
+    res = client.delete(f"/courses/folders/{DEFAULT_COURSE_FOLDER.upper()}")
+
+    assert res.status_code == 400
+
+
 def test_delete_subfolder_moves_courses_to_default_subfolder(client, monkeypatch):
     monkeypatch.setattr(routes.course_session_repository, "delete_subfolder", AsyncMock(return_value=2))
 
@@ -180,6 +253,12 @@ def test_delete_subfolder_moves_courses_to_default_subfolder(client, monkeypatch
 
 def test_delete_default_subfolder_rejected(client):
     res = client.delete(f"/courses/folders/SFI/subfolders/{DEFAULT_COURSE_SUBFOLDER}")
+
+    assert res.status_code == 400
+
+
+def test_delete_default_subfolder_rejected_case_insensitively(client):
+    res = client.delete(f"/courses/folders/SFI/subfolders/{DEFAULT_COURSE_SUBFOLDER.upper()}")
 
     assert res.status_code == 400
 
