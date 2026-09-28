@@ -94,6 +94,27 @@ def _build_context_block(chunks: list[dict[str, Any]]) -> str:
     return "\n\n".join(blocks)
 
 
+async def session_context_block(
+    question: str,
+    mode: str,
+    filenames: list[str] | None,
+    vector_store: NumpyVectorStore,
+    gemini_client: GeminiClient,
+    settings: Settings,
+) -> str:
+    """Contexte source pour une opération sur une session de cours déjà persistée (régénération
+    de section, ajout de contenu) : même origine que la génération initiale (RAG fichiers ou
+    recherche web), reconstituée à la demande plutôt que figée en base."""
+    if mode == "question_only":
+        raw_answer, web_sources = await gemini_client.search_grounded(
+            prompt=f"Question de l'utilisateur : {question}",
+            system_instruction=_get_teacher_instructions(),
+        )
+        return f"Sources web disponibles : {web_sources}\n\nSynthèse :\n{raw_answer}"
+    _, chunks = await _retrieve_chunks(question, vector_store, gemini_client, settings, mode, None, filenames or None, False)
+    return _build_context_block(chunks)
+
+
 def _assert_file_isolation(chunks: list[dict[str, Any]], filename: str | list[str] | None) -> None:
     """Garde-fou contre la fuite de contenu entre fichiers.
 
