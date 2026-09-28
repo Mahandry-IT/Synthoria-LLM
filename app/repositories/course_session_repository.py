@@ -5,6 +5,7 @@ from sqlalchemy import asc, desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import CourseGenerationResponse
+from app.core.text_sanitize import sanitize_json
 from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER, CourseSession
 
 
@@ -211,6 +212,34 @@ async def update_section(
         **row.gemini_response,
         "sections": [*sections[:index], updated_section, *sections[index + 1 :]],
     }
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def append_sections(
+    session: AsyncSession,
+    session_id: uuid.UUID,
+    new_sections: list[dict[str, Any]],
+    next_steps: list[str],
+) -> CourseSession | None:
+    """Ajoute des sections en fin de `gemini_response.sections` et remplace `next_steps` par leur
+    valeur finale (pistes consommées retirées, ou inchangées selon l'origine des nouvelles sections
+    — voir `course_section_adder.add_course_sections`).
+
+    None si la session est introuvable. `sanitize_json` retire tout caractère de contrôle (ex. NUL)
+    qu'un contenu généré par le LLM pourrait recopier depuis une source mal décodée — Postgres le
+    refuse dans une colonne `jsonb` (voir `course_plan_repository.save`, même protection).
+    """
+    row = await get_by_id(session, session_id)
+    if row is None:
+        return None
+    sections = row.gemini_response.get("sections") or []
+    row.gemini_response = sanitize_json({
+        **row.gemini_response,
+        "sections": [*sections, *new_sections],
+        "next_steps": next_steps,
+    })
     await session.commit()
     await session.refresh(row)
     return row
