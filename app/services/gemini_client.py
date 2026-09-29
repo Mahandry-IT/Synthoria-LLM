@@ -340,8 +340,9 @@ class GeminiClient:
         Si response_schema est une classe Pydantic, extrait le JSON schema via
         model_json_schema(). Utilise response_json_schema (bypass validation SDK).
 
-        Stratégie : tente d'abord avec le modèle lite, fallback sur le modèle flash
-        si le schema est trop complexe (400 InvalidArgument).
+        Stratégie : tente d'abord avec le modèle lite, fallback sur le modèle flash si son quota
+        est épuisé (429, quota séparé de celui de flash) ou si le schema est trop complexe pour
+        lui (400 InvalidArgument).
         """
         self._ensure_configured()
         if response_schema is not None:
@@ -365,6 +366,11 @@ class GeminiClient:
         # Essai avec le modèle lite (moins cher)
         try:
             response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
+        except GeminiQuotaExceededError:
+            # Quota du lite épuisé : flash a son propre quota séparé, distinct de celui du lite
+            # (contrairement au cas 400 ci-dessous, jamais résolu en re-tentant le même modèle).
+            logger.info("gemini_lite_quota_fallback_to_flash")
+            response = await self._call_with_retry(_run, self._settings.gemini_model_flash)
         except GeminiUnavailableError as exc:
             # Si le lite échoue avec un 400 (schema trop complexe), retry avec flash
             error_msg = str(exc).lower()

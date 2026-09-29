@@ -6,6 +6,7 @@ import pytest
 from app.core.config import Settings
 from app.core.exceptions import (
     GeminiInvalidResponseError,
+    GeminiQuotaExceededError,
     GeminiUnavailableError,
 )
 from app.services.gemini_client import GeminiClient
@@ -22,6 +23,21 @@ def _fake_genai_client(generate_content_side_effect=None, generate_content_retur
     else:
         fake.models.generate_content.return_value = generate_content_return_value
     return fake
+
+
+def _quota_exceeded_error() -> Exception:
+    """Reproduit la forme structurée (`exc.response.json()`) exposée par le SDK `google-genai` sur
+    un vrai 429 — `_parse_gemini_error` n'y lit `error.code`/`error.status` que sous cette forme ;
+    un simple `Exception("429 ...")` (comme utilisé ailleurs pour juste déclencher le retry) ne
+    suffit pas à faire lever `GeminiQuotaExceededError` en bout de course, seulement à faire
+    identifier l'appel comme rate-limited pour le backoff."""
+    exc = Exception("429 RESOURCE_EXHAUSTED")
+    exc.response = SimpleNamespace(
+        json=lambda: {
+            "error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded"}
+        }
+    )
+    return exc
 
 
 @pytest.mark.asyncio
@@ -78,6 +94,55 @@ async def test_format_structured_invalid_json_raises():
 
     with pytest.raises(GeminiInvalidResponseError):
         await client.format_structured("raw answer", response_schema={}, system_instruction="system")
+
+
+@pytest.mark.asyncio
+async def test_format_structured_falls_back_to_flash_when_lite_quota_exceeded():
+    """Le lite et flash ont des quotas Gemini séparés : un lite épuisé (429) ne doit pas faire
+    échouer l'appel si flash a encore du quota (bug reproduit : la régénération de section
+    échouait alors qu'une nouvelle génération de cours passait, simplement parce qu'elle
+    retentait plus de fois et retombait parfois sur un flash-lite pas encore épuisé)."""
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [
+        _quota_exceeded_error(),
+        _quota_exceeded_error(),
+        SimpleNamespace(text='{"ok": true}'),
+    ]
+    client = GeminiClient(settings, client=fake_client)
+
+    result = await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+    assert result == {"ok": True}
+    calls = fake_client.models.generate_content.call_args_list
+    assert calls[0].kwargs["model"] == "flash-lite"  # gemini_max_retries=2 tentatives sur le lite
+    assert calls[-1].kwargs["model"] == "flash-full"
+
+
+@pytest.mark.asyncio
+async def test_format_structured_raises_quota_exceeded_when_both_models_exhausted():
+    fake_client = _fake_genai_client(generate_content_side_effect=_quota_exceeded_error())
+    client = GeminiClient(_settings(), client=fake_client)
+
+    with pytest.raises(GeminiQuotaExceededError):
+        await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+
+@pytest.mark.asyncio
+async def test_format_structured_falls_back_to_flash_on_400_schema_error():
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [
+        Exception("400 Bad Request: invalid schema"),
+        Exception("400 Bad Request: invalid schema"),
+        SimpleNamespace(text='{"ok": true}'),
+    ]
+    client = GeminiClient(settings, client=fake_client)
+
+    result = await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+    assert result == {"ok": True}
+    assert fake_client.models.generate_content.call_args_list[-1].kwargs["model"] == "flash-full"
 
 
 @pytest.mark.asyncio
