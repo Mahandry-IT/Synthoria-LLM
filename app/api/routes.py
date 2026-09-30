@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.schemas import (
     COURSE_DEFAULT_QUESTION,
+    AddCourseSectionsRequest,
+    AddCourseSectionsResponse,
     ApiPlannedSection,
     ApiPretestItem,
     CourseFromPlanRequest,
@@ -78,6 +80,7 @@ from app.services.course_plan_generator import (
     generate_more_sections,
     refine_planned_section,
 )
+from app.services.course_section_adder import add_course_sections
 from app.services.gemini_client import GeminiClient
 from app.services.media.visual_resolver import resolve_visuals_in_sections
 from app.services.recall_evaluator import evaluate_recall
@@ -975,6 +978,65 @@ async def regenerate_course_section(
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session ou section introuvable")
     return updated
+
+
+def _limit_add_sections(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    limiter = getattr(request.app.state, "add_sections_rate_limiter", None)
+    if limiter is None:
+        limiter = request.app.state.add_sections_rate_limiter = SlidingWindowLimiter()
+    limiter.check(
+        request.client.host if request.client else "unknown",
+        settings.add_course_sections_rate_limit_per_minute,
+        "Trop de demandes d'ajout de contenu, réessayez dans une minute",
+    )
+
+
+@router.post(
+    "/courses/{session_id}/sections",
+    response_model=AddCourseSectionsResponse,
+    dependencies=[Depends(_limit_add_sections)],
+)
+async def add_course_content(
+    session_id: UUID,
+    body: AddCourseSectionsRequest,
+    request: Request,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
+) -> AddCourseSectionsResponse:
+    """Ajoute une ou plusieurs sections à un cours déjà généré.
+
+    `instructions` vide : le contenu vient de `next_steps` si le cours en a, sinon de nouveaux
+    sujets proposés par le modèle à partir du cours existant. La réponse contient `next_steps` mis
+    à jour (pistes consommées retirées), que le client doit substituer à l'ancienne valeur.
+
+    404 si la session n'existe pas ; 429 au-delà de `add_course_sections_rate_limit_per_minute`.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+
+    vector_store = request.app.state.vector_store
+    with _gemini_http_errors():
+        new_sections, next_steps = await add_course_sections(
+            row, body.instructions or "", gemini_client, vector_store, settings
+        )
+    start_index = len(row.gemini_response.get("sections") or [])
+    mapped = _map_sections_to_course_sections(new_sections, start_index=start_index)
+    if not mapped:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Aucune section générée")
+    mapped = await resolve_visuals_in_sections(
+        mapped, settings=settings, db_session_factory=session_factory, gemini_client=gemini_client,
+    )
+
+    async with session_factory() as db:
+        saved = await course_session_repository.append_sections(
+            db, session_id, [s.model_dump(mode="json") for s in mapped], next_steps
+        )
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+    return AddCourseSectionsResponse(sections=mapped, next_steps=next_steps)
 
 
 def _limit_note(request: Request, settings: Settings = Depends(get_settings)) -> None:

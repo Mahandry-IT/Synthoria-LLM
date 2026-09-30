@@ -11,25 +11,9 @@ from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError
 from app.db.models import CourseSession
 from app.schemas.course_generation import Section, SectionType, SectionsBatchSchema
-from app.services.course_generator import _build_context_block, _get_teacher_instructions, _retrieve_chunks
+from app.services.course_generator import _get_teacher_instructions, session_context_block
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
-
-
-async def _context_block(
-    row: CourseSession, vector_store: NumpyVectorStore, gemini_client: GeminiClient, settings: Settings
-) -> str:
-    """Contexte source pour régénérer une section : même origine que la génération initiale de la session."""
-    if row.mode == "question_only":
-        raw_answer, web_sources = await gemini_client.search_grounded(
-            prompt=f"Question de l'utilisateur : {row.question}",
-            system_instruction=_get_teacher_instructions(),
-        )
-        return f"Sources web disponibles : {web_sources}\n\nSynthèse :\n{raw_answer}"
-    _, chunks = await _retrieve_chunks(
-        row.question, vector_store, gemini_client, settings, row.mode, None, row.filenames or None, False,
-    )
-    return _build_context_block(chunks)
 
 
 async def regenerate_section(
@@ -44,7 +28,9 @@ async def regenerate_section(
     Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
     """
     system_instruction = _get_teacher_instructions()
-    context_block = await _context_block(row, vector_store, gemini_client, settings)
+    context_block = await session_context_block(
+        row.question, row.mode, row.filenames, vector_store, gemini_client, settings
+    )
 
     prompt = (
         f"Question de l'utilisateur (contexte du cours) : {row.question}\n\n"

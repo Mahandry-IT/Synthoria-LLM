@@ -602,6 +602,34 @@ class MoreSectionsResponse(BaseModel):
     )
 
 
+class AddCourseSectionsRequest(BaseModel):
+    """Demande d'ajout de contenu à un cours déjà généré.
+
+    `instructions` vide (ou absente) : le sujet vient de `next_steps` si le cours en a, sinon de
+    nouveaux sujets proposés par le modèle à partir du cours existant.
+    """
+
+    instructions: str | None = Field(None, max_length=_PLAN_INSTRUCTIONS_MAX)
+
+    @field_validator("instructions")
+    @classmethod
+    def _blank_instructions_to_none(cls, v: str | None) -> str | None:
+        v = (v or "").strip()
+        return v or None
+
+
+class AddCourseSectionsResponse(BaseModel):
+    sections: list[CourseSection]
+    next_steps: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Valeur finale de `next_steps` après l'opération (pistes consommées retirées si les "
+            "nouvelles sections en sont issues, inchangée sinon) : le client doit REMPLACER l'ancienne "
+            "valeur par celle-ci."
+        ),
+    )
+
+
 class PendingPlanItem(BaseModel):
     """Plan non expiré, pas encore transformé en cours (liste du dashboard)."""
 

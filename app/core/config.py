@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     course_note_max_length: int = 2000
     course_note_rate_limit_per_minute: int = 20
 
+    # Ajout de contenu (sections) sur un cours déjà généré
+    add_course_sections_rate_limit_per_minute: int = 6
+
     # YouTube Data API v3 : recherche réelle de vidéos (remplace les IDs inventés par Gemini).
     # Sans clé, comportement inchangé (repli sur le grounding Gemini + vérification oEmbed).
     youtube_api_key: SecretStr | None = None
