@@ -391,7 +391,7 @@ async def generate_course(
     question, resolved_mode = _resolve_question_and_mode(body, settings)
     vector_store = request.app.state.vector_store
 
-    with _gemini_http_errors():
+    with gemini_client.track_calls(), _gemini_http_errors():
         course_response = await generate_course_from_question(
             question=question,
             vector_store=vector_store,
@@ -427,7 +427,7 @@ async def create_course_plan(
     question, resolved_mode = _resolve_question_and_mode(body, settings)
     vector_store = request.app.state.vector_store
 
-    with _gemini_http_errors():
+    with gemini_client.track_calls(), _gemini_http_errors():
         plan, retrieval_context = await generate_course_plan(
             question=question,
             vector_store=vector_store,
@@ -649,7 +649,7 @@ async def generate_course_from_plan(
     if plan_row.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Plan expiré, régénérez-le")
 
-    with _gemini_http_errors():
+    with gemini_client.track_calls(), _gemini_http_errors():
         course_response = await generate_course_from_validated_plan(
             plan_row=plan_row,
             edited_sections=body.sections,

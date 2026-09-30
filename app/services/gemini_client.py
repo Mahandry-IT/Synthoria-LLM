@@ -2,6 +2,9 @@ import asyncio
 import json
 import logging
 import random
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from google import genai
@@ -9,12 +12,14 @@ from google.genai import types
 
 from app.core.config import Settings
 from app.core.exceptions import (
+    GeminiDailyQuotaExceededError,
     GeminiInvalidResponseError,
     GeminiQuotaExceededError,
     GeminiServiceError,
     GeminiUnavailableError,
 )
 from app.services.gemini_rate_limit import GeminiRateLimiter
+from app.services.quota_reset import next_pacific_midnight_utc
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +27,10 @@ logger = logging.getLogger(__name__)
 _BACKOFF_BASE_SECONDS = 2.0
 _BACKOFF_MAX_SECONDS = 60.0
 _BACKOFF_JITTER = 0.25
+
+# Accumule les appels Gemini du contexte async courant (voir `GeminiClient.track_calls`) — `None`
+# hors d'un `track_calls()`, ce qui ne doit jamais empêcher un appel Gemini de fonctionner.
+_call_log: ContextVar[list[dict[str, Any]] | None] = ContextVar("gemini_call_log", default=None)
 
 
 def _parse_gemini_error(exc: Exception) -> tuple[int | None, str | None, str | None]:
@@ -73,6 +82,38 @@ def _extract_retry_delay(exc: Exception) -> float | None:
     return None
 
 
+def _classify_quota_error(exc: Exception) -> str:
+    """Distingue un quota JOURNALIER (aucun retry ne peut réussir avant le reset) d'un simple
+    rate-limit MINUTE (transitoire, `_extract_retry_delay` suffit) à partir de
+    `error.details[].quotaId` (structure `QuotaFailure` de l'API Google).
+
+    Retour: `"day"`, `"minute"`, ou `"unknown"` si la violation n'est pas identifiable.
+
+    Le format exact de `quotaId` n'a pas été confirmé sur un vrai 429 de ce projet — tant que ce
+    n'est pas vérifié en conditions réelles, `"unknown"` reste traité comme retryable (voir
+    `_call_with_retry`) : ne jamais fail-fast sur une classification incertaine.
+    """
+    try:
+        body = getattr(exc, "response", None)
+        if body is None:
+            return "unknown"
+        data = getattr(body, "json", lambda: None)()
+        if data is None:
+            return "unknown"
+        for detail in data.get("error", {}).get("details", []):
+            if not detail.get("@type", "").endswith("QuotaFailure"):
+                continue
+            for violation in detail.get("violations", []):
+                quota_id = violation.get("quotaId", "")
+                if "PerDay" in quota_id:
+                    return "day"
+                if "PerMinute" in quota_id:
+                    return "minute"
+    except Exception:  # noqa: BLE001
+        pass
+    return "unknown"
+
+
 def _strip_additional_properties(schema: dict) -> dict:
     """Nettoie récursivement le JSON schema pour compatibilité Gemini API.
 
@@ -122,30 +163,99 @@ class GeminiClient:
     def is_configured(self) -> bool:
         return self._client is not None
 
-    async def _call_with_retry(self, func: Any, *args: Any, **kwargs: Any) -> Any:
-        """Retry avec backoff exponentiel + jitter. Les 429 sont retryables.
+    def _log_call(self, *, model: str, method: str, duration_ms: float, status: str, attempt: int) -> None:
+        """Log structuré `gemini_call` (jamais le prompt ni la clé) + accumulation dans
+        `_call_log` si un `track_calls()` est actif (sinon no-op, voir `_call_log`)."""
+        logger.info(
+            "gemini_call",
+            extra={"model": model, "method": method, "duration_ms": round(duration_ms, 1), "status": status, "attempt": attempt},
+        )
+        log = _call_log.get()
+        if log is not None:
+            log.append({"model": model, "method": method, "duration_ms": round(duration_ms, 1), "status": status})
+
+    @contextmanager
+    def track_calls(self):
+        """Accumule et logue en un `gemini_calls_summary` tous les appels Gemini faits pendant
+        le bloc (génération d'un cours entier, typiquement) — diagnostic de consommation de quota."""
+        token = _call_log.set([])
+        try:
+            yield
+        finally:
+            calls = _call_log.get() or []
+            by_model: dict[str, int] = {}
+            by_method: dict[str, int] = {}
+            for call in calls:
+                by_model[call["model"]] = by_model.get(call["model"], 0) + 1
+                by_method[call["method"]] = by_method.get(call["method"], 0) + 1
+            logger.info(
+                "gemini_calls_summary",
+                extra={"total_calls": len(calls), "by_model": by_model, "by_method": by_method},
+            )
+            _call_log.reset(token)
+
+    async def _call_with_retry(self, func: Any, *args: Any, method: str = "", **kwargs: Any) -> Any:
+        """Retry avec backoff exponentiel + jitter.
 
         Stratégie :
-          - Timeout / erreurs réseau → retry avec backoff
-          - 429 rate-limited → retry avec backoff (extrait retryDelay si dispo)
-          - Autres erreurs (clé invalide, etc.) → pas de retry
+          - 404 (modèle introuvable) → échec immédiat, aucun retry (`GeminiUnavailableError`).
+          - 429 rate-limited, quota JOURNALIER identifié → échec immédiat, aucun retry
+            (`GeminiDailyQuotaExceededError`, voir `_classify_quota_error`) : aucune tentative
+            supplémentaire ne peut réussir avant le prochain reset.
+          - 429 rate-limited, quota minute ou non classifiable → retry avec backoff (extrait
+            `retryDelay` si dispo).
+          - Timeout / autres erreurs → retry avec backoff standard.
+
+        `method` (nom de la méthode publique appelante, ex. "format_structured") sert uniquement
+        au log `gemini_call`/`gemini_calls_summary` — jamais au comportement de retry.
         """
         last_error: Exception | None = None
         rate_limit_delay: float | None = None
+        model = args[0] if args and isinstance(args[0], str) else "unknown"
 
         for attempt in range(self._settings.gemini_max_retries):
+            started = time.monotonic()
             try:
                 # Espace les appels (y compris les retries) pour rester sous GEMINI_RPM_LIMIT
                 # plutôt que de laisser Google renvoyer 429 puis retenter après coup.
                 await self._rate_limiter.acquire()
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     asyncio.to_thread(func, *args, **kwargs),
                     timeout=self._settings.gemini_timeout_seconds,
                 )
+                self._log_call(
+                    model=model, method=method, duration_ms=(time.monotonic() - started) * 1000,
+                    status="ok", attempt=attempt + 1,
+                )
+                return result
             except TimeoutError as exc:
                 last_error = exc
+                self._log_call(
+                    model=model, method=method, duration_ms=(time.monotonic() - started) * 1000,
+                    status="timeout", attempt=attempt + 1,
+                )
                 logger.warning("gemini_call_timeout", extra={"attempt": attempt + 1})
             except Exception as exc:  # noqa: BLE001 - le SDK ne type pas finement ses erreurs
+                self._log_call(
+                    model=model, method=method, duration_ms=(time.monotonic() - started) * 1000,
+                    status="error", attempt=attempt + 1,
+                )
+                error_code, _, error_message = _parse_gemini_error(exc)
+                if error_code == 404:
+                    # Modèle inconnu/désactivé : jamais résolu en réessayant le même modèle.
+                    raise GeminiUnavailableError(
+                        f"Modèle Gemini introuvable (404): {error_message or exc}",
+                        error_code=404, error_message=error_message,
+                    ) from exc
+                if _is_rate_limited(exc) and _classify_quota_error(exc) == "day":
+                    # Quota JOURNALIER : mathématiquement impossible de réussir avant le reset,
+                    # retenter ne ferait que gaspiller du RPM partagé avec l'autre process (api/worker).
+                    retry_at = next_pacific_midnight_utc()
+                    logger.warning("gemini_daily_quota_exceeded", extra={"model": model, "retry_at": retry_at.isoformat()})
+                    raise GeminiDailyQuotaExceededError(
+                        f"Quota Gemini journalier dépassé: {error_message or exc}",
+                        error_code=error_code, error_message=error_message, retry_at=retry_at,
+                    ) from exc
                 if _is_rate_limited(exc):
                     last_error = exc
                     rate_limit_delay = _extract_retry_delay(exc)
@@ -195,7 +305,7 @@ class GeminiClient:
             error_message=detail,
         ) from last_error
 
-    async def _call_with_model_cascade(self, build_request: Any, models: list[str]) -> Any:
+    async def _call_with_model_cascade(self, build_request: Any, models: list[str], *, method: str = "") -> Any:
         """Essaie chaque modèle de `models` dans l'ordre, bascule sur le suivant
         si l'appel échoue avec une erreur Gemini non transitoire côté appelant
         (`GeminiQuotaExceededError`/`GeminiUnavailableError` — `_call_with_retry`
@@ -215,7 +325,7 @@ class GeminiClient:
         last_error: GeminiServiceError | None = None
         for i, model in enumerate(models):
             try:
-                return await self._call_with_retry(build_request, model)
+                return await self._call_with_retry(build_request, model, method=method)
             except (GeminiQuotaExceededError, GeminiUnavailableError) as exc:
                 last_error = exc
                 next_model = models[i + 1] if i + 1 < len(models) else None
@@ -257,7 +367,8 @@ class GeminiClient:
             )
 
         response = await self._call_with_model_cascade(
-            _run, [self._settings.gemini_model_flash, self._settings.gemini_model_flash_lite]
+            _run, [self._settings.gemini_model_flash, self._settings.gemini_model_flash_lite],
+            method="search_grounded",
         )
         text = getattr(response, "text", "") or ""
         return text, self._extract_web_sources(response)
@@ -307,15 +418,18 @@ class GeminiClient:
             f"Question: {query}"
         )
 
+        def _run(model: str) -> Any:
+            return self._client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+
         try:
             response = await self._call_with_retry(
-                lambda: self._client.models.generate_content(
-                    model=self._settings.gemini_model_flash_lite,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                    ),
-                )
+                _run, self._settings.gemini_model_flash_lite, method="reformulate_query"
             )
             text = getattr(response, "text", "") or ""
             data = json.loads(text)
@@ -365,18 +479,24 @@ class GeminiClient:
 
         # Essai avec le modèle lite (moins cher)
         try:
-            response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
+            response = await self._call_with_retry(
+                _run, self._settings.gemini_model_flash_lite, method="format_structured"
+            )
         except GeminiQuotaExceededError:
             # Quota du lite épuisé : flash a son propre quota séparé, distinct de celui du lite
             # (contrairement au cas 400 ci-dessous, jamais résolu en re-tentant le même modèle).
             logger.info("gemini_lite_quota_fallback_to_flash")
-            response = await self._call_with_retry(_run, self._settings.gemini_model_flash)
+            response = await self._call_with_retry(
+                _run, self._settings.gemini_model_flash, method="format_structured"
+            )
         except GeminiUnavailableError as exc:
             # Si le lite échoue avec un 400 (schema trop complexe), retry avec flash
             error_msg = str(exc).lower()
             if "400" in error_msg or "invalid" in error_msg or "bad request" in error_msg:
                 logger.info("gemini_lite_schema_fallback_to_flash")
-                response = await self._call_with_retry(_run, self._settings.gemini_model_flash)
+                response = await self._call_with_retry(
+                    _run, self._settings.gemini_model_flash, method="format_structured"
+                )
             else:
                 raise
 
@@ -402,7 +522,9 @@ class GeminiClient:
                 config=types.GenerateContentConfig(system_instruction=system_instruction),
             )
 
-        response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
+        response = await self._call_with_retry(
+            _run, self._settings.gemini_model_flash_lite, method="describe_image"
+        )
         return getattr(response, "text", "") or ""
 
     async def rank_images(
@@ -435,7 +557,9 @@ class GeminiClient:
                 ),
             )
 
-        response = await self._call_with_retry(_run, self._settings.gemini_model_flash_lite)
+        response = await self._call_with_retry(
+            _run, self._settings.gemini_model_flash_lite, method="rank_images"
+        )
         text = getattr(response, "text", "") or ""
         try:
             return json.loads(text)

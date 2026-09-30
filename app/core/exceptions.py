@@ -1,3 +1,6 @@
+from datetime import datetime
+
+
 class OllamaServiceError(Exception):
     """Erreur générique lors de la communication avec Ollama."""
 
@@ -25,6 +28,19 @@ class GeminiUnavailableError(GeminiServiceError):
 
 class GeminiQuotaExceededError(GeminiServiceError):
     """Le quota / la limite de débit de l'API Gemini a été dépassé."""
+
+
+class GeminiDailyQuotaExceededError(GeminiQuotaExceededError):
+    """Quota JOURNALIER (RPD) épuisé — contrairement à un rate-limit minute, aucun retry ne peut
+    réussir avant le prochain reset : `retry_at` porte ce moment (UTC), utilisé pour l'en-tête
+    `Retry-After` (voir `app/api/routes.py::_gemini_http_errors`)."""
+
+    def __init__(
+        self, message: str, *, error_code: int | None = None, error_message: str | None = None,
+        retry_at: datetime | None = None,
+    ) -> None:
+        super().__init__(message, error_code=error_code, error_message=error_message)
+        self.retry_at = retry_at
 
 
 class GeminiInvalidResponseError(GeminiServiceError):
