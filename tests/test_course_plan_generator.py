@@ -73,6 +73,7 @@ def gemini_client():
     client.reformulate_query.return_value = "requête reformulée"
     client.search_grounded.return_value = ("synthèse web", [{"type": "web", "label": "W", "reference": "https://w"}])
     client.format_structured.return_value = PLAN_STRUCTURED
+    client.is_degraded.return_value = False
     return client
 
 
@@ -604,6 +605,25 @@ async def test_more_sections_retries_when_model_repeats_same_leads(gemini_client
     assert result.next_steps is not None
     assert result.next_steps.subtopics == ["Piste inédite 1", "Piste inédite 2"]
     assert result.next_steps.title == "Mes pistes perso" and result.next_steps.order == 3
+
+
+@pytest.mark.asyncio
+async def test_more_sections_skips_next_steps_retry_in_degraded_mode(gemini_client):
+    """Lot 6c : la relance ciblée next_steps est un appel Gemini OPTIONNEL — sautée si même le
+    modèle le plus robuste est indisponible, repli direct sur l'ancienne section privée des
+    pistes développées."""
+    gemini_client.is_degraded.return_value = True
+    gemini_client.format_structured.side_effect = [
+        {
+            "planned_sections": [_planned(4, "development", "Nouveau")],
+            "next_steps": _planned(9, "next_steps", "Suite", ["PISTE  a.", "Piste B !"]),
+        },
+    ]
+
+    result = await generate_more_sections(_plan_row(), _plan_with_next_steps(), gemini_client)
+
+    assert gemini_client.format_structured.await_count == 1  # pas de relance ciblée
+    assert result.next_steps is not None
 
 
 @pytest.mark.asyncio

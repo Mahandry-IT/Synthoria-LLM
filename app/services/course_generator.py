@@ -757,6 +757,9 @@ async def _complete_missing_coverage(
     """
     if not settings.course_coverage_completion_enabled:
         return response
+    if await gemini_client.is_degraded():
+        logger.info("course_coverage_completion_skipped_degraded")
+        return response
 
     total_missing_chars = sum(len(c.get("content", "")) for c in missing_chunks)
     if total_missing_chars < settings.course_coverage_min_missing_chars:

@@ -180,6 +180,13 @@ class GeminiClient:
     def is_configured(self) -> bool:
         return self._client is not None
 
+    async def is_degraded(self) -> bool:
+        """True si même le modèle le plus robuste configuré est marqué indisponible (voir
+        `GeminiQuotaManager.is_degraded`) : les appelants avec des appels Gemini OPTIONNELS
+        (best-effort, ex. complétion de couverture, classement de vidéos) devraient les sauter
+        plutôt que les tenter en vain."""
+        return await self._quota_manager.is_degraded()
+
     def _log_call(self, *, model: str, method: str, duration_ms: float, status: str, attempt: int) -> None:
         """Log structuré `gemini_call` (jamais le prompt ni la clé) + accumulation dans
         `_call_log` si un `track_calls()` est actif (sinon no-op, voir `_call_log`)."""

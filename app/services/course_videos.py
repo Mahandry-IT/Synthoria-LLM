@@ -316,6 +316,9 @@ async def rank_videos(
     """
     if not settings.course_videos_ranking_enabled or len(candidates) < 2:
         return candidates
+    if await gemini_client.is_degraded():
+        logger.info("course_videos_ranking_skipped_degraded")
+        return candidates
 
     numbered = "\n".join(
         f"{i}. « {c.title} » — {c.channel or 'chaîne inconnue'} ({_format_duration_for_prompt(c.duration_seconds)})"

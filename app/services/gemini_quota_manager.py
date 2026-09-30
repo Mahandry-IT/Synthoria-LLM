@@ -83,3 +83,13 @@ class GeminiQuotaManager:
                 await repo.mark_exhausted(session, model, next_pacific_midnight_utc())
         except Exception as exc:  # noqa: BLE001
             logger.warning("gemini_quota_manager_mark_exhausted_failed", extra={"model": model, "error": str(exc)})
+
+    async def is_degraded(self) -> bool:
+        """True si le modèle le plus robuste de `gemini_chain_generation` (le dernier — voir
+        `_default_gemini_chains`, lite d'abord) est marqué indisponible : même en épuisant toute
+        la chaîne, un appel Gemini échouerait. Signal pour les appelants de sauter les appels
+        OPTIONNELS (best-effort) plutôt que de les tenter en vain et gaspiller du RPM partagé."""
+        chain = self._settings.gemini_chain_generation
+        if not chain:
+            return False
+        return not await self.is_available(chain[-1])
