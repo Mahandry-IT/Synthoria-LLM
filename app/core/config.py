@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # rester synchronisée par défaut ; ne fixer explicitement (`.env`) que pour un ordre différent
     # ou une chaîne à plus de 2 modèles.
     gemini_chain_generation: list[str] = []  # format_structured : lite d'abord (moins cher)
-    gemini_chain_light: list[str] = []  # reformulate_query/describe_image/rank_images : lite d'abord
+    gemini_chain_light: list[str] = []  # reformulate_query/describe_images/rank_images : lite d'abord
     gemini_chain_search: list[str] = []  # search_grounded (grounding) : flash d'abord
     gemini_max_retries: int = 3
     gemini_timeout_seconds: float = 30.0

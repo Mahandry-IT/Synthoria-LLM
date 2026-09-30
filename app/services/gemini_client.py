@@ -510,40 +510,20 @@ class GeminiClient:
         except json.JSONDecodeError as exc:
             raise GeminiInvalidResponseError(f"Réponse Gemini non-JSON: {exc}") from exc
 
-    async def describe_image(self, image_bytes: bytes, mime_type: str, system_instruction: str) -> str:
-        """Décrit une image (ex. figure extraite d'un PDF) via `settings.gemini_chain_light`
-        (lite d'abord, moins cher).
-
-        Passe par le même rate limiter / retry-backoff / timeout que les autres appels Gemini
-        (`_call_with_retry`) — contrairement à un appel SDK direct qui pourrait déclencher une
-        rafale de requêtes non espacées et épuiser le quota (ex. plusieurs images par PDF ingéré).
-        """
-        self._ensure_configured()
-
-        def _run(model: str) -> Any:
-            return self._client.models.generate_content(
-                model=model,
-                contents=[types.Part.from_bytes(data=image_bytes, mime_type=mime_type)],
-                config=types.GenerateContentConfig(system_instruction=system_instruction),
-            )
-
-        response = await self._call_with_model_cascade(
-            _run, self._settings.gemini_chain_light, method="describe_image"
-        )
-        return getattr(response, "text", "") or ""
-
-    async def rank_images(
-        self, image_bytes_list: list[tuple[bytes, str]], prompt: str, *, system_instruction: str, response_schema: Any
+    async def _call_multimodal_structured(
+        self,
+        image_bytes_list: list[tuple[bytes, str]],
+        prompt: str,
+        *,
+        system_instruction: str,
+        response_schema: Any,
+        chain: list[str],
+        method: str,
     ) -> dict:
-        """Appel structuré multimodal (images + texte) : vérifie la pertinence de candidats d'image.
-
-        `image_bytes_list` : une entrée `(bytes, mime_type)` par candidat numéroté dans `prompt`
-        (même ordre). `settings.gemini_chain_light` (lite d'abord — ce jugement de pertinence ne
-        justifie pas le coût du modèle complet en temps normal ; le cascade n'y bascule qu'en
-        dernier recours, si le lite est indisponible, plutôt que de renoncer entièrement au
-        classement). Passe par `_call_with_model_cascade`/`_call_with_retry` comme tout appel
-        Gemini (rate limiter, retry-backoff, timeout).
-        """
+        """Appel structuré multimodal (N images numérotées + texte) partagé par `rank_images` et
+        `describe_images` : un seul appel Gemini plutôt qu'un par image, `response_schema` impose
+        le format JSON de sortie. Passe par `_call_with_model_cascade`/`_call_with_retry` comme
+        tout appel Gemini (rate limiter, retry-backoff, timeout, disjoncteur de quota)."""
         self._ensure_configured()
         clean_schema = _strip_additional_properties(
             response_schema.model_json_schema() if hasattr(response_schema, "model_json_schema") else response_schema
@@ -564,11 +544,42 @@ class GeminiClient:
                 ),
             )
 
-        response = await self._call_with_model_cascade(
-            _run, self._settings.gemini_chain_light, method="rank_images"
-        )
+        response = await self._call_with_model_cascade(_run, chain, method=method)
         text = getattr(response, "text", "") or ""
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
             raise GeminiInvalidResponseError(f"Réponse Gemini non-JSON: {exc}") from exc
+
+    async def rank_images(
+        self, image_bytes_list: list[tuple[bytes, str]], prompt: str, *, system_instruction: str, response_schema: Any
+    ) -> dict:
+        """Vérifie la pertinence de candidats d'image (une seule sélectionnée).
+
+        `image_bytes_list` : une entrée `(bytes, mime_type)` par candidat numéroté dans `prompt`
+        (même ordre). `settings.gemini_chain_light` (lite d'abord — ce jugement de pertinence ne
+        justifie pas le coût du modèle complet en temps normal ; le cascade n'y bascule qu'en
+        dernier recours, si le lite est indisponible, plutôt que de renoncer entièrement au
+        classement).
+        """
+        return await self._call_multimodal_structured(
+            image_bytes_list, prompt,
+            system_instruction=system_instruction, response_schema=response_schema,
+            chain=self._settings.gemini_chain_light, method="rank_images",
+        )
+
+    async def describe_images(
+        self, image_bytes_list: list[tuple[bytes, str]], prompt: str, *, system_instruction: str, response_schema: Any
+    ) -> dict:
+        """Décrit N images (ex. figures extraites d'un PDF) en un seul appel Gemini au lieu d'un
+        appel par image — réduit la consommation de quota proportionnellement au nombre d'images
+        regroupées (voir `gemini_vision.py`).
+
+        `image_bytes_list` : une entrée `(bytes, mime_type)` par image numérotée dans `prompt`
+        (même ordre). `settings.gemini_chain_light` (lite d'abord).
+        """
+        return await self._call_multimodal_structured(
+            image_bytes_list, prompt,
+            system_instruction=system_instruction, response_schema=response_schema,
+            chain=self._settings.gemini_chain_light, method="describe_images",
+        )

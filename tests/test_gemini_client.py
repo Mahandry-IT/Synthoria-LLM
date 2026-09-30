@@ -175,40 +175,61 @@ async def test_format_structured_falls_back_to_flash_on_400_schema_error():
 
 
 @pytest.mark.asyncio
-async def test_describe_image_uses_flash_lite_model():
-    """L'extraction d'images (PDF) doit utiliser le modèle lite, moins coûteux que flash."""
-    response = SimpleNamespace(text="Une image décrivant un graphique.")
+async def test_describe_images_sends_one_part_per_image_plus_prompt_uses_flash_lite():
+    """Un seul appel réseau pour N images (voir `gemini_vision.py`), modèle lite d'abord."""
+    response = SimpleNamespace(text='{"items": [{"index": 0, "informative": true, "description": "desc"}]}')
     fake_client = _fake_genai_client(generate_content_return_value=response)
     settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
     client = GeminiClient(settings, client=fake_client)
 
-    text = await client.describe_image(b"fake-bytes", "image/png", "system instruction")
+    result = await client.describe_images(
+        [(b"img1", "image/png"), (b"img2", "image/png")],
+        "prompt texte",
+        system_instruction="system",
+        response_schema={"type": "object"},
+    )
 
-    assert text == "Une image décrivant un graphique."
+    assert result == {"items": [{"index": 0, "informative": True, "description": "desc"}]}
     fake_client.models.generate_content.assert_called_once()
-    assert fake_client.models.generate_content.call_args.kwargs["model"] == "flash-lite"
+    call = fake_client.models.generate_content.call_args
+    assert call.kwargs["model"] == "flash-lite"
+    contents = call.kwargs["contents"]
+    assert len(contents) == 3  # 2 images + le texte du prompt
+    assert contents[-1] == "prompt texte"
 
 
 @pytest.mark.asyncio
-async def test_describe_image_goes_through_rate_limiter_and_retries():
-    """Un 429 sur describe_image doit retenter comme n'importe quel autre appel Gemini."""
-    response = SimpleNamespace(text="ok")
+async def test_describe_images_goes_through_rate_limiter_and_retries():
+    """Un 429 sur describe_images doit retenter comme n'importe quel autre appel Gemini."""
+    response = SimpleNamespace(text='{"items": []}')
     fake_client = MagicMock()
     fake_client.models.generate_content.side_effect = [Exception("429 RESOURCE_EXHAUSTED"), response]
     client = GeminiClient(_settings(), client=fake_client)
 
-    text = await client.describe_image(b"fake-bytes", "image/png", "system")
+    result = await client.describe_images(
+        [(b"img", "image/png")], "prompt", system_instruction="s", response_schema={}
+    )
 
-    assert text == "ok"
+    assert result == {"items": []}
     assert fake_client.models.generate_content.call_count == 2
 
 
 @pytest.mark.asyncio
-async def test_describe_image_raises_unavailable_without_api_key():
+async def test_describe_images_raises_invalid_response_on_non_json():
+    response = SimpleNamespace(text="not json")
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    client = GeminiClient(_settings(), client=fake_client)
+
+    with pytest.raises(GeminiInvalidResponseError):
+        await client.describe_images([(b"img", "image/png")], "prompt", system_instruction="s", response_schema={})
+
+
+@pytest.mark.asyncio
+async def test_describe_images_raises_unavailable_without_api_key():
     client = GeminiClient(Settings(gemini_api_key=None))
 
     with pytest.raises(GeminiUnavailableError):
-        await client.describe_image(b"fake-bytes", "image/png", "system")
+        await client.describe_images([(b"img", "image/png")], "prompt", system_instruction="s", response_schema={})
 
 
 @pytest.mark.asyncio
@@ -406,12 +427,12 @@ async def test_track_calls_logs_summary_with_counts_by_model_and_method(caplog):
     with caplog.at_level("INFO", logger="app.services.gemini_client"):
         with client.track_calls():
             await client.format_structured("raw", response_schema={}, system_instruction="system")
-            await client.describe_image(b"img", "image/png", "system")
+            await client.describe_images([(b"img", "image/png")], "prompt", system_instruction="system", response_schema={})
 
     summaries = [r for r in caplog.records if r.message == "gemini_calls_summary"]
     assert len(summaries) == 1
     assert summaries[0].total_calls == 2
-    assert summaries[0].by_method == {"format_structured": 1, "describe_image": 1}
+    assert summaries[0].by_method == {"format_structured": 1, "describe_images": 1}
     assert summaries[0].by_model == {"flash-lite": 2}
 
 
@@ -445,18 +466,20 @@ async def test_reformulate_query_falls_back_to_next_model_in_chain():
 
 
 @pytest.mark.asyncio
-async def test_describe_image_falls_back_to_next_model_in_chain():
+async def test_describe_images_falls_back_to_next_model_in_chain():
     settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
     fake_client = MagicMock()
     fake_client.models.generate_content.side_effect = [
         _quota_exceeded_error(), _quota_exceeded_error(),
-        SimpleNamespace(text="description de l'image"),
+        SimpleNamespace(text='{"items": [{"index": 0, "informative": true, "description": "desc"}]}'),
     ]
     client = GeminiClient(settings, client=fake_client)
 
-    result = await client.describe_image(b"img", "image/png", "system")
+    result = await client.describe_images(
+        [(b"img", "image/png")], "prompt", system_instruction="s", response_schema={}
+    )
 
-    assert result == "description de l'image"
+    assert result == {"items": [{"index": 0, "informative": True, "description": "desc"}]}
     assert fake_client.models.generate_content.call_args.kwargs["model"] == "flash-full"
 
 
