@@ -12,6 +12,8 @@ def client():
     mock_ollama = AsyncMock()
     with TestClient(app) as test_client:
         app.state.ollama_client = mock_ollama  # écrase le client réel créé par le lifespan
+        app.state.gemini_client = AsyncMock()
+        app.state.gemini_client.health_snapshot.return_value = None
         yield test_client, mock_ollama
 
 
@@ -56,4 +58,19 @@ def test_health(client):
     res = test_client.get("/health")
 
     assert res.status_code == 200
-    assert res.json() == {"status": "ok", "ollama_reachable": True}
+    assert res.json() == {"status": "ok", "ollama_reachable": True, "gemini": None}
+
+
+def test_health_includes_gemini_model_state_when_available(client):
+    test_client, mock_ollama = client
+    mock_ollama.is_reachable.return_value = True
+    app.state.gemini_client.health_snapshot.return_value = {
+        "flash-lite": {"available": True, "requests_today": 3, "exhausted_until": None},
+    }
+
+    res = test_client.get("/health")
+
+    assert res.status_code == 200
+    assert res.json()["gemini"] == {
+        "flash-lite": {"available": True, "requests_today": 3, "exhausted_until": None},
+    }

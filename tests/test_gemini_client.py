@@ -562,6 +562,27 @@ async def test_call_with_retry_records_daily_exhausted_via_quota_manager():
     client._quota_manager.record_daily_exhausted.assert_awaited_once_with("flash-lite")
 
 
+# ─── is_degraded / health_snapshot (lot 6c / 7) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_is_degraded_delegates_to_quota_manager():
+    client = GeminiClient(_settings())
+    client._quota_manager.is_degraded = AsyncMock(return_value=True)
+
+    assert await client.is_degraded() is True
+    client._quota_manager.is_degraded.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_snapshot_delegates_to_quota_manager():
+    client = GeminiClient(_settings())
+    snapshot = {"flash-lite": {"available": True, "requests_today": 0, "exhausted_until": None}}
+    client._quota_manager.get_health = AsyncMock(return_value=snapshot)
+
+    assert await client.health_snapshot() == snapshot
+
+
 # ─── GeminiResponseCacheManager wiring (lot 6b) ─────────────────
 
 

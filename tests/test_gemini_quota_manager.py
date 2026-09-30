@@ -183,3 +183,131 @@ async def test_record_daily_exhausted_never_raises_when_db_unavailable(repo):
     manager = GeminiQuotaManager(_settings(), _FakeSessionFactory())
 
     await manager.record_daily_exhausted("flash-lite")  # ne doit pas lever
+
+
+# ─── is_degraded ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_is_degraded_false_when_no_chain_configured(repo):
+    settings = _settings()
+    settings.gemini_chain_generation = []  # `Settings._default_gemini_chains` ne laisse jamais ce
+    # champ vide en usage normal — forcé ici après coup pour couvrir le garde-fou défensif.
+    manager = GeminiQuotaManager(settings, _FakeSessionFactory())
+
+    assert await manager.is_degraded() is False
+    repo.get_states.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_is_degraded_true_when_last_model_of_chain_unavailable(repo):
+    repo.get_states.return_value = {
+        "flash-full": SimpleNamespace(
+            day=date.today(), request_count=1, exhausted_until=datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+    }
+    manager = GeminiQuotaManager(
+        _settings(gemini_chain_generation=["flash-lite", "flash-full"]), _FakeSessionFactory()
+    )
+
+    assert await manager.is_degraded() is True
+
+
+@pytest.mark.asyncio
+async def test_is_degraded_false_when_last_model_of_chain_available(repo):
+    manager = GeminiQuotaManager(
+        _settings(gemini_chain_generation=["flash-lite", "flash-full"]), _FakeSessionFactory()
+    )
+
+    assert await manager.is_degraded() is False
+
+
+# ─── get_health ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_health_returns_none_without_session_factory():
+    manager = GeminiQuotaManager(_settings(), session_factory=None)
+
+    assert await manager.get_health() is None
+
+
+@pytest.mark.asyncio
+async def test_get_health_returns_none_when_no_chain_configured(repo):
+    settings = _settings()
+    # `Settings._default_gemini_chains` ne laisse jamais ces champs vides en usage normal — forcé
+    # ici après coup pour couvrir le garde-fou défensif.
+    settings.gemini_chain_generation = []
+    settings.gemini_chain_light = []
+    settings.gemini_chain_search = []
+    manager = GeminiQuotaManager(settings, _FakeSessionFactory())
+
+    assert await manager.get_health() is None
+    repo.get_states.assert_not_awaited()
+
+
+def _settings_single_model_chain(model: str) -> Settings:
+    """Les 3 chaînes explicitement sur le même unique modèle : `get_health` n'en verra qu'un."""
+    return _settings(gemini_chain_generation=[model], gemini_chain_light=[model], gemini_chain_search=[model])
+
+
+@pytest.mark.asyncio
+async def test_get_health_returns_none_when_db_raises(repo):
+    repo.get_states.side_effect = RuntimeError("db down")
+    manager = GeminiQuotaManager(_settings_single_model_chain("flash-lite"), _FakeSessionFactory())
+
+    assert await manager.get_health() is None
+
+
+@pytest.mark.asyncio
+async def test_get_health_reports_unseen_model_as_available_with_no_requests(repo):
+    manager = GeminiQuotaManager(_settings_single_model_chain("flash-lite"), _FakeSessionFactory())
+
+    health = await manager.get_health()
+
+    assert health == {"flash-lite": {"available": True, "requests_today": 0, "exhausted_until": None}}
+
+
+@pytest.mark.asyncio
+async def test_get_health_uses_cache_within_ttl_without_db_call(repo):
+    """Un probe HTTP répété (ex. HEALTHCHECK Docker toutes les 30s) ne doit pas déclencher une
+    requête DB à chaque appel."""
+    manager = GeminiQuotaManager(_settings_single_model_chain("flash-lite"), _FakeSessionFactory())
+
+    await manager.get_health()
+    await manager.get_health()
+
+    repo.get_states.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_health_reports_exhausted_model(repo):
+    exhausted_until = datetime.now(timezone.utc) + timedelta(hours=2)
+    repo.get_states.return_value = {
+        "flash-lite": SimpleNamespace(day=date.today(), request_count=12, exhausted_until=exhausted_until)
+    }
+    manager = GeminiQuotaManager(_settings_single_model_chain("flash-lite"), _FakeSessionFactory())
+
+    health = await manager.get_health()
+
+    assert health["flash-lite"]["available"] is False
+    assert health["flash-lite"]["requests_today"] == 12
+    assert health["flash-lite"]["exhausted_until"] == exhausted_until.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_get_health_deduplicates_models_shared_across_chains(repo):
+    manager = GeminiQuotaManager(
+        _settings(
+            gemini_chain_generation=["flash-lite", "flash-full"],
+            gemini_chain_light=["flash-lite"],
+            gemini_chain_search=["flash-full", "flash-lite"],
+        ),
+        _FakeSessionFactory(),
+    )
+
+    health = await manager.get_health()
+
+    assert set(health.keys()) == {"flash-lite", "flash-full"}
+    repo.get_states.assert_awaited_once()
+    assert repo.get_states.await_args.args[1] == ["flash-lite", "flash-full"]

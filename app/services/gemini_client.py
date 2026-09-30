@@ -187,6 +187,12 @@ class GeminiClient:
         plutôt que les tenter en vain."""
         return await self._quota_manager.is_degraded()
 
+    async def health_snapshot(self) -> dict[str, dict] | None:
+        """État par modèle des chaînes configurées, pour `GET /health` (voir
+        `GeminiQuotaManager.get_health`) — `None` si indisponible (pas de DB, Postgres
+        injoignable), jamais levé : `/health` ne doit jamais échouer pour cette optimisation."""
+        return await self._quota_manager.get_health()
+
     def _log_call(self, *, model: str, method: str, duration_ms: float, status: str, attempt: int) -> None:
         """Log structuré `gemini_call` (jamais le prompt ni la clé) + accumulation dans
         `_call_log` si un `track_calls()` est actif (sinon no-op, voir `_call_log`)."""

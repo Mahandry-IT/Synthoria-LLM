@@ -58,9 +58,18 @@ class GenerateResponse(BaseModel):
     done: bool
 
 
+class GeminiModelHealth(BaseModel):
+    available: bool = Field(..., description="False si épuisé (quota jour) ou budget RPD configuré atteint.")
+    requests_today: int = Field(..., description="Compteur d'appels réussis aujourd'hui, partagé api/worker.")
+    exhausted_until: str | None = Field(None, description="ISO 8601 (UTC) si marqué épuisé, sinon null.")
+
+
 class HealthResponse(BaseModel):
     status: str
     ollama_reachable: bool
+    gemini: dict[str, GeminiModelHealth] | None = Field(
+        None, description="État par modèle Gemini configuré ; absent si la DB de quota est indisponible."
+    )
 
 
 class DocumentQueryRequest(BaseModel):
