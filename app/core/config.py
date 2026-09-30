@@ -1,7 +1,7 @@
 from datetime import timedelta
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model_flash: str = "gemini-3.6-flash"
     gemini_model_flash_lite: str = "gemini-3.5-flash-lite"
+    # Chaînes de repli configurables (voir `_call_with_model_cascade`) : liste vide = calculée à
+    # partir de `gemini_model_flash`/`gemini_model_flash_lite` (voir `_default_gemini_chains`) pour
+    # rester synchronisée par défaut ; ne fixer explicitement (`.env`) que pour un ordre différent
+    # ou une chaîne à plus de 2 modèles.
+    gemini_chain_generation: list[str] = []  # format_structured : lite d'abord (moins cher)
+    gemini_chain_light: list[str] = []  # reformulate_query/describe_image/rank_images : lite d'abord
+    gemini_chain_search: list[str] = []  # search_grounded (grounding) : flash d'abord
     gemini_max_retries: int = 3
     gemini_timeout_seconds: float = 30.0
     # Marge sous la limite Google (ex. 15 RPM sur gemini-*-flash-lite au palier gratuit) : les
@@ -153,6 +160,18 @@ class Settings(BaseSettings):
     @property
     def media_web_cache_ttl(self) -> timedelta:
         return timedelta(hours=self.media_web_cache_ttl_hours)
+
+    @model_validator(mode="after")
+    def _default_gemini_chains(self) -> "Settings":
+        """Chaîne laissée vide (défaut) : dérivée de `gemini_model_flash`/`gemini_model_flash_lite`
+        pour rester synchronisée avec eux sans double configuration à maintenir."""
+        if not self.gemini_chain_generation:
+            self.gemini_chain_generation = [self.gemini_model_flash_lite, self.gemini_model_flash]
+        if not self.gemini_chain_light:
+            self.gemini_chain_light = [self.gemini_model_flash_lite, self.gemini_model_flash]
+        if not self.gemini_chain_search:
+            self.gemini_chain_search = [self.gemini_model_flash, self.gemini_model_flash_lite]
+        return self
 
 
 @lru_cache

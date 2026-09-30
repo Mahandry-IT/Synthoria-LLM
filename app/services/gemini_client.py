@@ -370,12 +370,12 @@ class GeminiClient:
         Retour: tuple (texte_brut, sources_web) où chaque source web est
             {"type": "web", "label": str, "reference": str}.
 
-        Fonctionnement: essaie `gemini_model_flash` puis, en cas de quota
-        dépassé ou d'indisponibilité, bascule sur `gemini_model_flash_lite`
-        (voir `_call_with_model_cascade`).
+        Fonctionnement: essaie les modèles de `settings.gemini_chain_search` dans l'ordre (voir
+        `_call_with_model_cascade`), en sautant ceux marqués indisponibles par le disjoncteur de
+        quota (`GeminiQuotaManager`).
 
         Lève: GeminiUnavailableError, GeminiQuotaExceededError (du dernier
-            modèle essayé, si les deux échouent).
+            modèle essayé, si tous échouent).
         """
         self._ensure_configured()
 
@@ -390,8 +390,7 @@ class GeminiClient:
             )
 
         response = await self._call_with_model_cascade(
-            _run, [self._settings.gemini_model_flash, self._settings.gemini_model_flash_lite],
-            method="search_grounded",
+            _run, self._settings.gemini_chain_search, method="search_grounded",
         )
         text = getattr(response, "text", "") or ""
         return text, self._extract_web_sources(response)
@@ -420,8 +419,8 @@ class GeminiClient:
     async def reformulate_query(self, query: str, filename: str | list[str] | None = None) -> str:
         """Reformule une question vague en une requête précise pour la recherche vectorielle.
 
-        Stratégie : un seul appel au modèle lite, réponse JSON simple.
-        En cas d'échec, retourne la query originale (pas de blocage).
+        Stratégie : `settings.gemini_chain_light` (lite d'abord), réponse JSON simple.
+        En cas d'échec (tous les modèles de la chaîne), retourne la query originale (pas de blocage).
         """
         self._ensure_configured()
 
@@ -451,8 +450,8 @@ class GeminiClient:
             )
 
         try:
-            response = await self._call_with_retry(
-                _run, self._settings.gemini_model_flash_lite, method="reformulate_query"
+            response = await self._call_with_model_cascade(
+                _run, self._settings.gemini_chain_light, method="reformulate_query"
             )
             text = getattr(response, "text", "") or ""
             data = json.loads(text)
@@ -477,9 +476,10 @@ class GeminiClient:
         Si response_schema est une classe Pydantic, extrait le JSON schema via
         model_json_schema(). Utilise response_json_schema (bypass validation SDK).
 
-        Stratégie : tente d'abord avec le modèle lite, fallback sur le modèle flash si son quota
-        est épuisé (429, quota séparé de celui de flash) ou si le schema est trop complexe pour
-        lui (400 InvalidArgument).
+        Stratégie : `settings.gemini_chain_generation` (lite d'abord, moins cher), fallback sur le
+        modèle suivant si le courant est en quota ou indisponible (`_call_with_model_cascade`).
+        Un 400 (schema trop complexe) sur le lite est aussi couvert : `_call_with_retry` le classe
+        en `GeminiUnavailableError`, que le cascade rattrape comme n'importe quel autre échec.
         """
         self._ensure_configured()
         if response_schema is not None:
@@ -500,28 +500,9 @@ class GeminiClient:
                 ),
             )
 
-        # Essai avec le modèle lite (moins cher)
-        try:
-            response = await self._call_with_retry(
-                _run, self._settings.gemini_model_flash_lite, method="format_structured"
-            )
-        except GeminiQuotaExceededError:
-            # Quota du lite épuisé : flash a son propre quota séparé, distinct de celui du lite
-            # (contrairement au cas 400 ci-dessous, jamais résolu en re-tentant le même modèle).
-            logger.info("gemini_lite_quota_fallback_to_flash")
-            response = await self._call_with_retry(
-                _run, self._settings.gemini_model_flash, method="format_structured"
-            )
-        except GeminiUnavailableError as exc:
-            # Si le lite échoue avec un 400 (schema trop complexe), retry avec flash
-            error_msg = str(exc).lower()
-            if "400" in error_msg or "invalid" in error_msg or "bad request" in error_msg:
-                logger.info("gemini_lite_schema_fallback_to_flash")
-                response = await self._call_with_retry(
-                    _run, self._settings.gemini_model_flash, method="format_structured"
-                )
-            else:
-                raise
+        response = await self._call_with_model_cascade(
+            _run, self._settings.gemini_chain_generation, method="format_structured"
+        )
 
         text = getattr(response, "text", "") or ""
         try:
@@ -530,7 +511,8 @@ class GeminiClient:
             raise GeminiInvalidResponseError(f"Réponse Gemini non-JSON: {exc}") from exc
 
     async def describe_image(self, image_bytes: bytes, mime_type: str, system_instruction: str) -> str:
-        """Décrit une image (ex. figure extraite d'un PDF) via `gemini_model_flash_lite`.
+        """Décrit une image (ex. figure extraite d'un PDF) via `settings.gemini_chain_light`
+        (lite d'abord, moins cher).
 
         Passe par le même rate limiter / retry-backoff / timeout que les autres appels Gemini
         (`_call_with_retry`) — contrairement à un appel SDK direct qui pourrait déclencher une
@@ -545,8 +527,8 @@ class GeminiClient:
                 config=types.GenerateContentConfig(system_instruction=system_instruction),
             )
 
-        response = await self._call_with_retry(
-            _run, self._settings.gemini_model_flash_lite, method="describe_image"
+        response = await self._call_with_model_cascade(
+            _run, self._settings.gemini_chain_light, method="describe_image"
         )
         return getattr(response, "text", "") or ""
 
@@ -556,9 +538,11 @@ class GeminiClient:
         """Appel structuré multimodal (images + texte) : vérifie la pertinence de candidats d'image.
 
         `image_bytes_list` : une entrée `(bytes, mime_type)` par candidat numéroté dans `prompt`
-        (même ordre). `gemini_model_flash_lite` uniquement — jamais flash, ce jugement de
-        pertinence ne justifie pas le coût du modèle complet. Passe par `_call_with_retry` comme
-        tout appel Gemini (rate limiter, retry-backoff, timeout).
+        (même ordre). `settings.gemini_chain_light` (lite d'abord — ce jugement de pertinence ne
+        justifie pas le coût du modèle complet en temps normal ; le cascade n'y bascule qu'en
+        dernier recours, si le lite est indisponible, plutôt que de renoncer entièrement au
+        classement). Passe par `_call_with_model_cascade`/`_call_with_retry` comme tout appel
+        Gemini (rate limiter, retry-backoff, timeout).
         """
         self._ensure_configured()
         clean_schema = _strip_additional_properties(
@@ -580,8 +564,8 @@ class GeminiClient:
                 ),
             )
 
-        response = await self._call_with_retry(
-            _run, self._settings.gemini_model_flash_lite, method="rank_images"
+        response = await self._call_with_model_cascade(
+            _run, self._settings.gemini_chain_light, method="rank_images"
         )
         text = getattr(response, "text", "") or ""
         try:

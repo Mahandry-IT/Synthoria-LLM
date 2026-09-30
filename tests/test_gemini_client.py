@@ -425,6 +425,57 @@ async def test_calls_outside_track_calls_context_do_not_raise():
     assert result == {"ok": True}
 
 
+# ─── Chaînes de repli généralisées (lot 5a) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reformulate_query_falls_back_to_next_model_in_chain():
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [
+        _quota_exceeded_error(), _quota_exceeded_error(),  # épuise flash-lite (gemini_max_retries=2)
+        SimpleNamespace(text='{"query": "requête reformulée"}'),  # flash-full répond
+    ]
+    client = GeminiClient(settings, client=fake_client)
+
+    result = await client.reformulate_query("question vague")
+
+    assert result == "requête reformulée"
+    assert fake_client.models.generate_content.call_args.kwargs["model"] == "flash-full"
+
+
+@pytest.mark.asyncio
+async def test_describe_image_falls_back_to_next_model_in_chain():
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [
+        _quota_exceeded_error(), _quota_exceeded_error(),
+        SimpleNamespace(text="description de l'image"),
+    ]
+    client = GeminiClient(settings, client=fake_client)
+
+    result = await client.describe_image(b"img", "image/png", "system")
+
+    assert result == "description de l'image"
+    assert fake_client.models.generate_content.call_args.kwargs["model"] == "flash-full"
+
+
+@pytest.mark.asyncio
+async def test_rank_images_falls_back_to_next_model_in_chain():
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [
+        _quota_exceeded_error(), _quota_exceeded_error(),
+        SimpleNamespace(text='{"best_index": 0, "score": 90, "reason": "ok"}'),
+    ]
+    client = GeminiClient(settings, client=fake_client)
+
+    result = await client.rank_images([(b"img", "image/webp")], "prompt", system_instruction="s", response_schema={})
+
+    assert result == {"best_index": 0, "score": 90, "reason": "ok"}
+    assert fake_client.models.generate_content.call_args.kwargs["model"] == "flash-full"
+
+
 # ─── GeminiQuotaManager wiring (lot 4) ──────────────────────────
 
 
