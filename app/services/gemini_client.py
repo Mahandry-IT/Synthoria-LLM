@@ -9,6 +9,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings
 from app.core.exceptions import (
@@ -18,6 +19,7 @@ from app.core.exceptions import (
     GeminiServiceError,
     GeminiUnavailableError,
 )
+from app.services.gemini_quota_manager import GeminiQuotaManager
 from app.services.gemini_rate_limit import GeminiRateLimiter
 from app.services.quota_reset import next_pacific_midnight_utc
 
@@ -146,14 +148,24 @@ class GeminiClient:
       2. `format_structured` — reformatage strict en JSON (pas de recherche web).
     """
 
-    def __init__(self, settings: Settings, client: "genai.Client | None" = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: "genai.Client | None" = None,
+        session_factory: async_sessionmaker | None = None,
+    ) -> None:
         self._settings = settings
         self._client = client or (
             genai.Client(api_key=settings.gemini_api_key) if settings.gemini_api_key else None
         )
         # Une instance par processus (voir gemini_rate_limit.py) : partagée entre tous les appels
         # tant que `GeminiClient` reste un singleton applicatif (app.state.gemini_client).
-        self._rate_limiter = GeminiRateLimiter(settings.gemini_rpm_limit)
+        # `gemini_rpm_share` répartit le RPM partagé entre api/worker (ex. 0.7/0.3) plutôt que de
+        # laisser chacun croire qu'il dispose de la totalité du quota.
+        self._rate_limiter = GeminiRateLimiter(max(1, round(settings.gemini_rpm_limit * settings.gemini_rpm_share)))
+        # `session_factory=None` : GeminiQuotaManager devient un no-op silencieux (toujours
+        # disponible) — utilisable sans DB (scripts, tests) sans changer le comportement.
+        self._quota_manager = GeminiQuotaManager(settings, session_factory)
 
     def _ensure_configured(self) -> None:
         if self._client is None:
@@ -213,6 +225,15 @@ class GeminiClient:
         rate_limit_delay: float | None = None
         model = args[0] if args and isinstance(args[0], str) else "unknown"
 
+        if not await self._quota_manager.is_available(model):
+            # Déjà marqué épuisé (429 jour reçu plus tôt, ou budget RPD configuré atteint) :
+            # aucun appel réseau. `_call_with_model_cascade` catche cette erreur pour passer au
+            # modèle suivant, comme n'importe quel autre échec non transitoire.
+            raise GeminiDailyQuotaExceededError(
+                f"Modèle Gemini {model} marqué indisponible (quota épuisé)",
+                retry_at=next_pacific_midnight_utc(),
+            )
+
         for attempt in range(self._settings.gemini_max_retries):
             started = time.monotonic()
             try:
@@ -227,6 +248,7 @@ class GeminiClient:
                     model=model, method=method, duration_ms=(time.monotonic() - started) * 1000,
                     status="ok", attempt=attempt + 1,
                 )
+                await self._quota_manager.record_success(model)
                 return result
             except TimeoutError as exc:
                 last_error = exc
@@ -252,6 +274,7 @@ class GeminiClient:
                     # retenter ne ferait que gaspiller du RPM partagé avec l'autre process (api/worker).
                     retry_at = next_pacific_midnight_utc()
                     logger.warning("gemini_daily_quota_exceeded", extra={"model": model, "retry_at": retry_at.isoformat()})
+                    await self._quota_manager.record_daily_exhausted(model)
                     raise GeminiDailyQuotaExceededError(
                         f"Quota Gemini journalier dépassé: {error_message or exc}",
                         error_code=error_code, error_message=error_message, retry_at=retry_at,

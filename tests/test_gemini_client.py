@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -423,6 +423,83 @@ async def test_calls_outside_track_calls_context_do_not_raise():
     result = await client.format_structured("raw", response_schema={}, system_instruction="system")
 
     assert result == {"ok": True}
+
+
+# ─── GeminiQuotaManager wiring (lot 4) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_skips_network_call_when_quota_manager_reports_unavailable():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"ok": true}'))
+    client = GeminiClient(_settings(), client=fake_client)
+    client._quota_manager.is_available = AsyncMock(return_value=False)
+
+    with pytest.raises(GeminiDailyQuotaExceededError):
+        await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+    fake_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cascade_skips_model_marked_unavailable_by_quota_manager():
+    """5b : une fois indisponible détecté sans appel réseau, `_call_with_model_cascade` bascule
+    sur le modèle suivant comme pour n'importe quel autre échec non transitoire."""
+    response = SimpleNamespace(text="réponse flash-lite", candidates=[])
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    client = GeminiClient(_settings(), client=fake_client)
+    unavailable_model = client._settings.gemini_model_flash
+
+    async def fake_is_available(model: str) -> bool:
+        return model != unavailable_model
+
+    client._quota_manager.is_available = AsyncMock(side_effect=fake_is_available)
+
+    text, _ = await client.search_grounded("question", "system")
+
+    assert text == "réponse flash-lite"
+    fake_client.models.generate_content.assert_called_once()  # jamais tenté sur le modèle indisponible
+    assert fake_client.models.generate_content.call_args.kwargs["model"] == client._settings.gemini_model_flash_lite
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_records_success_via_quota_manager():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"ok": true}'))
+    client = GeminiClient(_settings(), client=fake_client)
+    client._quota_manager.record_success = AsyncMock()
+
+    await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+    client._quota_manager.record_success.assert_awaited_once_with(client._settings.gemini_model_flash_lite)
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_records_daily_exhausted_via_quota_manager():
+    fake_client = _fake_genai_client(
+        generate_content_side_effect=_quota_error_with_violation("PerDayPerProject")
+    )
+    client = GeminiClient(_settings(), client=fake_client)
+    client._quota_manager.record_daily_exhausted = AsyncMock()
+
+    with pytest.raises(GeminiDailyQuotaExceededError):
+        await client._call_with_retry(
+            lambda model: fake_client.models.generate_content(model=model), "flash-lite"
+        )
+
+    client._quota_manager.record_daily_exhausted.assert_awaited_once_with("flash-lite")
+
+
+@pytest.mark.asyncio
+async def test_rpm_share_reduces_the_effective_rate_limit():
+    client = GeminiClient(_settings(gemini_rpm_limit=10, gemini_rpm_share=0.3))
+
+    assert client._rate_limiter._limit == 3  # round(10 * 0.3)
+
+
+@pytest.mark.asyncio
+async def test_rpm_share_never_produces_a_zero_limit():
+    client = GeminiClient(_settings(gemini_rpm_limit=10, gemini_rpm_share=0.01))
+
+    assert client._rate_limiter._limit >= 1
 
 
 @pytest.mark.asyncio

@@ -33,14 +33,16 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.ollama_client = OllamaClient(settings)
     app.state.vector_store = NumpyVectorStore(settings, app.state.ollama_client)
-    app.state.gemini_client = GeminiClient(settings)
 
-    # PostgreSQL async engine + auto-create tables
+    # PostgreSQL async engine + auto-create tables — créé avant GeminiClient pour lui injecter
+    # session_factory (état de quota partagé api/worker, voir gemini_quota_manager.py).
     engine, session_factory = create_engine(settings)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
+
+    app.state.gemini_client = GeminiClient(settings, session_factory=session_factory)
 
     yield
 

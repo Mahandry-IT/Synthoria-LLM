@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     # appels sont espacés pour rester sous ce seuil plutôt que de heurter un 429. Par processus
     # (api et worker ont chacun leur fenêtre) — voir app/services/gemini_rate_limit.py.
     gemini_rpm_limit: int = 14
+    # Multiplicateur appliqué à `gemini_rpm_limit` : différencié par service (api vs worker) via
+    # docker-compose, pour répartir le RPM partagé plutôt que de laisser chacun croire qu'il a
+    # la totalité du quota — voir app/services/gemini_quota_manager.py.
+    gemini_rpm_share: float = 1.0
+    # Quota JOURNALIER par modèle (clé = nom du modèle), en complément du RPM. Un modèle absent
+    # de ce mapping n'a pas de budget RPD suivi (le disjoncteur ne s'appuie alors que sur
+    # `exhausted_until`, posé après un 429 jour effectivement reçu de Google).
+    gemini_model_rpd_limits: dict[str, int] = {}
+    # Durée du cache mémoire de l'état de quota (évite une requête DB à chaque appel Gemini).
+    gemini_quota_cache_ttl_seconds: float = 30.0
     course_top_k_default: int = 6
     course_question_max_length: int = 2000
     course_coverage_completion_enabled: bool = True
