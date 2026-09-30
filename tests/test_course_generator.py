@@ -98,6 +98,7 @@ def gemini_client():
     client = AsyncMock()
     client.search_grounded.return_value = ("réponse brute", [{"type": "web", "label": "W", "reference": "https://w"}])
     client.format_structured.return_value = VALID_STRUCTURED_ANSWER_FILE.copy()
+    client.is_degraded.return_value = False
     return client
 
 
@@ -463,6 +464,38 @@ async def test_coverage_check_appends_missing_pages(settings, gemini_client):
     section_texts = [s.comment for s in (result.sections or [])]
     assert any("contenu page 2 manquant" in t for t in section_texts)
     assert any(s.label == "doc.pdf" and s.reference == "page 2" for s in result.sources)
+
+
+@pytest.mark.asyncio
+async def test_coverage_completion_skipped_in_degraded_mode(settings, gemini_client):
+    """Lot 6c : la complétion de couverture est un appel Gemini OPTIONNEL — sautée si même le
+    modèle le plus robuste est indisponible, plutôt que tentée en vain."""
+    gemini_client.is_degraded.return_value = True
+    vector_store = AsyncMock()
+    vector_store.search.return_value = [
+        {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.1},
+    ]
+    vector_store.count_pages = MagicMock(return_value=2)
+    vector_store.get_all_chunks = MagicMock(
+        return_value=[
+            {"content": "contenu page 1", "metadata": {"filename": "doc.pdf", "page": 1}, "distance": 0.0},
+            {"content": "contenu page 2 manquant. " * 10, "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.0},
+        ]
+    )
+    structured_main = VALID_STRUCTURED_ANSWER_FILE.copy()
+    structured_main["sources"] = [{"type": "file_chunk", "label": "doc.pdf", "reference": "page 1"}]
+    gemini_client.format_structured.return_value = structured_main
+
+    result = await generate_course_from_question(
+        question="question",
+        vector_store=vector_store,
+        gemini_client=gemini_client,
+        settings=settings,
+        filename="doc.pdf",
+    )
+
+    assert gemini_client.format_structured.await_count == 1  # pas de 2e appel de complétion
+    assert not any(s.label == "doc.pdf" and s.reference == "page 2" for s in result.sources)
 
 
 @pytest.mark.asyncio

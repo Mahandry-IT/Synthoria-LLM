@@ -1,7 +1,7 @@
 from datetime import timedelta
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,12 +32,32 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model_flash: str = "gemini-3.6-flash"
     gemini_model_flash_lite: str = "gemini-3.5-flash-lite"
+    # Chaînes de repli configurables (voir `_call_with_model_cascade`) : liste vide = calculée à
+    # partir de `gemini_model_flash`/`gemini_model_flash_lite` (voir `_default_gemini_chains`) pour
+    # rester synchronisée par défaut ; ne fixer explicitement (`.env`) que pour un ordre différent
+    # ou une chaîne à plus de 2 modèles.
+    gemini_chain_generation: list[str] = []  # format_structured : lite d'abord (moins cher)
+    gemini_chain_light: list[str] = []  # reformulate_query/describe_images/rank_images : lite d'abord
+    gemini_chain_search: list[str] = []  # search_grounded (grounding) : flash d'abord
     gemini_max_retries: int = 3
     gemini_timeout_seconds: float = 30.0
     # Marge sous la limite Google (ex. 15 RPM sur gemini-*-flash-lite au palier gratuit) : les
     # appels sont espacés pour rester sous ce seuil plutôt que de heurter un 429. Par processus
     # (api et worker ont chacun leur fenêtre) — voir app/services/gemini_rate_limit.py.
     gemini_rpm_limit: int = 14
+    # Multiplicateur appliqué à `gemini_rpm_limit` : différencié par service (api vs worker) via
+    # docker-compose, pour répartir le RPM partagé plutôt que de laisser chacun croire qu'il a
+    # la totalité du quota — voir app/services/gemini_quota_manager.py.
+    gemini_rpm_share: float = 1.0
+    # Quota JOURNALIER par modèle (clé = nom du modèle), en complément du RPM. Un modèle absent
+    # de ce mapping n'a pas de budget RPD suivi (le disjoncteur ne s'appuie alors que sur
+    # `exhausted_until`, posé après un 429 jour effectivement reçu de Google).
+    gemini_model_rpd_limits: dict[str, int] = {}
+    # Durée du cache mémoire de l'état de quota (évite une requête DB à chaque appel Gemini).
+    gemini_quota_cache_ttl_seconds: float = 30.0
+    # Cache Postgres des réponses Gemini (reformulate_query/describe_images/rank_images) par hash
+    # de requête : réingérer un contenu déjà vu (ex. même PDF) évite un nouvel appel Gemini.
+    gemini_response_cache_ttl_hours: int = 24
     course_top_k_default: int = 6
     course_question_max_length: int = 2000
     course_coverage_completion_enabled: bool = True
@@ -119,6 +139,10 @@ class Settings(BaseSettings):
     def youtube_cache_ttl(self) -> timedelta:
         return timedelta(hours=self.youtube_cache_ttl_hours)
 
+    @property
+    def gemini_response_cache_ttl(self) -> timedelta:
+        return timedelta(hours=self.gemini_response_cache_ttl_hours)
+
     # Supports visuels : images ré-hébergées (jamais de hotlink), servies par GET /media/{id}.
     media_storage_dir: str = "/data/media"
     media_max_bytes: int = 5 * 1024 * 1024
@@ -143,6 +167,18 @@ class Settings(BaseSettings):
     @property
     def media_web_cache_ttl(self) -> timedelta:
         return timedelta(hours=self.media_web_cache_ttl_hours)
+
+    @model_validator(mode="after")
+    def _default_gemini_chains(self) -> "Settings":
+        """Chaîne laissée vide (défaut) : dérivée de `gemini_model_flash`/`gemini_model_flash_lite`
+        pour rester synchronisée avec eux sans double configuration à maintenir."""
+        if not self.gemini_chain_generation:
+            self.gemini_chain_generation = [self.gemini_model_flash_lite, self.gemini_model_flash]
+        if not self.gemini_chain_light:
+            self.gemini_chain_light = [self.gemini_model_flash_lite, self.gemini_model_flash]
+        if not self.gemini_chain_search:
+            self.gemini_chain_search = [self.gemini_model_flash, self.gemini_model_flash_lite]
+        return self
 
 
 @lru_cache

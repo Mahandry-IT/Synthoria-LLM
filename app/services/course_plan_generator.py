@@ -867,7 +867,9 @@ async def _refreshed_next_steps(
         return None
 
     refreshed = _fresh_next_steps(candidate, existing, current_sections, created)
-    if refreshed is None:
+    if refreshed is None and await gemini_client.is_degraded():
+        logger.info("course_plan_next_steps_retry_skipped_degraded")
+    elif refreshed is None:
         logger.info("course_plan_next_steps_retry")
         try:
             retry = await gemini_client.format_structured(

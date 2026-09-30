@@ -54,6 +54,7 @@ from app.api.schemas import (
 from app.core.config import Settings, get_settings
 from app.core.rate_limit import SlidingWindowLimiter
 from app.core.exceptions import (
+    GeminiDailyQuotaExceededError,
     GeminiInvalidResponseError,
     GeminiQuotaExceededError,
     GeminiUnavailableError,
@@ -107,9 +108,13 @@ def get_db_session_factory(request: Request) -> async_sessionmaker:
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health(client: OllamaClient = Depends(get_ollama_client)) -> HealthResponse:
+async def health(
+    client: OllamaClient = Depends(get_ollama_client),
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+) -> HealthResponse:
     reachable = await client.is_reachable()
-    return HealthResponse(status="ok", ollama_reachable=reachable)
+    gemini_health = await gemini_client.health_snapshot()
+    return HealthResponse(status="ok", ollama_reachable=reachable, gemini=gemini_health)
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -288,15 +293,32 @@ async def list_files(
     )
 
 
+# Repli si aucun `retry_at` exploitable (quota minute, classification "unknown" — voir
+# `_classify_quota_error`) : une indication courte plutôt qu'aucune, sans prétendre à la précision
+# d'un vrai quota jour.
+_DEFAULT_QUOTA_RETRY_AFTER_SECONDS = 60
+
+
 @contextmanager
 def _gemini_http_errors() -> Iterator[None]:
     """Traduit les erreurs Gemini/Ollama de la génération de cours en erreurs HTTP."""
     try:
         yield
+    except GeminiDailyQuotaExceededError as exc:
+        retry_after = _DEFAULT_QUOTA_RETRY_AFTER_SECONDS
+        if exc.retry_at is not None:
+            retry_after = max(1, round((exc.retry_at - datetime.now(timezone.utc)).total_seconds()))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc),
+            headers={"Retry-After": str(retry_after)},
+        ) from exc
     except GeminiUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except GeminiQuotaExceededError as exc:
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc),
+            headers={"Retry-After": str(_DEFAULT_QUOTA_RETRY_AFTER_SECONDS)},
+        ) from exc
     except GeminiInvalidResponseError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except (OllamaUnavailableError, OllamaModelNotFoundError) as exc:
@@ -391,7 +413,7 @@ async def generate_course(
     question, resolved_mode = _resolve_question_and_mode(body, settings)
     vector_store = request.app.state.vector_store
 
-    with _gemini_http_errors():
+    with gemini_client.track_calls(), _gemini_http_errors():
         course_response = await generate_course_from_question(
             question=question,
             vector_store=vector_store,
@@ -427,7 +449,7 @@ async def create_course_plan(
     question, resolved_mode = _resolve_question_and_mode(body, settings)
     vector_store = request.app.state.vector_store
 
-    with _gemini_http_errors():
+    with gemini_client.track_calls(), _gemini_http_errors():
         plan, retrieval_context = await generate_course_plan(
             question=question,
             vector_store=vector_store,
@@ -649,7 +671,7 @@ async def generate_course_from_plan(
     if plan_row.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Plan expiré, régénérez-le")
 
-    with _gemini_http_errors():
+    with gemini_client.track_calls(), _gemini_http_errors():
         course_response = await generate_course_from_validated_plan(
             plan_row=plan_row,
             edited_sections=body.sections,

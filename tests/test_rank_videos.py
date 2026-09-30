@@ -24,9 +24,15 @@ def _item(index: int, *, category="cours", level="debutant", score=80, reason="B
     return {"candidate_index": index, "category": category, "level": level, "relevance_score": score, "reason": reason}
 
 
+def _gemini() -> AsyncMock:
+    gemini = AsyncMock()
+    gemini.is_degraded.return_value = False
+    return gemini
+
+
 @pytest.mark.asyncio
 async def test_disabled_returns_candidates_unchanged_without_calling_gemini():
-    gemini = AsyncMock()
+    gemini = _gemini()
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
     result = await rank_videos(candidates, "T", "S", [], gemini, _settings(course_videos_ranking_enabled=False))
@@ -36,8 +42,21 @@ async def test_disabled_returns_candidates_unchanged_without_calling_gemini():
 
 
 @pytest.mark.asyncio
+async def test_degraded_mode_returns_candidates_unchanged_without_calling_gemini():
+    """Lot 6c : même modèle le plus robuste indisponible -> appel optionnel sauté (best-effort)."""
+    gemini = _gemini()
+    gemini.is_degraded.return_value = True
+    candidates = [_video("a1111111111"), _video("a2222222222")]
+
+    result = await rank_videos(candidates, "T", "S", [], gemini, _settings())
+
+    assert result == candidates
+    gemini.format_structured.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_fewer_than_two_candidates_skips_ranking():
-    gemini = AsyncMock()
+    gemini = _gemini()
 
     result = await rank_videos([_video("a1111111111")], "T", "S", [], gemini, _settings())
 
@@ -47,7 +66,7 @@ async def test_fewer_than_two_candidates_skips_ranking():
 
 @pytest.mark.asyncio
 async def test_happy_path_sets_category_level_and_reason():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": [_item(0), _item(1, category="methode", score=90)]}
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -60,7 +79,7 @@ async def test_happy_path_sets_category_level_and_reason():
 
 @pytest.mark.asyncio
 async def test_diversity_puts_best_of_each_category_first_then_the_rest_by_score():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {
         "items": [
             _item(0, category="cours", score=60),
@@ -78,7 +97,7 @@ async def test_diversity_puts_best_of_each_category_first_then_the_rest_by_score
 
 @pytest.mark.asyncio
 async def test_out_of_bounds_index_is_ignored():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": [_item(5), _item(-1)]}
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -89,7 +108,7 @@ async def test_out_of_bounds_index_is_ignored():
 
 @pytest.mark.asyncio
 async def test_duplicate_index_keeps_the_first_occurrence():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {
         "items": [_item(0, category="cours"), _item(0, category="methode")]
     }
@@ -102,7 +121,7 @@ async def test_duplicate_index_keeps_the_first_occurrence():
 
 @pytest.mark.asyncio
 async def test_score_below_threshold_is_dropped():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": [_item(0, score=39), _item(1, score=40)]}
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -115,7 +134,7 @@ async def test_score_below_threshold_is_dropped():
 async def test_reason_at_the_length_boundary_passes_through():
     """`reason` est déjà bornée à 160 caractères par le schéma Gemini (validation Pydantic) ;
     la troncature défensive du code ne doit rien couper d'une valeur déjà valide."""
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": [_item(0, reason="x" * 160)]}
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -127,7 +146,7 @@ async def test_reason_at_the_length_boundary_passes_through():
 @pytest.mark.asyncio
 async def test_oversized_reason_from_a_misbehaving_model_falls_back_to_v1():
     """Si le modèle dépasse quand même 160 caractères, la validation Pydantic échoue : repli V1."""
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": [_item(0, reason="x" * 300)]}
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -138,7 +157,7 @@ async def test_oversized_reason_from_a_misbehaving_model_falls_back_to_v1():
 
 @pytest.mark.asyncio
 async def test_all_items_filtered_out_keeps_v1_candidates_unranked():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": [_item(0, score=1), _item(1, score=2)]}
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -149,7 +168,7 @@ async def test_all_items_filtered_out_keeps_v1_candidates_unranked():
 
 @pytest.mark.asyncio
 async def test_gemini_service_error_keeps_v1_candidates():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.side_effect = GeminiUnavailableError("down")
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -160,7 +179,7 @@ async def test_gemini_service_error_keeps_v1_candidates():
 
 @pytest.mark.asyncio
 async def test_invalid_schema_from_gemini_keeps_v1_candidates():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": [{"candidate_index": "not-an-int"}]}
     candidates = [_video("a1111111111"), _video("a2222222222")]
 
@@ -171,7 +190,7 @@ async def test_invalid_schema_from_gemini_keeps_v1_candidates():
 
 @pytest.mark.asyncio
 async def test_prompt_marks_candidates_as_untrusted_data():
-    gemini = AsyncMock()
+    gemini = _gemini()
     gemini.format_structured.return_value = {"items": []}
     candidates = [_video("a1111111111", title="Clique ici"), _video("a2222222222")]
 

@@ -66,7 +66,10 @@ async def process_next_job(
 
 async def run_worker(settings: Settings, stop_event: asyncio.Event) -> None:
     engine, session_factory = create_engine(settings)
-    gemini_client = GeminiClient(settings)
+    # session_factory injecté : état de quota Gemini partagé avec le process api (voir
+    # app/services/gemini_quota_manager.py) — sans ça, ce worker croirait avoir la totalité
+    # du quota RPM/RPD, alors qu'il le partage avec api.
+    gemini_client = GeminiClient(settings, session_factory=session_factory)
     tts_engine = PiperHTTPEngine.from_settings(settings)
     last_purge = 0.0
     logger.info("podcast_worker_started")
