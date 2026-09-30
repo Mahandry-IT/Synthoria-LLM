@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     gemini_model_rpd_limits: dict[str, int] = {}
     # Durée du cache mémoire de l'état de quota (évite une requête DB à chaque appel Gemini).
     gemini_quota_cache_ttl_seconds: float = 30.0
+    # Cache Postgres des réponses Gemini (reformulate_query/describe_images/rank_images) par hash
+    # de requête : réingérer un contenu déjà vu (ex. même PDF) évite un nouvel appel Gemini.
+    gemini_response_cache_ttl_hours: int = 24
     course_top_k_default: int = 6
     course_question_max_length: int = 2000
     course_coverage_completion_enabled: bool = True
@@ -135,6 +138,10 @@ class Settings(BaseSettings):
     @property
     def youtube_cache_ttl(self) -> timedelta:
         return timedelta(hours=self.youtube_cache_ttl_hours)
+
+    @property
+    def gemini_response_cache_ttl(self) -> timedelta:
+        return timedelta(hours=self.gemini_response_cache_ttl_hours)
 
     # Supports visuels : images ré-hébergées (jamais de hotlink), servies par GET /media/{id}.
     media_storage_dir: str = "/data/media"

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import random
@@ -19,8 +20,10 @@ from app.core.exceptions import (
     GeminiServiceError,
     GeminiUnavailableError,
 )
+from app.repositories.gemini_response_cache_repository import compute_query_hash
 from app.services.gemini_quota_manager import GeminiQuotaManager
 from app.services.gemini_rate_limit import GeminiRateLimiter
+from app.services.gemini_response_cache_manager import GeminiResponseCacheManager
 from app.services.quota_reset import next_pacific_midnight_utc
 
 logger = logging.getLogger(__name__)
@@ -166,6 +169,8 @@ class GeminiClient:
         # `session_factory=None` : GeminiQuotaManager devient un no-op silencieux (toujours
         # disponible) — utilisable sans DB (scripts, tests) sans changer le comportement.
         self._quota_manager = GeminiQuotaManager(settings, session_factory)
+        # Idem pour le cache de réponses : `session_factory=None` → toujours cache miss.
+        self._response_cache = GeminiResponseCacheManager(settings, session_factory)
 
     def _ensure_configured(self) -> None:
         if self._client is None:
@@ -419,7 +424,9 @@ class GeminiClient:
     async def reformulate_query(self, query: str, filename: str | list[str] | None = None) -> str:
         """Reformule une question vague en une requête précise pour la recherche vectorielle.
 
-        Stratégie : `settings.gemini_chain_light` (lite d'abord), réponse JSON simple.
+        Stratégie : `settings.gemini_chain_light` (lite d'abord), réponse JSON simple. Résultat mis
+        en cache (`gemini_response_cache`, TTL `gemini_response_cache_ttl_hours`) par hash du
+        prompt complet — la même question posée deux fois (même fichier) évite un second appel.
         En cas d'échec (tous les modèles de la chaîne), retourne la query originale (pas de blocage).
         """
         self._ensure_configured()
@@ -439,6 +446,13 @@ class GeminiClient:
             f"{context_hint}\n\n"
             f"Question: {query}"
         )
+        query_hash = compute_query_hash("reformulate_query", prompt)
+
+        cached = await self._response_cache.get(query_hash)
+        if cached is not None:
+            reformulated = cached.get("query", "")
+            if reformulated:
+                return reformulated
 
         def _run(model: str) -> Any:
             return self._client.models.generate_content(
@@ -461,6 +475,7 @@ class GeminiClient:
                     "query_reformulated",
                     extra={"original": query[:80], "reformulated": reformulated[:80]},
                 )
+                await self._response_cache.set(query_hash, "reformulate_query", {"query": reformulated})
                 return reformulated
         except Exception as exc:  # noqa: BLE001 - fallback silencieux
             logger.warning("query_reformulation_failed", extra={"error": str(exc)})
@@ -523,11 +538,26 @@ class GeminiClient:
         """Appel structuré multimodal (N images numérotées + texte) partagé par `rank_images` et
         `describe_images` : un seul appel Gemini plutôt qu'un par image, `response_schema` impose
         le format JSON de sortie. Passe par `_call_with_model_cascade`/`_call_with_retry` comme
-        tout appel Gemini (rate limiter, retry-backoff, timeout, disjoncteur de quota)."""
+        tout appel Gemini (rate limiter, retry-backoff, timeout, disjoncteur de quota).
+
+        Résultat mis en cache (`gemini_response_cache`) par hash de la méthode + du prompt + de
+        l'instruction système + du contenu des images (sha256 par image, jamais les bytes
+        eux-mêmes en clé) + du schema de sortie complet (pas seulement son nom : un changement de
+        champ sans renommage de classe doit aussi invalider le cache) — un même lot d'images déjà
+        traité (ex. PDF réingéré) évite un nouvel appel.
+        """
         self._ensure_configured()
         clean_schema = _strip_additional_properties(
             response_schema.model_json_schema() if hasattr(response_schema, "model_json_schema") else response_schema
         )
+        schema_fingerprint = json.dumps(clean_schema, sort_keys=True)
+        image_hashes = [hashlib.sha256(data).hexdigest() for data, _ in image_bytes_list]
+        query_hash = compute_query_hash(method, prompt, system_instruction, schema_fingerprint, *image_hashes)
+
+        cached = await self._response_cache.get(query_hash)
+        if cached is not None:
+            return cached
+
         parts: list[Any] = [
             types.Part.from_bytes(data=data, mime_type=mime) for data, mime in image_bytes_list
         ]
@@ -547,9 +577,12 @@ class GeminiClient:
         response = await self._call_with_model_cascade(_run, chain, method=method)
         text = getattr(response, "text", "") or ""
         try:
-            return json.loads(text)
+            result = json.loads(text)
         except json.JSONDecodeError as exc:
             raise GeminiInvalidResponseError(f"Réponse Gemini non-JSON: {exc}") from exc
+
+        await self._response_cache.set(query_hash, method, result)
+        return result
 
     async def rank_images(
         self, image_bytes_list: list[tuple[bytes, str]], prompt: str, *, system_instruction: str, response_schema: Any

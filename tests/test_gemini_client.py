@@ -562,6 +562,61 @@ async def test_call_with_retry_records_daily_exhausted_via_quota_manager():
     client._quota_manager.record_daily_exhausted.assert_awaited_once_with("flash-lite")
 
 
+# ─── GeminiResponseCacheManager wiring (lot 6b) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_describe_images_returns_cached_response_without_network_call():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"items": []}'))
+    client = GeminiClient(_settings(), client=fake_client)
+    client._response_cache.get = AsyncMock(return_value={"items": [{"index": 0, "informative": True, "description": "cached"}]})
+
+    result = await client.describe_images([(b"img", "image/png")], "prompt", system_instruction="s", response_schema={})
+
+    assert result == {"items": [{"index": 0, "informative": True, "description": "cached"}]}
+    fake_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rank_images_stores_response_in_cache_after_successful_call():
+    response = SimpleNamespace(text='{"best_index": 0, "score": 90, "reason": "ok"}')
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    client = GeminiClient(_settings(), client=fake_client)
+    client._response_cache.get = AsyncMock(return_value=None)
+    client._response_cache.set = AsyncMock()
+
+    await client.rank_images([(b"img", "image/webp")], "prompt", system_instruction="s", response_schema={})
+
+    client._response_cache.set.assert_awaited_once()
+    assert client._response_cache.set.await_args.args[1] == "rank_images"
+
+
+@pytest.mark.asyncio
+async def test_reformulate_query_returns_cached_response_without_network_call():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"query": "not used"}'))
+    client = GeminiClient(_settings(), client=fake_client)
+    client._response_cache.get = AsyncMock(return_value={"query": "requête en cache"})
+
+    result = await client.reformulate_query("question vague")
+
+    assert result == "requête en cache"
+    fake_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reformulate_query_stores_response_in_cache_after_successful_call():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"query": "reformulée"}'))
+    client = GeminiClient(_settings(), client=fake_client)
+    client._response_cache.get = AsyncMock(return_value=None)
+    client._response_cache.set = AsyncMock()
+
+    result = await client.reformulate_query("question vague")
+
+    assert result == "reformulée"
+    client._response_cache.set.assert_awaited_once()
+    assert client._response_cache.set.await_args.args[1:] == ("reformulate_query", {"query": "reformulée"})
+
+
 @pytest.mark.asyncio
 async def test_rpm_share_reduces_the_effective_rate_limit():
     client = GeminiClient(_settings(gemini_rpm_limit=10, gemini_rpm_share=0.3))

@@ -251,3 +251,21 @@ class GeminiModelQuota(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("idx_gemini_model_quota_day", day),)
+
+
+class GeminiResponseCache(Base):
+    """Cache d'une réponse Gemini (`reformulate_query`/`describe_images`/`rank_images`) par hash de
+    requête — réingérer un contenu déjà vu (ex. même PDF) évite un nouvel appel Gemini.
+
+    `query_hash` dérive de la méthode + du contenu de la requête (prompt, hash des images, nom du
+    schema) — voir `app/repositories/gemini_response_cache_repository.py`.
+    """
+
+    __tablename__ = "gemini_response_cache"
+
+    query_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    method: Mapped[str] = mapped_column(String(50), nullable=False)
+    response: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_gemini_response_cache_created_at", created_at),)
