@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -231,3 +231,23 @@ class MediaQueryCache(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("idx_media_query_cache_created_at", created_at),)
+
+
+class GeminiModelQuota(Base):
+    """Consommation Gemini du jour par modèle, partagée entre les process `api` et `worker`
+    (chacun a son propre `GeminiRateLimiter` en mémoire, non coordonné — cette table est la seule
+    vue commune de ce qui a réellement été consommé, voir `app/services/gemini_quota_manager.py`).
+
+    `day` est réinitialisée au prochain minuit Pacifique (`app/services/quota_reset.py`), alignée
+    sur le fuseau horaire des quotas Google, indépendamment du fuseau système des conteneurs.
+    """
+
+    __tablename__ = "gemini_model_quota"
+
+    model: Mapped[str] = mapped_column(String(100), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    request_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    exhausted_until: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index("idx_gemini_model_quota_day", day),)
