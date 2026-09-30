@@ -15,6 +15,9 @@ services:
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       CHROMA_PERSIST_DIRECTORY: /data/chroma
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Répartit GEMINI_RPM_LIMIT entre api (interactif, prioritaire) et worker (arrière-plan) —
+      # voir README, « Limite de débit Gemini ». Les deux parts n'ont pas besoin de sommer à 1.0.
+      GEMINI_RPM_SHARE: ${GEMINI_RPM_SHARE_API:-0.7}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
       MEDIA_STORAGE_DIR: /data/media
@@ -50,6 +53,7 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_RPM_SHARE: ${GEMINI_RPM_SHARE_WORKER:-0.3}
       DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
       PODCAST_TTS_BASE_URL: http://piper:5000
       PODCAST_STORAGE_DIR: /data/podcasts
