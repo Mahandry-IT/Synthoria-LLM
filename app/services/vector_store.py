@@ -166,3 +166,27 @@ class NumpyVectorStore:
             doc.get('metadata', {}).get('filename') == filename
             for doc in self._documents
         )
+
+    def remove_file(self, filename: str) -> int:
+        """Supprime tous les chunks d'un fichier du store. Retourne le nombre de chunks supprimés.
+
+        Synchrone (contrairement à `add_chunks`/`search` qui appellent Ollama) — cohérent avec
+        les autres méthodes de filtrage par filename (`has_file`, `list_files`, `count_pages`,
+        `get_all_chunks`). `_save()` n'est appelé que si au moins un document a été retiré, pour
+        éviter une écriture disque inutile si le fichier est inconnu.
+
+        Ne vérifie pas si `filename` est encore référencé par un `CoursePlan` en attente ou une
+        génération de cours en cours : comme les autres suppressions de ce code (dossiers de
+        cours, sessions), l'appelant n'a pas cette responsabilité ici. Un plan en attente qui
+        re-interroge le vector store après suppression obtiendra des résultats vides plutôt
+        qu'une erreur bloquante — cohérent avec la tolérance best-effort déjà en place ailleurs
+        dans ce service.
+        """
+        remaining = [
+            doc for doc in self._documents if doc.get("metadata", {}).get("filename") != filename
+        ]
+        removed = len(self._documents) - len(remaining)
+        if removed:
+            self._documents = remaining
+            self._save()
+        return removed

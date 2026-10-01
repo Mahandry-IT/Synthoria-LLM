@@ -293,6 +293,19 @@ async def list_files(
     )
 
 
+@router.delete("/pdf/files/{filename}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_file(filename: str, request: Request) -> None:
+    """Supprime un fichier PDF et tous ses chunks du vector store. 404 si inconnu.
+
+    Ne vérifie pas si ce fichier est encore référencé par un plan de cours en attente —
+    voir `NumpyVectorStore.remove_file`.
+    """
+    vector_store = request.app.state.vector_store
+    removed = vector_store.remove_file(filename)
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fichier introuvable")
+
+
 # Repli si aucun `retry_at` exploitable (quota minute, classification "unknown" — voir
 # `_classify_quota_error`) : une indication courte plutôt qu'aucune, sans prétendre à la précision
 # d'un vrai quota jour.
