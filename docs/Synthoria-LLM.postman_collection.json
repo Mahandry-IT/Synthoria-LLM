@@ -594,6 +594,41 @@
       "name": "Learning",
       "item": [
         {
+          "name": "POST /courses/{session_id}/sections/{section_id}/challenge",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/sections/{{sectionId}}/challenge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "sections",
+                "{{sectionId}}",
+                "challenge"
+              ]
+            },
+            "description": "Analyse la réponse de l'apprenant au défi d'une section, AVANT l'explication. Le défi et ses challenge_key_points sont lus en base (repli sur Pourquoi/Quoi pour les anciennes sessions) ; la réponse est une donnée balisée, jamais persistée. Réponse : {verdict: on_track | partial | off_track, feedback, hint} — le retour oriente vers l'explication sans la révéler. « Je ne sais pas » côté client : aucun appel. Codes : 200 ok, 404 session/section inconnue ou sans défi, 422 réponse vide ou > 1000 caractères, 429 (CHALLENGE_RATE_LIMIT_PER_MINUTE, 10/min), 502/503 échec Gemini.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answer\": \"Si on double les spires au secondaire, la tension de sortie double aussi.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
           "name": "POST /courses/{session_id}/sections/{section_id}/recall",
           "request": {
             "method": "POST",
