@@ -47,7 +47,7 @@ _DEFAULT_INSTRUCTIONS = (
 _DEFAULT_PLAN_INSTRUCTIONS = (
     "Tu es un architecte pédagogique. Produis en français un plan de cours détaillé, "
     "complet et ordonné par dépendances logiques (structure uniquement, sans contenu rédigé). "
-    "Le nombre de sections est un plancher, jamais un plafond."
+    "Respecte le nombre de sections imposé par le mode du cours."
 )
 _instructions_cache: dict[str, str] = {}
 

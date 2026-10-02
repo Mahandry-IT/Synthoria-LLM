@@ -20,9 +20,9 @@ from app.services.course_depth import (
 def test_profiles_match_the_reference_table():
     express, standard, deep = PROFILES["express"], PROFILES["standard"], PROFILES["approfondi"]
 
-    assert (express.min_sections, express.max_sections) == (3, 5)
-    assert (standard.min_sections, standard.max_sections) == (6, 8)
-    assert (deep.min_sections, deep.max_sections) == (6, None)  # piloté par la couverture
+    assert (express.min_sections, express.max_sections) == (5, 8)
+    assert (standard.min_sections, standard.max_sections) == (9, 11)
+    assert (deep.min_sections, deep.max_sections) == (12, None)  # piloté par la couverture
     assert {p.non_text_ratio for p in PROFILES.values()} == {0.5}
     assert [p.max_prose_words for p in (express, standard, deep)] == [150, 300, 500]
     assert [p.max_blocks for p in (express, standard, deep)] == [5, 8, 12]
@@ -71,9 +71,9 @@ def test_render_rules_carries_the_profile_figures():
 
 
 def test_render_plan_rules_floor_vs_strict_range():
-    assert "entre 3 et 5" in render_plan_rules(get_profile("express"))
+    assert "entre 5 et 8" in render_plan_rules(get_profile("express"))
     deep = render_plan_rules(get_profile("approfondi"))
-    assert "au moins 6" in deep and "jamais un plafond" in deep
+    assert "au moins 12" in deep and "jamais un plafond" in deep
 
 
 def test_render_quiz_rules():
@@ -83,7 +83,7 @@ def test_render_quiz_rules():
 
 def test_render_course_rules_combines_everything():
     rules = render_course_rules(get_profile("express"))
-    assert "entre 3 et 5" in rules and "150 mots" in rules and "5 à 6 questions" in rules
+    assert "entre 5 et 8" in rules and "150 mots" in rules and "5 à 6 questions" in rules
 
 
 def test_default_course_depth_setting():
