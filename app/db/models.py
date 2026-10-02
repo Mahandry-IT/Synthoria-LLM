@@ -57,6 +57,10 @@ class CoursePlan(Base):
     )
     question: Mapped[str] = mapped_column(Text, nullable=False)
     mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Mode de cours (express/standard/approfondi) ; migration 015, défaut serveur pour les anciens plans.
+    depth: Mapped[str] = mapped_column(
+        String(12), nullable=False, default="approfondi", server_default="approfondi"
+    )
     filenames: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     top_k: Mapped[int] = mapped_column(Integer, nullable=False)
     full_document: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

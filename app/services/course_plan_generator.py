@@ -46,6 +46,15 @@ from app.schemas.course_generation import (
     SourceType,
     Subsection,
 )
+from app.services.course_depth import (
+    LEGACY_DEPTH,
+    DepthProfile,
+    depth_of_plan,
+    get_profile,
+    render_plan_rules,
+    render_quiz_rules,
+    render_rules,
+)
 from app.services.course_generator import (
     INCOMPLETE_SECTION_NOTICE,
     _build_context_block,
@@ -59,6 +68,7 @@ from app.services.course_generator import (
     _retrieve_chunks,
     _validate_and_map,
     is_incomplete_section,
+    with_depth,
 )
 from app.services.course_videos import attach_verified_videos
 from app.services.gemini_client import GeminiClient
@@ -132,6 +142,7 @@ async def generate_course_plan(
     top_k: int | None = None,
     filename: str | list[str] | None = None,
     full_document: bool = False,
+    depth: str = LEGACY_DEPTH,
 ) -> tuple[CoursePlanSchema, dict[str, Any]]:
     """Génère le plan (structure) d'un cours, sans contenu Quoi/Pourquoi/Comment.
 
@@ -142,6 +153,7 @@ async def generate_course_plan(
         settings: configuration applicative.
         mode: "file_question" (RAG) ou "question_only" (recherche web si grounding activé).
         top_k, filename, full_document: paramètres de retrieval (cf. `generate_course_from_question`).
+        depth: mode du cours (`app.services.course_depth`), qui borne le nombre de sections du plan.
 
     Retour: (plan normalisé, contexte de récupération figé à persister). Le contexte
     contient `chunks`, `file_sources`, `search_query` et `web_research` (None hors
@@ -181,6 +193,7 @@ async def generate_course_plan(
         f'mode="{mode}"\n'
         f"Question de l'utilisateur : {question}\n\n"
         f"Contexte :\n{_render_context(retrieval_context)}\n\n"
+        f"{render_plan_rules(get_profile(depth))}\n\n"
         "Conçois le plan du cours et retourne-le en JSON selon le schéma fourni (structure uniquement)."
     )
     structured = await gemini_client.format_structured(
@@ -299,13 +312,16 @@ async def _generate_batch(
     context_block: str,
     outline: str,
     gemini_client: GeminiClient,
+    profile: DepthProfile | None = None,
 ) -> list[Section]:
+    profile = profile or get_profile(LEGACY_DEPTH)
     prompt = (
         f'mode="{mode}"\n'
         f"Question de l'utilisateur : {question}\n\n"
         f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
         f"--- Plan complet validé (pour éviter les doublons et garder la cohérence ; ne développe PAS les sections hors lot) ---\n{outline}\n\n"
         f"--- Sections à générer dans CE lot, et seulement celles-ci ---\n{_format_sections(batch, detailed=True)}\n\n"
+        f"{render_rules(profile)}\n\n"
         f"Génère exactement {len(batch)} section(s) DEVELOPMENT, dans cet ordre et avec ces titres, "
         "en JSON selon le schéma fourni. Chaque sous-thème listé doit être EXPLIQUÉ (pas seulement cité) ; "
         "renseigne `covered_subtopics` avec les sous-thèmes réellement développés, recopiés à l'identique."
@@ -318,9 +334,9 @@ async def _generate_batch(
     aligned = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, batch)
     repaired = await _repair_incomplete_sections(
         aligned, batch, question=question, mode=mode, context_block=context_block,
-        outline=outline, gemini_client=gemini_client,
+        outline=outline, gemini_client=gemini_client, profile=profile,
     )
-    return _finalize_incomplete(repaired, batch)
+    return _finalize_incomplete(repaired, batch, profile)
 
 
 _DEVELOPMENT_SUBSECTIONS = ("Pourquoi", "Quoi", "Comment")
@@ -396,19 +412,76 @@ def _missing_subtopics(section: Section, planned: ApiPlannedSection) -> list[str
     return missing
 
 
-def _completeness_issues(section: Section, planned: ApiPlannedSection) -> list[str]:
-    """Tous les problèmes de complétude d'une section par rapport au plan : sous-section
-    Pourquoi/Quoi/Comment vide, sous-thème du plan non traité, absence de bloc visuel. Une section
-    de repli déjà marquée incomplète (voir `is_incomplete_section`) n'est jamais re-signalée ici :
-    son remplacement relève de la régénération explicite par l'apprenant, pas de cette boucle."""
+# Poids d'un problème bloquant dans le score d'une section : un remplaçant qui corrige un trou de
+# fond (sous-section vide, sous-thème manquant) l'emporte toujours sur un gain de forme.
+_BLOCKING_WEIGHT = 10
+
+
+@dataclass(frozen=True)
+class SectionIssues:
+    """Problèmes d'une section DEVELOPMENT, séparés selon leur gravité.
+
+    - `blocking` (fond) : sous-section Pourquoi/Quoi/Comment vide, sous-thème du plan non traité.
+      Après réparation, une section qui en a encore devient « incomplète ».
+    - `soft` (forme) : ratio de blocs non textuels, budget de mots/blocs, bloc TEXT trop long.
+      Après réparation, la meilleure version est gardée et le dépassement journalisé.
+
+    Arbitrage : si la couverture des sous-thèmes et le budget entrent en conflit, la couverture
+    gagne (poids `_BLOCKING_WEIGHT` dans `score`, et seuls les problèmes bloquants rendent une
+    section incomplète).
+    """
+
+    blocking: tuple[str, ...] = ()
+    soft: tuple[str, ...] = ()
+    blocking_count: int = 0  # une unité par sous-section vide et par sous-thème manquant
+
+    @property
+    def all(self) -> list[str]:
+        return [*self.blocking, *self.soft]
+
+    @property
+    def score(self) -> int:
+        """Score pondéré (plus bas = meilleur) qui départage une section et son remplaçant."""
+        return _BLOCKING_WEIGHT * self.blocking_count + len(self.soft)
+
+    def __bool__(self) -> bool:
+        return bool(self.blocking or self.soft)
+
+
+def section_issues(
+    section: Section, planned: ApiPlannedSection | None, profile: DepthProfile | None = None
+) -> SectionIssues:
+    """Problèmes d'une section par rapport au plan (`planned`, None hors plan : pas de contrôle des
+    sous-thèmes) et au mode (`profile`, None : règles de forme historiques uniquement).
+
+    Une section de repli déjà marquée incomplète (voir `is_incomplete_section`) n'est jamais
+    re-signalée ici : son remplacement relève de la régénération explicite par l'apprenant.
+    """
     if is_incomplete_section(section):
-        return []
-    issues = [f"sous-section « {name} » vide, à écrire" for name in _structural_gaps(section)]
-    missing_topics = _missing_subtopics(section, planned)
+        return SectionIssues()
+    gaps = _structural_gaps(section)
+    missing_topics = _missing_subtopics(section, planned) if planned is not None else []
+    blocking = [f"sous-section « {name} » vide, à écrire" for name in gaps]
     if missing_topics:
-        issues.append("sous-thèmes non traités : " + " ; ".join(missing_topics))
-    issues.extend(visual_issues(section))
-    return issues
+        blocking.append("sous-thèmes non traités : " + " ; ".join(missing_topics))
+    return SectionIssues(
+        blocking=tuple(blocking),
+        soft=tuple(visual_issues(section, profile)),
+        blocking_count=len(gaps) + len(missing_topics),
+    )
+
+
+def _completeness_issues(
+    section: Section, planned: ApiPlannedSection, profile: DepthProfile | None = None
+) -> list[str]:
+    """Tous les problèmes (bloquants puis soft) d'une section — voir `section_issues`."""
+    return section_issues(section, planned, profile).all
+
+
+def is_better_replacement(new: Section, current: SectionIssues, new_issues: SectionIssues) -> bool:
+    """Un remplaçant n'est retenu que s'il a du contenu réel (jamais une section de repli) et un
+    score pondéré strictement meilleur que la version courante."""
+    return _has_content(new) and not is_incomplete_section(new) and new_issues.score < current.score
 
 
 _MAX_REPAIR_ATTEMPTS = 2
@@ -423,43 +496,46 @@ async def _repair_incomplete_sections(
     context_block: str,
     outline: str,
     gemini_client: GeminiClient,
+    profile: DepthProfile | None = None,
 ) -> list[Section]:
-    """Répare les sections du lot ayant des `_completeness_issues`, dans la limite de
-    `_MAX_REPAIR_ATTEMPTS` appels Gemini (jamais une boucle illimitée — coût de quota borné).
+    """Répare les sections du lot ayant des problèmes (`section_issues`, bloquants ou soft), dans
+    la limite de `_MAX_REPAIR_ATTEMPTS` appels Gemini (jamais une boucle illimitée — quota borné).
 
-    S'arrête dès que le lot est complet. Un remplaçant n'est retenu que s'il a strictement moins
-    de problèmes que l'original ; en cas d'échec Gemini, les sections en cours sont conservées
-    telles quelles. Les sections encore incomplètes après la dernière tentative restent gérées par
-    `_finalize_incomplete` (jamais livrées silencieusement avec des trous).
+    Le prompt de réparation liste les problèmes réels (messages chiffrés) et les règles du mode.
+    S'arrête dès que le lot est conforme. Un remplaçant n'est retenu que s'il a un score pondéré
+    strictement meilleur que l'original (`is_better_replacement`) ; en cas d'échec Gemini, les
+    sections en cours sont conservées telles quelles. Le sort des sections encore non conformes
+    après la dernière tentative est décidé par `_finalize_incomplete`.
     """
     current = list(sections)
+    rules = render_rules(profile or get_profile(LEGACY_DEPTH))
     for attempt in range(_MAX_REPAIR_ATTEMPTS):
         flagged = {
             i: issues
             for i, (s, planned) in enumerate(zip(current, batch))
-            if (issues := _completeness_issues(s, planned))
+            if (issues := section_issues(s, planned, profile))
         }
         if not flagged:
             break
 
         logger.info(
             "course_section_incomplete",
-            extra={"attempt": attempt + 1, "sections": {batch[i].title: issues for i, issues in flagged.items()}},
+            extra={"attempt": attempt + 1, "sections": {batch[i].title: issues.all for i, issues in flagged.items()}},
         )
         targets = [batch[i] for i in flagged]
-        requirements = "\n".join(f"- « {batch[i].title} » : {' ; '.join(issues)}" for i, issues in flagged.items())
+        requirements = "\n".join(f"- « {batch[i].title} » : {' ; '.join(issues.all)}" for i, issues in flagged.items())
         prompt = (
             f'mode="{mode}"\n'
             f"Question de l'utilisateur : {question}\n\n"
             f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
             f"--- Plan complet validé (ne développe PAS les sections hors lot) ---\n{outline}\n\n"
             f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True)}\n\n"
-            "Une première version de ces sections avait des lacunes :\n"
+            "Une première version de ces sections avait les problèmes suivants, à corriger :\n"
             f"{requirements}\n\n"
-            f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre : remplis "
-            "TOUTES les sous-sections Pourquoi/Quoi/Comment (jamais vide), couvre en détail tous les sous-thèmes "
-            "listés, inclus au moins un bloc visuel (TABLE, LIST, DIAGRAM, CHART ou FORMULA) et renseigne "
-            "`covered_subtopics`."
+            f"{rules}\n\n"
+            f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre, en corrigeant "
+            "chacun de ces problèmes : remplis TOUTES les sous-sections Pourquoi/Quoi/Comment (jamais vide), "
+            "couvre en détail tous les sous-thèmes listés et renseigne `covered_subtopics`."
         )
         try:
             structured = await gemini_client.format_structured(
@@ -474,21 +550,37 @@ async def _repair_incomplete_sections(
 
         updated = list(current)
         for (index, issues), new in zip(flagged.items(), replacements):
-            if _has_content(new) and len(_completeness_issues(new, batch[index])) < len(issues):
+            if is_better_replacement(new, issues, section_issues(new, batch[index], profile)):
                 updated[index] = new
         current = updated
     return current
 
 
-def _finalize_incomplete(sections: list[Section], batch: list[ApiPlannedSection]) -> list[Section]:
-    """Filet de sécurité sans appel Gemini supplémentaire : toute section encore incomplète après
-    la boucle de réparation bornée devient une section de repli visiblement incomplète (même
-    convention que `_align_batch_sections` — voir `is_incomplete_section`), au lieu d'être livrée
-    silencieusement avec des trous. L'apprenant la régénère lui-même (`POST .../regenerate`)."""
-    return [
-        section if not _completeness_issues(section, planned) else _incomplete_section(planned)
-        for section, planned in zip(sections, batch)
-    ]
+def _finalize_incomplete(
+    sections: list[Section], batch: list[ApiPlannedSection], profile: DepthProfile | None = None
+) -> list[Section]:
+    """Filet de sécurité sans appel Gemini supplémentaire, après la boucle de réparation bornée.
+
+    - Problème bloquant restant (sous-section vide, sous-thème non traité) : la section devient une
+      section de repli visiblement incomplète (même convention que `_align_batch_sections` — voir
+      `is_incomplete_section`), jamais livrée silencieusement avec des trous ; l'apprenant la
+      régénère lui-même (`POST .../regenerate`).
+    - Problème soft seulement (ratio, budget) : la section (meilleure version obtenue) est gardée
+      et le dépassement journalisé (`course_section_budget_exceeded`).
+    """
+    finalized: list[Section] = []
+    for section, planned in zip(sections, batch):
+        issues = section_issues(section, planned, profile)
+        if issues.blocking:
+            finalized.append(_incomplete_section(planned))
+            continue
+        if issues.soft:
+            logger.warning(
+                "course_section_budget_exceeded",
+                extra={"section": planned.title, "depth": profile.name if profile else None, "issues": list(issues.soft)},
+            )
+        finalized.append(section)
+    return finalized
 
 
 async def _generate_wrap_up(
@@ -500,8 +592,10 @@ async def _generate_wrap_up(
     meta: dict[str, Any],
     sources: list[Source],
     gemini_client: GeminiClient,
+    profile: DepthProfile | None = None,
 ) -> CourseGenerationSchema | None:
-    """Introduction, pièges, résumé, suite et quiz. Best-effort : None en cas d'échec."""
+    """Introduction, pièges, résumé, suite et quiz (taille selon le mode). Best-effort : None en cas d'échec."""
+    profile = profile or get_profile(LEGACY_DEPTH)
     development = [s for s in planned if s.type == "development"]
     wanted = [s for s in planned if s.type != "development"]
     prompt = (
@@ -512,6 +606,7 @@ async def _generate_wrap_up(
         f"{_format_sections(development, detailed=True)}\n\n"
         "--- Sections à générer maintenant ---\n"
         f"{_format_sections(wanted, detailed=True) or '(aucune section hors développement)'}\n\n"
+        f"{render_quiz_rules(profile)}\n\n"
         "Génère ces sections (mêmes titres, même ordre) ainsi que le quiz couvrant l'ensemble des sections "
         "DEVELOPMENT. N'inclus AUCUNE section de type development. Laisse `sources` vide. "
         "Renseigne `direct_answer` : la réponse directe à la question (2-3 phrases, points clés, 1 visuel "
@@ -567,6 +662,8 @@ async def generate_course_from_validated_plan(
     introduction / pièges / résumé / suite / quiz, fusionnés dans l'ordre du
     plan et mappés par le pipeline existant (`_validate_and_map`). Aucun plafond
     de sections ; pas de contrôle de couverture post-génération (le plan fait foi).
+    Le mode du plan (`plan_row.depth`, absent = approfondi) fixe les règles de forme des
+    sections, la taille du quiz, et est inscrit dans `meta.depth` de la réponse.
 
     Résilience: un lot en échec devient des sections marquées « incomplètes » sans
     bloquer les autres ; si TOUS les lots échouent, l'erreur est propagée (502/503).
@@ -578,6 +675,9 @@ async def generate_course_from_validated_plan(
     retrieval_context = plan_row.retrieval_context
     context_block = _render_context(retrieval_context)
     sources = _sources_from_context(retrieval_context)
+    # Plan antérieur au mode (ou objet sans colonne `depth`) : approfondi, comme avant.
+    depth = depth_of_plan(plan_row)
+    profile = get_profile(depth)
 
     sections = [
         s.model_copy(update={"order": i})
@@ -595,7 +695,7 @@ async def generate_course_from_validated_plan(
             generated.extend(
                 await _generate_batch(
                     batch, question=question, mode=mode, context_block=context_block,
-                    outline=outline, gemini_client=gemini_client,
+                    outline=outline, gemini_client=gemini_client, profile=profile,
                 )
             )
         except (GeminiServiceError, ValidationError) as exc:
@@ -621,7 +721,7 @@ async def generate_course_from_validated_plan(
     }
     wrap_up = await _generate_wrap_up(
         sections, question=question, mode=mode, context_block=context_block,
-        meta=meta, sources=sources, gemini_client=gemini_client,
+        meta=meta, sources=sources, gemini_client=gemini_client, profile=profile,
     )
 
     wrap_sections = _align_wrap_up_titles(
@@ -646,7 +746,7 @@ async def generate_course_from_validated_plan(
         "video_search_queries": wrap_up.video_search_queries if wrap_up else [],
     }
     with_videos = await attach_verified_videos(
-        _validate_and_map(structured, mode), settings, gemini_client,
+        with_depth(_validate_and_map(structured, mode), profile.name), settings, gemini_client,
         search_queries=structured["video_search_queries"], db_session_factory=db_session_factory,
     )
     return await resolve_visuals(

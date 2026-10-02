@@ -20,6 +20,7 @@ async def save(
     retrieval_context: dict[str, Any],
     plan: dict[str, Any],
     expires_at: datetime,
+    depth: str = "approfondi",
 ) -> CoursePlan:
     """Persiste un plan de cours proposé (statut `pending`).
 
@@ -30,6 +31,7 @@ async def save(
     course_plan = CoursePlan(
         question=question,
         mode=mode,
+        depth=depth,
         filenames=filenames,
         top_k=top_k,
         full_document=full_document,

@@ -31,6 +31,7 @@ from app.schemas.course_generation import (
     QuizDifficulty,
     Section,
 )
+from app.services.course_depth import LEGACY_DEPTH, get_profile, render_course_rules
 from app.services.course_videos import _search_videos, attach_verified_videos  # noqa: F401 — rétrocompat (imports historiques)
 from app.services.gemini_client import GeminiClient
 from app.services.leitner import flashcards_from_course
@@ -81,6 +82,12 @@ def _get_teacher_instructions() -> str:
 
 def _get_plan_instructions() -> str:
     return _load_instruction("course_plan_instructions.md", _DEFAULT_PLAN_INSTRUCTIONS)
+
+
+def with_depth(response: CourseGenerationResponse, depth: str) -> CourseGenerationResponse:
+    """Inscrit le mode du cours dans `meta.depth` (persisté avec la session, relu par la
+    régénération et l'ajout de sections) — jamais confié au modèle."""
+    return response.model_copy(update={"meta": response.meta.model_copy(update={"depth": depth})})
 
 
 def _build_context_block(chunks: list[dict[str, Any]]) -> str:
@@ -983,6 +990,7 @@ async def generate_course_from_question(
     filename: str | list[str] | None = None,
     full_document: bool = False,
     db_session_factory: async_sessionmaker | None = None,
+    depth: str = LEGACY_DEPTH,
 ) -> CourseGenerationResponse:
     """
     Orchestration RAG + génération de cours structuré.
@@ -998,6 +1006,8 @@ async def generate_course_from_question(
         full_document: si True, ignore le top-k et récupère TOUS les chunks du/des
             fichier(s) (`vector_store.get_all_chunks`) pour une couverture exhaustive,
             au prix d'un contexte plus volumineux envoyé à Gemini.
+        depth: mode du cours (`app.services.course_depth`) : nombre de sections, règles de forme
+            et taille du quiz injectés dans le prompt ; inscrit dans `meta.depth`.
 
     Retour: CourseGenerationResponse validé.
 
@@ -1025,6 +1035,8 @@ async def generate_course_from_question(
     context_block = _build_context_block(chunks)
     file_sources = _file_sources_from_chunks(chunks)
     system_instruction = _get_teacher_instructions()
+    profile = get_profile(depth)
+    depth_rules = render_course_rules(profile)
 
     is_question_only = mode == "question_only"
 
@@ -1036,6 +1048,7 @@ async def generate_course_from_question(
                 f"Question de l'utilisateur : {question}\n\n"
                 f"Sources fichier disponibles : []\n"
                 f"Sources web disponibles : []\n\n"
+                f"{depth_rules}\n\n"
                 f"Génère directement le JSON structuré selon le schéma fourni."
             )
         else:
@@ -1045,6 +1058,7 @@ async def generate_course_from_question(
                 f"Contexte extrait des documents fournis :\n{context_block}\n\n"
                 f"Sources fichier disponibles : {file_sources}\n"
                 f"Sources web disponibles : []\n\n"
+                f"{depth_rules}\n\n"
                 f"Génère directement le JSON structuré selon le schéma fourni."
             )
         structured = await gemini_client.format_structured(
@@ -1061,7 +1075,7 @@ async def generate_course_from_question(
             system_instruction=system_instruction,
         )
         with_videos = await attach_verified_videos(
-            completed, settings, gemini_client,
+            with_depth(completed, profile.name), settings, gemini_client,
             search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
         )
         return await resolve_visuals(
@@ -1070,12 +1084,12 @@ async def generate_course_from_question(
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
-        prompt = f"Question de l'utilisateur : {question}"
+        prompt = f"Question de l'utilisateur : {question}\n\n{depth_rules}"
     else:
         prompt = (
             f"Question de l'utilisateur : {question}\n\n"
             f"Contexte extrait des documents fournis (à compléter par une recherche web si nécessaire) :\n"
-            f"{context_block}"
+            f"{context_block}\n\n{depth_rules}"
         )
 
     raw_answer, web_sources = await gemini_client.search_grounded(
@@ -1087,6 +1101,7 @@ async def generate_course_from_question(
         f'mode="{mode}"\n'
         f"Sources fichier disponibles : {file_sources}\n"
         f"Sources web disponibles : {web_sources}\n\n"
+        f"{depth_rules}\n\n"
         f"Réponse brute à structurer en JSON selon le schéma fourni :\n{raw_answer}"
     )
 
@@ -1104,7 +1119,7 @@ async def generate_course_from_question(
         system_instruction=system_instruction,
     )
     with_videos = await attach_verified_videos(
-        completed, settings, gemini_client,
+        with_depth(completed, profile.name), settings, gemini_client,
         search_queries=structured.get("video_search_queries", []), db_session_factory=db_session_factory,
     )
     return await resolve_visuals(

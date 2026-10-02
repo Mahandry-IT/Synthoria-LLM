@@ -69,6 +69,7 @@ from app.repositories import (
     course_video_note_repository,
 )
 from app.schemas.course_generation import CoursePlanSchema, SectionType
+from app.services.course_depth import depth_of_plan
 from app.services.course_generator import (
     _map_quiz_question,
     _map_sections_to_course_sections,
@@ -437,6 +438,7 @@ async def generate_course(
             filename=body.filename,
             full_document=body.full_document,
             db_session_factory=request.app.state.db_session_factory,
+            depth=body.depth,
         )
 
     session_id = await _persist_course_session(
@@ -458,6 +460,7 @@ async def create_course_plan(
 
     Le contexte de récupération est figé et persisté avec le plan : la
     génération complète (`/courses/generate/from-plan`) réutilise ce contexte.
+    Le mode (`depth`) est persisté avec le plan et pilote toute la génération du cours.
     """
     question, resolved_mode = _resolve_question_and_mode(body, settings)
     vector_store = request.app.state.vector_store
@@ -472,6 +475,7 @@ async def create_course_plan(
             top_k=body.top_k,
             filename=body.filename,
             full_document=body.full_document,
+            depth=body.depth,
         )
 
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.course_plan_ttl_minutes)
@@ -488,6 +492,7 @@ async def create_course_plan(
                 retrieval_context=retrieval_context,
                 plan=plan.model_dump(mode="json"),
                 expires_at=expires_at,
+                depth=body.depth,
             )
     except Exception as exc:
         # Sans persistance, le plan_id renvoyé serait inutilisable : erreur explicite.
@@ -501,6 +506,7 @@ async def create_course_plan(
         plan_id=row.id,
         expires_at=row.expires_at.isoformat(),
         mode=resolved_mode,
+        depth=body.depth,
         meta=CoursePlanMeta(**plan.meta.model_dump()),
         sections=[ApiPlannedSection(**s.model_dump(mode="json")) for s in plan.planned_sections],
         pretest=_api_pretest(plan),
@@ -643,6 +649,7 @@ async def get_course_plan(request: Request, plan_id: UUID) -> CoursePlanDetail:
         plan_id=plan_row.id,
         expires_at=plan_row.expires_at.isoformat(),
         mode=plan_row.mode,
+        depth=depth_of_plan(plan_row),
         meta=CoursePlanMeta(**plan.meta.model_dump()),
         sections=[ApiPlannedSection(**s.model_dump(mode="json")) for s in plan.planned_sections],
         pretest=_api_pretest(plan),

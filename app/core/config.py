@@ -1,5 +1,6 @@
 from datetime import timedelta
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -65,6 +66,9 @@ class Settings(BaseSettings):
     # Sections plus lourdes (défi, exemple à trous, questions, reformulation) : lots plus petits.
     course_plan_batch_size: int = 2
     course_plan_ttl_minutes: int = 120
+    # Mode appliqué quand la requête ne précise pas `depth` (profils : app/services/course_depth.py).
+    # Les plans/sessions antérieurs, sans mode, restent toujours « approfondi ».
+    default_course_depth: Literal["express", "standard", "approfondi"] = "approfondi"
     course_videos_enabled: bool = True
     # Cible, jamais garantie : YouTube peut renvoyer moins de résultats pertinents que ce plancher.
     course_videos_min: int = 5
