@@ -286,6 +286,13 @@ class CourseSection(BaseModel):
     key_points: list[str] = Field(default_factory=list)
     tables: list[CourseTable] = Field(default_factory=list, description="Tableaux de la section (hors texte quoi/pourquoi/comment).")
     challenge: str = Field("", description="Défi posé avant l'explication (cycle pédagogique).")
+    challenge_key_points: list[str] = Field(
+        default_factory=list,
+        description=(
+            "2-4 idées attendues dans une réponse au défi (évaluation côté serveur) ; vide pour les "
+            "anciennes sessions (repli sur Pourquoi/Quoi)."
+        ),
+    )
     faded_example: "ApiFadedExample | None" = None
     check_questions: list["QuizQuestion"] = Field(default_factory=list, description="2-3 questions « Vérifie ».")
     recall_prompt: "ApiRecallPrompt | None" = Field(
@@ -583,6 +590,28 @@ class RecallResponse(BaseModel):
     verdict: Literal["correct", "partiel", "incorrect"]
     feedback: str
     missing_points: list[str] = Field(default_factory=list)
+
+
+class ChallengeRequest(BaseModel):
+    answer: str = Field(
+        ..., min_length=1, max_length=1000, description="Réponse de l'apprenant au défi (≤ 1000 caractères)."
+    )
+
+    @field_validator("answer")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("answer ne peut pas être vide")
+        return v
+
+
+class ChallengeResponse(BaseModel):
+    """Retour sur la réponse au défi : oriente vers l'explication sans la révéler (non persisté)."""
+
+    verdict: Literal["on_track", "partial", "off_track"]
+    feedback: str
+    hint: str
 
 
 class SectionNoteRequest(BaseModel):

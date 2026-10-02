@@ -66,6 +66,7 @@ def test_render_rules_carries_the_profile_figures():
     assert "300 mots" in rules and "8 blocs" in rules and "50%" in rules
     assert "2 à 3 `check_questions`" in rules
     assert "la couverture gagne" in rules  # arbitrage documenté
+    assert "`challenge_key_points` : 2 à 4 idées" in rules
     assert "1 à 2 `check_questions`" in render_rules(get_profile("express"))
 
 

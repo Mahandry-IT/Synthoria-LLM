@@ -15,6 +15,8 @@ from app.api.schemas import (
     AddCourseSectionsResponse,
     ApiPlannedSection,
     ApiPretestItem,
+    ChallengeRequest,
+    ChallengeResponse,
     CourseFromPlanRequest,
     CourseGenerationRequest,
     CourseGenerationResponse,
@@ -69,6 +71,7 @@ from app.repositories import (
     course_video_note_repository,
 )
 from app.schemas.course_generation import CoursePlanSchema, SectionType
+from app.services.challenge_evaluator import evaluate_challenge
 from app.services.course_depth import depth_of_plan
 from app.services.course_generator import (
     _map_quiz_question,
@@ -956,6 +959,54 @@ async def evaluate_section_recall(
     return RecallResponse(
         verdict=evaluation.verdict.value, feedback=evaluation.feedback, missing_points=evaluation.missing_points
     )
+
+
+def _limit_challenge(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    limiter = getattr(request.app.state, "challenge_rate_limiter", None)
+    if limiter is None:
+        limiter = request.app.state.challenge_rate_limiter = SlidingWindowLimiter()
+    limiter.check(
+        request.client.host if request.client else "unknown",
+        settings.challenge_rate_limit_per_minute,
+        "Trop d'analyses de défi, réessayez dans une minute",
+    )
+
+
+@router.post(
+    "/courses/{session_id}/sections/{section_id}/challenge",
+    response_model=ChallengeResponse,
+    dependencies=[Depends(_limit_challenge)],
+)
+async def evaluate_section_challenge(
+    session_id: UUID,
+    section_id: str,
+    body: ChallengeRequest,
+    request: Request,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+) -> ChallengeResponse:
+    """Analyse la réponse de l'apprenant au défi d'une section, avant l'explication.
+
+    Le défi et ses idées attendues sont lus en base, jamais fournis par le client ; la réponse est
+    une donnée (balisée, neutralisée) et n'est pas persistée. Le retour oriente vers l'explication
+    sans la révéler. 404 si la session, la section ou son défi n'existe pas ; 422 si la réponse est
+    vide ou dépasse 1000 caractères ; 429 au-delà de `challenge_rate_limit_per_minute` ; 502/503 si
+    Gemini échoue.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+
+    section = next(
+        (s for s in (row.gemini_response.get("sections") or []) if str(s.get("id")) == section_id), None
+    )
+    if section is None or not (section.get("challenge") or "").strip():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Section introuvable")
+
+    with _gemini_http_errors():
+        evaluation = await evaluate_challenge(section, body.answer, gemini_client)
+    return ChallengeResponse(verdict=evaluation.verdict.value, feedback=evaluation.feedback, hint=evaluation.hint)
 
 
 def _limit_regenerate(request: Request, settings: Settings = Depends(get_settings)) -> None:
