@@ -15,6 +15,7 @@ from app.core.rate_limit import RateLimitMiddleware
 from app.db.base import Base
 from app.db.session import create_engine
 from app.db.models import CoursePlan, CourseSession, PodcastJob  # noqa: F401 — ensure Base.metadata knows the models
+from app.db.schema_sync import sync_added_columns
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
 from app.services.vector_store import NumpyVectorStore
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
     engine, session_factory = create_engine(settings)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await sync_added_columns(conn)
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
 

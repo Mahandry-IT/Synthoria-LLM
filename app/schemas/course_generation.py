@@ -328,7 +328,7 @@ class Section(BaseModel):
     check_questions: list[QuizQuestion] = Field(
         default_factory=list,
         description=(
-            "DEVELOPMENT only: 2-3 quick check questions (difficulty facile or normale), each with feedback "
+            "DEVELOPMENT only: quick check questions, as many as the course mode rules say (difficulty facile or normale), each with feedback "
             "for the wrong answers via `explanation_per_choice`."
         ),
     )
@@ -460,7 +460,7 @@ class SectionsBatchSchema(BaseModel):
             "le même ordre et avec le même titre que dans le plan. Chaque section "
             "contient, dans cet ordre, les sous-sections Pourquoi / Quoi / Comment (toutes "
             "obligatoires), un exemple travaillé complet dans Comment, un défi (`challenge`), un exemple à trous "
-            "(`faded_example`), 2-3 `check_questions` et un `recall_prompt`."
+            "(`faded_example`), les `check_questions` (nombre fixé par les règles du mode) et un `recall_prompt`."
         )
     )
 

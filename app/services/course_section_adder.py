@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError
 from app.db.models import CourseSession
 from app.schemas.course_generation import Section, SectionType, SectionsBatchSchema
+from app.services.course_depth import depth_of_session, get_profile, render_rules
 from app.services.course_generator import _get_teacher_instructions, session_context_block
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
@@ -59,6 +60,8 @@ async def add_course_sections(
     )
     existing_titles = [s.get("title", "") for s in (row.gemini_response.get("sections") or [])]
     topic_clause, consumes_next_steps = _topic_clause(row, instructions)
+    # Les nouvelles sections suivent le mode du cours (`meta.depth`, absent = approfondi).
+    rules = render_rules(get_profile(depth_of_session(row.gemini_response)))
 
     prompt = (
         f"Question d'origine du cours : {row.question}\n\n"
@@ -66,10 +69,11 @@ async def add_course_sections(
         "--- Sections déjà présentes dans ce cours (ne PAS les répéter) ---\n"
         + ("\n".join(f"- {t}" for t in existing_titles) or "(aucune)")
         + f"\n\n{topic_clause}\n\n"
+        f"{rules}\n\n"
         "Génère une ou plusieurs sections DEVELOPMENT complètes, chacune avec un titre thématique "
         "précis (jamais générique), ses sous-sections Pourquoi/Quoi/Comment (toutes obligatoires, "
         "avec un exemple travaillé complet dans Comment), un défi (`challenge`), un exemple à trous "
-        "(`faded_example`), 2-3 `check_questions` et un `recall_prompt`. Retourne le JSON selon le "
+        "(`faded_example`), les `check_questions` et un `recall_prompt`. Retourne le JSON selon le "
         "schéma fourni."
     )
     structured = await gemini_client.format_structured(

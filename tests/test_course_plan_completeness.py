@@ -226,3 +226,136 @@ def test_finalize_incomplete_replaces_still_broken_section_with_visible_fallback
 
     assert is_incomplete_section(result[0])
     assert result[0].title == "Titre du plan"  # le titre du plan est toujours respecté
+
+
+# ─── Lot E : problèmes bloquants vs soft (profils de mode) ──────────────────
+
+import logging  # noqa: E402
+
+from app.services.course_depth import get_profile  # noqa: E402
+from app.services.course_plan_generator import _MAX_REPAIR_ATTEMPTS, section_issues  # noqa: E402
+
+_LIST = {"type": "list", "list_items": ["a"]}
+_STANDARD = get_profile("standard")
+
+
+def _wordy_section(title: str = "S", words: int = 400, covered: list[str] | None = None) -> Section:
+    """Section complète et conforme au ratio, mais trop longue pour le budget standard (300 mots)."""
+    return _full_section(
+        title=title, covered_subtopics=covered or [], comment=" ".join(["mot"] * words) + ".",
+        extra_comment_blocks=[_LIST, _LIST, _LIST],
+    )
+
+
+def test_section_issues_separates_blocking_from_soft():
+    section = _full_section(subsection_titles=("Pourquoi", "Quoi"), covered_subtopics=["Moyenne"])
+    issues = section_issues(section, _planned(subtopics=["Moyenne", "Variance"]), _STANDARD)
+
+    assert any("Comment" in i for i in issues.blocking)
+    assert any("Variance" in i for i in issues.blocking)
+    assert any("visuel" in i for i in issues.soft)  # forme : jamais bloquant
+    assert issues.blocking_count == 2
+
+
+def test_section_issues_budget_overrun_is_soft_only():
+    issues = section_issues(_wordy_section(), _planned(), _STANDARD)
+
+    assert issues.blocking == ()
+    assert issues.soft == ("410 mots de prose pour un budget de 300",)
+
+
+def test_score_weights_blocking_far_above_soft():
+    one_gap = section_issues(_full_section(subsection_titles=("Pourquoi", "Quoi")), _planned(), None)
+    many_soft = section_issues(_wordy_section(words=600), _planned(), _STANDARD)
+
+    assert one_gap.score > many_soft.score  # couverture/structure > forme
+
+
+def test_finalize_keeps_soft_only_section_and_logs_budget_exceeded(caplog):
+    wordy = _wordy_section()
+
+    with caplog.at_level(logging.WARNING):
+        result = _finalize_incomplete([wordy], [_planned()], _STANDARD)
+
+    assert result == [wordy]
+    assert not is_incomplete_section(result[0])
+    assert any(r.message == "course_section_budget_exceeded" for r in caplog.records)
+
+
+def test_finalize_marks_incomplete_only_on_blocking_issue():
+    blocking = _full_section(subsection_titles=("Pourquoi", "Quoi"), extra_comment_blocks=[_LIST])
+    assert is_incomplete_section(_finalize_incomplete([blocking], [_planned()], _STANDARD)[0])
+
+
+def test_finalize_without_visual_is_now_kept():
+    """« Aucun bloc visuel » est une règle de forme : la section est gardée, plus remplacée par un repli."""
+    text_only = _full_section()
+    assert _finalize_incomplete([text_only], [_planned()]) == [text_only]
+
+
+@pytest.mark.asyncio
+async def test_repair_prompt_lists_real_issues_and_mode_rules():
+    client = AsyncMock()
+    client.format_structured.return_value = {"sections": [_wordy_section(words=100).model_dump(mode="json")]}
+
+    result = await _repair_incomplete_sections(
+        [_wordy_section()], [_planned()], question="q", mode="m", context_block="c", outline="o",
+        gemini_client=client, profile=_STANDARD,
+    )
+
+    prompt = client.format_structured.await_args.kwargs["raw_answer"]
+    assert "410 mots de prose pour un budget de 300" in prompt
+    assert "Règles du mode « standard »" in prompt
+    assert "au moins un bloc visuel" not in prompt  # ancienne consigne fixe, remplacée
+    assert client.format_structured.await_count == 1  # remplaçant conforme : arrêt immédiat
+    assert section_issues(result[0], _planned(), _STANDARD).soft == ()
+
+
+@pytest.mark.asyncio
+async def test_repair_accepts_replacement_with_better_weighted_score():
+    """Un remplaçant qui comble un trou bloquant est retenu même s'il dépasse le budget (soft) :
+    son score pondéré est meilleur."""
+    gap = _full_section(title="A", subsection_titles=("Pourquoi", "Quoi"), extra_comment_blocks=[_LIST])
+    fixed_but_wordy = _wordy_section(title="A")
+    client = AsyncMock()
+    client.format_structured.return_value = {"sections": [fixed_but_wordy.model_dump(mode="json")]}
+
+    result = await _repair_incomplete_sections(
+        [gap], [_planned("A")], question="q", mode="m", context_block="c", outline="o",
+        gemini_client=client, profile=_STANDARD,
+    )
+
+    assert _structural_gaps(result[0]) == []
+    assert client.format_structured.await_count == _MAX_REPAIR_ATTEMPTS  # soft restant : 2e essai, puis arrêt
+
+
+@pytest.mark.asyncio
+async def test_repair_rejects_replacement_that_lost_structure_for_budget():
+    wordy = _wordy_section(title="A")  # soft seulement
+    short_but_broken = _full_section(title="A", subsection_titles=("Pourquoi", "Quoi"), extra_comment_blocks=[_LIST])
+    client = AsyncMock()
+    client.format_structured.return_value = {"sections": [short_but_broken.model_dump(mode="json")]}
+
+    result = await _repair_incomplete_sections(
+        [wordy], [_planned("A")], question="q", mode="m", context_block="c", outline="o",
+        gemini_client=client, profile=_STANDARD,
+    )
+
+    assert result == [wordy]
+
+
+@pytest.mark.asyncio
+async def test_repair_never_swaps_in_an_incomplete_fallback():
+    """Gemini ne renvoie aucune section : l'alignement produit un repli « incomplet », qui ne doit
+    jamais remplacer une section réelle (son score vide le ferait sinon gagner)."""
+    wordy = _wordy_section(title="A")
+    client = AsyncMock()
+    client.format_structured.return_value = {"sections": []}
+
+    result = await _repair_incomplete_sections(
+        [wordy], [_planned("A")], question="q", mode="m", context_block="c", outline="o",
+        gemini_client=client, profile=_STANDARD,
+    )
+
+    assert result == [wordy]
+    assert client.format_structured.await_count == _MAX_REPAIR_ATTEMPTS

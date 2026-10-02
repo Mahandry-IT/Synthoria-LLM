@@ -184,8 +184,14 @@ def _dev_section(title: str) -> dict:
                     {"type": "table", "table": {"caption": "c", "headers": ["h"], "rows": [["x"]]}},
                 ],
             },
-            {"title": "Pourquoi", "blocks": [{"type": "text", "text": f"pourquoi {title}"}]},
-            {"title": "Comment", "blocks": [{"type": "text", "text": f"comment {title}"}]},
+            # Une LIST par sous-section : 50 % de blocs non textuels, conforme au ratio de tous les
+            # modes — sans quoi chaque lot déclencherait des appels de réparation.
+            {"title": "Pourquoi", "blocks": [
+                {"type": "text", "text": f"pourquoi {title}"}, {"type": "list", "list_items": ["enjeu"]},
+            ]},
+            {"title": "Comment", "blocks": [
+                {"type": "text", "text": f"comment {title}"}, {"type": "list", "list_items": ["étape"]},
+            ]},
         ],
     }
 

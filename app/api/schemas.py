@@ -5,6 +5,9 @@ from uuid import UUID
 from fastapi import Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.config import get_settings
+from app.services.course_depth import LEGACY_DEPTH, CourseDepth
+
 T = TypeVar("T")
 
 
@@ -363,6 +366,9 @@ class CourseMeta(BaseModel):
     subject: str
     language: str = "fr"
     generated_at: str
+    depth: CourseDepth = Field(
+        LEGACY_DEPTH, description="Mode du cours (express/standard/approfondi) ; absent des anciens cours = approfondi."
+    )
 
 
 class CourseAnswer(BaseModel):
@@ -411,6 +417,13 @@ class CourseGenerationRequest(BaseModel):
     generate_podcast: bool | None = Field(
         None,
         description="Lance la génération d'un podcast après le cours. Défaut : PODCAST_AUTO_GENERATE.",
+    )
+    depth: CourseDepth = Field(
+        default_factory=lambda: get_settings().default_course_depth,
+        description=(
+            "Niveau de détail du cours : express (3-5 sections courtes), standard (6-8 sections) ou "
+            "approfondi (couverture complète). Défaut : DEFAULT_COURSE_DEPTH (approfondi)."
+        ),
     )
 
 
@@ -517,6 +530,7 @@ class CoursePlanResponse(BaseModel):
     plan_id: UUID
     expires_at: str
     mode: Literal["file_question", "question_only"]
+    depth: CourseDepth = Field(LEGACY_DEPTH, description="Mode du cours choisi à la planification.")
     meta: CoursePlanMeta
     sections: list[ApiPlannedSection]
     pretest: list[ApiPretestItem] = Field(default_factory=list, description="Pré-test diagnostique (1 question par section).")

@@ -93,3 +93,74 @@ def test_visual_issues_image_block_satisfies_visual_first_for_now():
     branché (Lot 2/3/5, voir visual_validation.py)."""
     image_only = {"type": "image", "image_source": "web", "image_query": "chat noir"}
     assert visual_issues(_section([image_only])) == []
+
+
+# ─── Ratio non textuel et budget par section (profils de mode) ──────────────
+
+from app.services.course_depth import get_profile  # noqa: E402
+from app.services.visual_validation import prose_word_count  # noqa: E402
+
+_TEXT = {"type": "text", "text": "Court."}
+_TABLE = {"type": "table", "table": {"caption": "c", "headers": ["h"], "rows": [["x"]]}}
+
+
+def test_visual_issues_ratio_below_half_is_reported_with_figures():
+    issues = visual_issues(_section([_TEXT, _TEXT, _TEXT, _TABLE]), get_profile("standard"))
+
+    assert issues == [
+        "1 bloc(s) non textuel(s) sur 4 : au moins 50% attendus "
+        "(remplace de la prose par des tableaux, listes, schémas...)"
+    ]
+
+
+def test_visual_issues_ratio_at_half_is_conform():
+    assert visual_issues(_section([_TEXT, _TABLE]), get_profile("express")) == []
+
+
+def test_visual_issues_callout_and_definition_are_textual():
+    callout = {"type": "callout", "text": "Attention.", "callout_variant": "warning"}
+    definition = {"type": "definition", "text": "Terme : sens."}
+
+    issues = visual_issues(_section([callout, definition]))
+    assert issues == ["aucun bloc visuel (TABLE, LIST, DIAGRAM, CHART, FORMULA...)"]
+
+
+def test_visual_issues_image_still_counts_as_non_textual_in_ratio():
+    """Comme aujourd'hui (aucun résolveur d'images réel) : IMAGE n'est pas compté comme textuel."""
+    image = {"type": "image", "image_source": "web", "image_query": "chat noir"}
+    assert visual_issues(_section([_TEXT, image]), get_profile("express")) == []
+
+
+def test_visual_issues_word_budget_exceeded_is_reported_with_figures():
+    long_text = {"type": "text", "text": " ".join(["mot"] * 160) + "."}
+    issues = visual_issues(_section([long_text, _TABLE]), get_profile("express"))
+
+    assert issues == ["160 mots de prose pour un budget de 150"]
+    assert visual_issues(_section([long_text, _TABLE]), get_profile("standard")) == []
+
+
+def test_visual_issues_block_budget_exceeded():
+    blocks = [_TEXT, _TABLE] * 3  # 6 blocs
+    assert visual_issues(_section(blocks), get_profile("express")) == ["6 blocs pour un maximum de 5"]
+    assert visual_issues(_section(blocks), get_profile("standard")) == []
+
+
+def test_visual_issues_without_profile_keeps_legacy_rules_only():
+    """Appel historique (sans mode) : ni ratio ni budget, seulement « au moins un visuel »."""
+    long_text = {"type": "text", "text": " ".join(["mot"] * 600) + "."}
+    assert visual_issues(_section([long_text, _TEXT, _TEXT, _TABLE] + [_TEXT] * 10)) == []
+
+
+def test_prose_word_count_includes_lists_and_worked_examples_but_not_tables_or_formulas():
+    blocks = [
+        {"type": "text", "text": "Deux mots."},
+        {"type": "definition", "text": "Un terme précis."},
+        {"type": "callout", "text": "Note importante.", "callout_variant": "tip"},
+        {"type": "list", "list_items": ["premier point", "second"]},
+        {"type": "worked_example", "worked_example": {"statement": "Calculer x.", "steps": ["Poser x = 2."], "result": "Donc 2."}},
+        {"type": "table", "table": {"caption": "beaucoup de mots ici", "headers": ["a", "b"], "rows": [["c", "d"]]}},
+        {"type": "formula", "formula": {"latex": "E=mc^2", "description": "énergie de masse"}},
+        {"type": "code", "code": "print('bonjour le monde')", "code_language": "python"},
+    ]
+    # 2 + 3 + 2 + 3 + (2 + 3 + 2) = 17 ; tableau, formule et code ignorés.
+    assert prose_word_count(_section(blocks)) == 17

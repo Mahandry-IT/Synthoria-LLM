@@ -32,8 +32,10 @@ Fill `pretest` with **exactly one question per `development` section**, using th
 
 ## Number of sections — driven by coverage
 
-- The number of `development` sections is driven by **full coverage of the topic**. Never stop at a target count while a sub-topic is still uncovered.
-- Minimum 6 `development` sections for any plan (6-8 for a simple/narrow topic, 10-15+ for a complex/broad one) — a floor, never a cap: plan exactly what the topic needs, add more when it has more distinct notions, never pad with filler and never merge distinct concepts to stay under a number.
+- The number of `development` sections follows the **course mode rules given in the prompt** (`express`, `standard` or `approfondi`).
+- In `approfondi`, it is a floor driven by **full coverage of the topic**, never a cap: never stop while a sub-topic is still uncovered, add sections when the topic has more distinct notions.
+- In `express` and `standard`, it is a strict range: group close notions and keep the essentials of the topic.
+- In every mode, never pad with filler sections and never merge distinct concepts just to reach a number.
 
 ## Content of each planned section
 
