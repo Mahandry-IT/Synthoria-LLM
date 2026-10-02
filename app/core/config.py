@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # de requête : réingérer un contenu déjà vu (ex. même PDF) évite un nouvel appel Gemini.
     gemini_response_cache_ttl_hours: int = 24
     course_top_k_default: int = 6
-    course_question_max_length: int = 2000
+    course_question_max_length: int = 15000
     course_coverage_completion_enabled: bool = True
     course_coverage_min_missing_chars: int = 300
     # Sections plus lourdes (défi, exemple à trous, questions, reformulation) : lots plus petits.
