@@ -52,13 +52,13 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | POST | `/generate` | Génère une réponse à partir d'un prompt classique |
 | POST | `/pdf/ingest` | Envoie un fichier PDF, extrait ses blocs, les découpe et les indexe dans le stockage local |
 | POST | `/pdf/search` | Recherche sémantique dans les documents déjà indexés |
-| POST | `/courses/generate` | Génère un cours structuré (JSON). **Mode 2** (fichier + question) si `filename` fourni, **Mode 3** (question seule + recherche web) sinon. Session persistée en DB (best-effort). Quiz inclus avec réponses multiples, difficulté et points. |
-| POST | `/courses/plan` | **Étape 1** de la génération en deux temps : retourne un plan détaillé du cours (sections `title`/`objective`/`subtopics`/`order`, sans contenu rédigé) + un `plan_id`. Le contexte de récupération (RAG / recherche web) est figé en DB avec le plan (expire après `COURSE_PLAN_TTL_MINUTES`). |
-| POST | `/courses/generate/from-plan` | **Étape 2** : génère le cours complet à partir de `plan_id` + `sections` (plan validé ou édité par l'utilisateur). Génération par lots de sections DEVELOPMENT, sans plafond de sections. `404` plan inconnu, `410` plan expiré, `422` plan invalide (max 80 sections, au moins une `development`). Réponse identique à `/courses/generate`. |
+| POST | `/courses/generate` | Génère un cours structuré (JSON). **Mode 2** (fichier + question) si `filename` fourni, **Mode 3** (question seule + recherche web) sinon. Session persistée en DB (best-effort). Quiz inclus avec réponses multiples, difficulté et points. `depth` facultatif (`express`\|`standard`\|`approfondi`, défaut `DEFAULT_COURSE_DEPTH` = `approfondi`), renvoyé dans `meta.depth`. |
+| POST | `/courses/plan` | **Étape 1** de la génération en deux temps : retourne un plan détaillé du cours (sections `title`/`objective`/`subtopics`/`order`, sans contenu rédigé) + un `plan_id`. Le contexte de récupération (RAG / recherche web) est figé en DB avec le plan (expire après `COURSE_PLAN_TTL_MINUTES`). `depth` facultatif (voir [Modes de cours](#modes-de-cours)) : persisté avec le plan (`course_plans.depth`), renvoyé dans la réponse et appliqué à toute la génération du cours. `422` mode inconnu. |
+| POST | `/courses/generate/from-plan` | **Étape 2** : génère le cours complet à partir de `plan_id` + `sections` (plan validé ou édité par l'utilisateur). Génération par lots de sections DEVELOPMENT, sans plafond de sections. `404` plan inconnu, `410` plan expiré, `422` plan invalide (max 80 sections, au moins une `development`). Réponse identique à `/courses/generate` (le mode vient du plan persisté, jamais du client ; `meta.depth`). |
 | GET | `/courses/history?page=1&limit=20` | Historique paginé des sessions de cours (UUID, date, question, fichiers, mode) |
 | GET | `/courses/history/{id}` | Détail d'une session avec la réponse Gemini complète |
 | POST | `/courses/{session_id}/sections/{section_id}/recall` | Évalue la reformulation (« explique avec tes mots ») d'une section : body `{answer}` (≤ 1000 caractères) → `{verdict: correct\|partiel\|incorrect, feedback, missing_points}`. La section est lue en base ; la réponse est traitée comme une donnée. `404` session/section inconnue, `422` réponse vide ou trop longue, `429` (10/min). |
-| POST | `/courses/{session_id}/sections/{section_id}/regenerate` | Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération) → `CourseSection` mis à jour. `404` session/section inconnue, `409` la section n'est pas incomplète, `429` (6/min), `502`/`503` échec Gemini. |
+| POST | `/courses/{session_id}/sections/{section_id}/regenerate` | Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération) → `CourseSection` mis à jour, validé selon le mode du cours (`meta.depth`) avec la même réparation bornée que la génération. `404` session/section inconnue, `409` la section n'est pas incomplète, `429` (6/min), `502`/`503` échec Gemini. |
 | PUT | `/courses/{session_id}/sections/{section_id}/note` | Enregistre (ou efface, note vide) la note libre de l'apprenant sur une section (≤ 2000 caractères, jamais générée) → `{note, updated_at}`. `404` session/section inconnue, `422` trop longue, `429` (20/min). |
 | GET | `/reviews/due?limit=20` | Flashcards à réviser aujourd'hui (jamais révisées ou échues), dérivées des questions « Vérifie » des cours récents |
 | POST | `/reviews/{session_id}/{card_id}` | Enregistre `{result: correct\|incorrect}` et planifie la suite (Leitner J+1, J+3, J+7, J+21) → `{box, due_at}`. `404` carte inconnue |
@@ -70,7 +70,7 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | GET | `/courses/history/{session_id}/podcasts` | Jobs podcast liés à une session |
 | GET | `/podcasts?limit=3` | Podcasts les plus récents (tous statuts, `limit` 1-20, défaut 3) : état du job + `title` (script, sinon titre du cours, sinon question). Sert le dashboard |
 | GET | `/courses/plans?page&limit` | Plans en cours : `pending`, non expirés, pas encore transformés en cours (`plan_id`, `question`, `title`, `subject`, `sections_count`, `created_at`, `expires_at`), paginés |
-| GET | `/courses/plans/{plan_id}` | Plan proposé relu tel quel, avec la `question` et les `filenames` d'origine (reprise). `404` inconnu, `410` expiré |
+| GET | `/courses/plans/{plan_id}` | Plan proposé relu tel quel, avec la `question`, les `filenames` et le `depth` d'origine (reprise, « Régénérer le plan » garde le mode ; plan antérieur au mode = `approfondi`). `404` inconnu, `410` expiré |
 | GET | `/media/{asset_id}` | Sert une image ré-hébergée (jamais de hotlink vers la source d'origine) : téléchargée, ré-encodée en WebP et servie depuis le stockage local. `404` image inconnue, `410` fichier expiré/supprimé, `422` `asset_id` invalide (doit être un UUID). `Cache-Control: public, max-age=31536000, immutable`. |
 
 ### Tester l'API
@@ -121,7 +121,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 
 - **Blocs typés** : chaque section expose `subsections[].blocks[]` (`text`, `definition`, `list`, `table`, `formula`, `code`, `worked_example`, `callout`, `pitfall`, `diagram` Mermaid, `chart`). `quoi/pourquoi/comment/tables` sont **dépréciés** (historique, podcast) et seront retirés dans une version ultérieure. Les diagrammes (≤ 4000 caractères) et graphiques (≤ 12 libellés, 4 séries) sont bornés.
 - **Réponse directe** : `answer` = `summary` + `key_points` + `blocks`, distincte de l'introduction (garde-fou de similarité, `COURSE_ANSWER_INTRO_SIMILARITY_MAX`). L'ancien format `quoi/pourquoi/comment/worked_example` reste lisible.
-- **Cycle par section** (développement) : `challenge` → Pourquoi → Quoi → Comment → `faded_example` (À toi) → `check_questions` (Vérifie, feedback par choix) → `recall_prompt` (reformulation). Aucun plancher de sections : la couverture décide.
+- **Cycle par section** (développement) : `challenge` → Pourquoi → Quoi → Comment → `faded_example` (À toi) → `check_questions` (Vérifie, feedback par choix) → `recall_prompt` (reformulation). Nombre de sections, taille des sections et du quiz : selon le mode (voir [Modes de cours](#modes-de-cours)).
 - **Quiz final** : majorité de questions normale/difficile (`COURSE_QUIZ_MIN_HARD_SHARE`, 0.6), `section_refs` pour les questions mêlant plusieurs sections.
 - **Pré-test** : `POST /courses/plan` renvoie `pretest` (1 question par section) ; une section envoyée à `/courses/generate/from-plan` avec `mastery: "known"` est générée en version condensée.
 - **Flashcards** : `flashcards[]` dérivées des questions « Vérifie ». Migration `005_add_flashcard_reviews` (table `flashcard_reviews`) : `docker compose exec api alembic upgrade head` (la table est aussi créée au démarrage). Intervalles : `REVIEW_INTERVALS_DAYS`.
@@ -130,6 +130,25 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 - **Vidéos** : `videos[]` vient d'une vraie recherche YouTube (jamais d'ID inventé par Gemini) — voir [Vidéos YouTube](#vidéos-youtube).
 - **Régénération et notes** : une section `incomplete: true` (échec temporaire à la génération) peut être régénérée seule (`POST .../regenerate`), sans relancer tout le cours ; le contexte (fichiers ou recherche web) est ré-obtenu à partir de la session, jamais renvoyé silencieusement en cas d'échec (contrairement à la génération complète). Une section qui n'est pas incomplète ne peut pas être régénérée — à la place, l'apprenant peut y laisser une note libre (`note`, ≤ 2000 caractères, table séparée `course_section_notes`, jamais générée par le modèle) via `PUT .../note`.
 - **Images** : un bloc `image` peut apparaître dans `subsections[].blocks[]`, résolu et ré-hébergé (jamais de lien direct vers la source) — voir [Supports visuels](#supports-visuels).
+
+### Modes de cours
+
+`depth` (`POST /courses/plan`, `POST /courses/generate`) choisit le niveau de détail ; les profils vivent dans un seul module, `app/services/course_depth.py`, lu par les prompts (plan, lots, réparation, régénération, ajout de sections, quiz) et par le validateur — aucun chiffre dans `instruction/*.md`.
+
+| | `express` | `standard` | `approfondi` (défaut) |
+|---|---|---|---|
+| Sections `development` | 3-5 | 6-8 | pilotées par la couverture (plancher 6) |
+| Blocs non textuels / section | ≥ 50 % | ≥ 50 % | ≥ 50 % |
+| Mots de prose max / section | 150 | 300 | 500 |
+| Blocs max / section | 5 | 8 | 12 |
+| Questions « Vérifie » | 1-2 | 2-3 | 2-3 |
+| Quiz final | 5-6 | 8-10 | 10-12+ |
+
+- **Prose** = `text`, `definition`, `callout`, éléments de `list` et `worked_example` ; tableaux, formules, code, schémas et graphiques ne comptent pas dans les mots mais comptent dans les blocs. **Textuel** = `text`, `definition`, `callout` (un bloc `image` compte comme non textuel tant qu'aucun résolveur ne garantit son affichage). Un bloc `text` reste limité à 3 phrases.
+- **Validation** (`app/services/visual_validation.py`, `course_plan_generator.section_issues`) : problèmes **bloquants** (sous-section Pourquoi/Quoi/Comment vide, sous-thème du plan non traité) et **soft** (ratio, mots, blocs, `text` trop long), avec des messages chiffrés (« 412 mots de prose pour un budget de 300 ») recopiés dans le prompt de réparation. Réparation bornée à 2 appels Gemini par lot ; un remplaçant n'est retenu que si son score pondéré (bloquant × 10 + soft) est strictement meilleur. Après réparation : bloquant restant → section `incomplete` ; soft seulement → la meilleure version est gardée et `course_section_budget_exceeded` est journalisé (suivre ce taux après déploiement : chaque dépassement coûte jusqu'à 2 appels).
+- **Arbitrage** : si la couverture des sous-thèmes et le budget entrent en conflit, la couverture gagne.
+- **Rétro-compatibilité** : un plan ou une session sans mode (antérieurs) est traité comme `approfondi` (`meta.depth` absent, colonne `course_plans.depth` à `approfondi` par défaut). `DEFAULT_COURSE_DEPTH` ne s'applique qu'aux nouvelles requêtes sans `depth`.
+- **Migration** `015_add_course_plan_depth` (`course_plans.depth VARCHAR(12) NOT NULL DEFAULT 'approfondi'`) : idempotente, et la même colonne est ajoutée au démarrage de l'API (`app/db/schema_sync.py`) car le conteneur ne joue pas les migrations Alembic (`create_all` n'ajoute jamais de colonne à une table existante).
 
 ## Variables d'environnement
 
@@ -154,6 +173,7 @@ COURSE_TOP_K_DEFAULT=6
 COURSE_QUESTION_MAX_LENGTH=2000
 COURSE_PLAN_BATCH_SIZE=2
 COURSE_PLAN_TTL_MINUTES=120
+DEFAULT_COURSE_DEPTH=approfondi
 DATABASE_URL=postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
 MEDIA_STORAGE_DIR=/data/media
 MEDIA_MAX_BYTES=5242880

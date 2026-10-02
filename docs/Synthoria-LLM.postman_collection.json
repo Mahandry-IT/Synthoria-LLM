@@ -375,9 +375,9 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"question\": \"Qu'est-ce que la régression linéaire ?\"\n}"
+              "raw": "{\n  \"question\": \"Qu'est-ce que la régression linéaire ?\",\n  \"depth\": \"standard\"\n}"
             },
-            "description": "Mode 3 : pas de filename → question_only. Gemini utilise la recherche web. Codes: 200, 429, 500/502/503."
+            "description": "Mode 3 : pas de filename → question_only. Gemini utilise la recherche web. Codes: 200, 429, 500/502/503. depth (facultatif) : express | standard | approfondi — défaut DEFAULT_COURSE_DEPTH (approfondi) ; 422 si inconnu. Profils (sections, ratio ≥ 50 % de blocs non textuels, budget de mots/blocs, quiz) : app/services/course_depth.py. Le mode est renvoyé dans meta.depth."
           },
           "response": []
         },
@@ -431,9 +431,9 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"question\": \"Comment fonctionne un transformateur électrique ?\"\n}"
+              "raw": "{\n  \"question\": \"Comment fonctionne un transformateur électrique ?\",\n  \"depth\": \"express\"\n}"
             },
-            "description": "Étape 1 de la génération en deux temps : retourne un plan détaillé (structure uniquement, sans contenu Quoi/Pourquoi/Comment) et un plan_id. Copier plan_id dans la variable {{planId}}. Mêmes paramètres que POST /courses/generate. Codes: 200 ok, 413 question trop longue, 422 body invalide, 429 quota Gemini, 502 plan invalide, 503 Gemini/Ollama ou persistance indisponible."
+            "description": "Étape 1 de la génération en deux temps : retourne un plan détaillé (structure uniquement, sans contenu Quoi/Pourquoi/Comment) et un plan_id. Copier plan_id dans la variable {{planId}}. Mêmes paramètres que POST /courses/generate. Codes: 200 ok, 413 question trop longue, 422 body invalide, 429 quota Gemini, 502 plan invalide, 503 Gemini/Ollama ou persistance indisponible. depth (facultatif) : express | standard | approfondi — défaut DEFAULT_COURSE_DEPTH (approfondi) ; 422 si inconnu. Profils (sections, ratio ≥ 50 % de blocs non textuels, budget de mots/blocs, quiz) : app/services/course_depth.py. Le mode est persisté avec le plan et renvoyé dans la réponse (depth)."
           },
           "response": []
         },
@@ -706,7 +706,7 @@
                 "regenerate"
               ]
             },
-            "description": "Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération précédente), sans relancer tout le cours. Réponse : CourseSection mis à jour. 404 session/section inconnue, 409 la section n'est pas incomplète, 429 (6/min), 502/503 échec Gemini."
+            "description": "Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération précédente), sans relancer tout le cours. Réponse : CourseSection mis à jour. 404 session/section inconnue, 409 la section n'est pas incomplète, 429 (6/min), 502/503 échec Gemini. La section régénérée suit le mode du cours (meta.depth, absent = approfondi) et passe la même validation (sous-sections, ratio, budget) avec réparation bornée."
           },
           "response": []
         },
