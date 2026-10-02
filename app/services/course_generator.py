@@ -412,6 +412,7 @@ def _map_sections_to_course_sections(
                 tables=tables,
                 subsections=subsections,
                 challenge=section.challenge,
+                challenge_key_points=section.challenge_key_points,
                 faded_example=section.faded_example.model_dump(mode="json") if section.faded_example else None,
                 check_questions=[_map_quiz_question(q) for q in section.check_questions],
                 recall_prompt=section.recall_prompt.model_dump(mode="json") if section.recall_prompt else None,

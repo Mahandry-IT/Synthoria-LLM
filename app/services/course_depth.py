@@ -109,6 +109,7 @@ def render_rules(profile: DepthProfile) -> str:
         f"- Au plus {profile.max_blocks} blocs par section, toutes sous-sections confondues.\n"
         "- Chaque bloc TEXT tient en 3 phrases au plus.\n"
         f"- {_range(profile.check_questions_min, profile.check_questions_max)} `check_questions` par section.\n"
+        "- Renseigne `challenge_key_points` : 2 à 4 idées courtes qu'une bonne réponse au défi contient.\n"
         "- Arbitrage : si couvrir tous les sous-thèmes du plan oblige à dépasser le budget, la couverture "
         "gagne — condense la prose (tableaux, listes) plutôt que d'omettre un sous-thème."
     )

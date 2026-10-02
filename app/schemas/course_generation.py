@@ -321,6 +321,13 @@ class Section(BaseModel):
             "real case) that the learner tries to answer first. Never answered in the challenge itself."
         ),
     )
+    challenge_key_points: list[str] = Field(
+        default_factory=list,
+        description=(
+            "DEVELOPMENT only: 2-4 short ideas a good answer to the challenge contains (used to give the "
+            "learner a hint, never shown before the explanation)."
+        ),
+    )
     faded_example: FadedExample | None = Field(
         default=None,
         description="DEVELOPMENT only: a faded example consistent with the worked example in Comment.",
@@ -459,7 +466,8 @@ class SectionsBatchSchema(BaseModel):
             "Exactement une section DEVELOPMENT par section planifiée du lot, dans "
             "le même ordre et avec le même titre que dans le plan. Chaque section "
             "contient, dans cet ordre, les sous-sections Pourquoi / Quoi / Comment (toutes "
-            "obligatoires), un exemple travaillé complet dans Comment, un défi (`challenge`), un exemple à trous "
+            "obligatoires), un exemple travaillé complet dans Comment, un défi (`challenge`) et ses idées attendues "
+            "(`challenge_key_points`), un exemple à trous "
             "(`faded_example`), les `check_questions` (nombre fixé par les règles du mode) et un `recall_prompt`."
         )
     )
