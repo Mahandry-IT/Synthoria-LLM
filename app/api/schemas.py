@@ -488,7 +488,7 @@ COURSE_PLAN_MAX_SECTIONS = 80
 _PLAN_TITLE_MAX = 200
 _PLAN_OBJECTIVE_MAX = 1000
 _PLAN_SUBTOPIC_MAX = 300
-_PLAN_SUBTOPICS_MAX_ITEMS = 20
+_PLAN_SUBTOPICS_MAX_ITEMS = 8
 
 PlannedSectionType = Literal["introduction", "development", "common_pitfalls", "summary", "next_steps"]
 

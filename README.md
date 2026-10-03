@@ -138,7 +138,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 
 | | `express` | `standard` | `approfondi` (défaut) |
 |---|---|---|---|
-| Sections `development` | 5-8 | 9-11 | pilotées par la couverture (plancher 12) |
+| Sections `development` | 7-12 | 13-16 | pilotées par la couverture (plancher 18) |
 | Blocs non textuels / section | ≥ 50 % | ≥ 50 % | ≥ 50 % |
 | Mots de prose max / section | 150 | 300 | 500 |
 | Blocs max / section | 5 | 8 | 12 |

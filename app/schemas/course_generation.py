@@ -487,7 +487,7 @@ class PlannedSection(BaseModel):
     objective: str = Field(description="Ce que l'apprenant doit savoir/savoir faire à l'issue de la section.")
     subtopics: list[str] = Field(
         default_factory=list,
-        description="Notions, mécanismes ou cas précis que la section devra développer.",
+        description="3 à 5 notions, mécanismes ou cas précis, chacun distinct, que la section devra développer.",
     )
     order: int = Field(description="Position 1-based dans le cours, respectant l'ordre de dépendance logique.")
 

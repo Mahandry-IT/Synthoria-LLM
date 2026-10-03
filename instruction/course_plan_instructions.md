@@ -34,7 +34,7 @@ Fill `pretest` with **exactly one question per `development` section**, using th
 
 - The number of `development` sections follows the **course mode rules given in the prompt** (`express`, `standard` or `approfondi`).
 - In `approfondi`, it is a floor driven by **full coverage of the topic**, never a cap: never stop while a sub-topic is still uncovered, add sections when the topic has more distinct notions.
-- In `express` and `standard`, it is a strict range: group close notions and keep the essentials of the topic.
+- In `express` and `standard`, it is a strict range: keep the essentials of the topic, with each section still limited to 3-5 sub-topics.
 - In every mode, never pad with filler sections and never merge distinct concepts just to reach a number.
 
 ## Content of each planned section
@@ -43,7 +43,7 @@ For every section provide **structure only**:
 
 - `title`: a real, precise, thematic title. **Forbidden**: generic titles such as "Contenu complémentaire", "Suite", "Divers", "Autres notions".
 - `objective`: one or two sentences — what the learner must understand or be able to do after the section.
-- `subtopics`: the specific notions, mechanisms, formulas, pitfalls, takeaways or follow-up topics the section will have to cover — **at least 7 items, for every section regardless of its type** (`introduction`, `development`, `common_pitfalls`, `summary`, `next_steps`), up to 20. Each item must be a genuinely distinct point grounded in the context or the question; never pad the list with rewordings, trivial variants or near-duplicates of the same point just to reach the count. If a `development` section's real scope truly cannot sustain 7 distinct notions, split it into two narrower `development` sections instead of listing filler.
+- `subtopics`: the specific notions, mechanisms, formulas, pitfalls, takeaways or follow-up topics the section will have to cover — **3 to 5 items, for every section regardless of its type** (`introduction`, `development`, `common_pitfalls`, `summary`, `next_steps`). Each item must be a genuinely distinct point grounded in the context or the question; never pad the list with rewordings, trivial variants or near-duplicates of the same point just to reach the count. If a topic holds more than 5 distinct notions, never cram them into one section: split it into several narrower `development` sections of 3-5 sub-topics each. If a section cannot sustain 3 distinct notions, merge it with a neighbouring one instead of listing filler.
 - `order`: 1-based position, consecutive, following the dependency order.
 
 **Never write Quoi / Pourquoi / Comment content, worked examples or quiz questions at this stage.**
