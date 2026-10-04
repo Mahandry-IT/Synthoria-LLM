@@ -830,3 +830,50 @@ class PodcastSummary(PodcastJobStatus):
 
 class PodcastSummaryList(BaseModel):
     data: list[PodcastSummary]
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="Question de l'apprenant sur le cours (≤ 1000 caractères).")
+
+    @field_validator("message")
+    @classmethod
+    def _strip_and_bound(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("message ne peut pas être vide")
+        max_length = get_settings().chat_message_max_length
+        if len(v) > max_length:
+            raise ValueError(f"message trop long (max {max_length} caractères)")
+        return v
+
+
+class ChatSource(BaseModel):
+    label: str
+    reference: str
+
+
+class ChatMessage(BaseModel):
+    id: UUID
+    role: Literal["user", "assistant"]
+    content: str
+    status: Literal["answered", "off_topic"]
+    sources: list[ChatSource] = Field(default_factory=list)
+    created_at: datetime
+
+
+class ChatQuota(BaseModel):
+    limit: int = Field(..., description="Messages autorisés par jour (UTC) pour ce cours.")
+    used: int
+    remaining: int
+    resets_at: datetime = Field(..., description="Prochain minuit UTC (ISO 8601).")
+
+
+class ChatHistoryResponse(BaseModel):
+    messages: list[ChatMessage] = Field(..., description="Ordre chronologique croissant.")
+    quota: ChatQuota
+
+
+class ChatExchangeResponse(BaseModel):
+    user_message: ChatMessage
+    assistant_message: ChatMessage
+    quota: ChatQuota

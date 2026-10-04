@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.chat_routes import router as chat_router
 from app.api.media_routes import router as media_router
 from app.api.podcast_routes import router as podcast_router
 from app.api.review_routes import router as review_router
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(podcast_router)
     app.include_router(review_router)
     app.include_router(media_router)
+    app.include_router(chat_router)
     return app
 
 
