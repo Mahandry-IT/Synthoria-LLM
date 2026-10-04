@@ -491,7 +491,7 @@ async def test_refine_section_clips_to_contract_limits(settings, vector_store, g
 
     assert len(refined.title) == 200
     assert len(refined.objective) == 1000
-    assert len(refined.subtopics) == 20
+    assert len(refined.subtopics) == 8
     assert len(refined.subtopics[0]) == 300
 
 
