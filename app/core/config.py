@@ -125,6 +125,14 @@ class Settings(BaseSettings):
     # Ajout de contenu (sections) sur un cours déjà généré
     add_course_sections_rate_limit_per_minute: int = 6
 
+    # Chatbot d'un cours : quota journalier par cours (jour UTC), anti-rafale par minute (par IP),
+    # tours d'historique renvoyés à Gemini et taille max du cours injecté en contexte.
+    chat_message_max_length: int = 1000
+    chat_daily_limit: int = 15
+    chat_rate_limit_per_minute: int = 10
+    chat_history_turns: int = 6
+    chat_context_max_chars: int = 60000
+
     # YouTube Data API v3 : recherche réelle de vidéos (remplace les IDs inventés par Gemini).
     # Sans clé, comportement inchangé (repli sur le grounding Gemini + vérification oEmbed).
     youtube_api_key: SecretStr | None = None
