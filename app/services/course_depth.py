@@ -39,17 +39,17 @@ class DepthProfile:
 
 PROFILES: dict[str, DepthProfile] = {
     "express": DepthProfile(
-        name="express", min_sections=3, max_sections=5, non_text_ratio=0.5,
+        name="express", min_sections=7, max_sections=12, non_text_ratio=0.5,
         max_prose_words=150, max_blocks=5, check_questions_min=1, check_questions_max=2,
         quiz_min=5, quiz_max=6,
     ),
     "standard": DepthProfile(
-        name="standard", min_sections=6, max_sections=8, non_text_ratio=0.5,
+        name="standard", min_sections=13, max_sections=16, non_text_ratio=0.5,
         max_prose_words=300, max_blocks=8, check_questions_min=2, check_questions_max=3,
         quiz_min=8, quiz_max=10,
     ),
     "approfondi": DepthProfile(
-        name="approfondi", min_sections=6, max_sections=None, non_text_ratio=0.5,
+        name="approfondi", min_sections=18, max_sections=None, non_text_ratio=0.5,
         max_prose_words=500, max_blocks=12, check_questions_min=2, check_questions_max=3,
         quiz_min=10, quiz_max=12, quiz_open_ended=True,
     ),
@@ -85,13 +85,13 @@ def render_plan_rules(profile: DepthProfile) -> str:
     """Consigne de nombre de sections `development`, injectée dans les prompts de plan."""
     if profile.max_sections is None:
         count = (
-            f"au moins {profile.min_sections} sections `development` (6-8 pour un sujet simple, 10-15+ pour un "
-            "sujet large) : un plancher, jamais un plafond — le nombre est piloté par la couverture complète du sujet"
+            f"au moins {profile.min_sections} sections `development` (18-20 pour un sujet simple, 25-40+ pour un "
+            "sujet large ou un document volumineux) : un plancher, jamais un plafond — le nombre est piloté par la couverture complète du sujet"
         )
     else:
         count = (
             f"entre {profile.min_sections} et {profile.max_sections} sections `development` (plafond strict) : "
-            "regroupe les notions proches et ne garde que l'essentiel du sujet"
+            "ne garde que l'essentiel du sujet ; chaque section porte 3 à 5 sous-thèmes"
         )
     return f"--- Mode du cours : {profile.name} ---\nNombre de sections : {count}."
 

@@ -167,7 +167,7 @@ async def test_generate_plan_injects_section_count_of_the_mode():
     plan, _ = await generate_course_plan("Q", store, gemini, settings, mode="file_question", depth="express")
 
     assert isinstance(plan, CoursePlanSchema)
-    assert "entre 3 et 5 sections" in gemini.format_structured.await_args.kwargs["raw_answer"]
+    assert "entre 7 et 12 sections" in gemini.format_structured.await_args.kwargs["raw_answer"]
 
 
 @pytest.mark.asyncio
