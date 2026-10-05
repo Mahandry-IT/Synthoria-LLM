@@ -124,7 +124,7 @@ async def post_course_chat(
         course = row.gemini_response
 
     with _gemini_http_errors():
-        reply = await answer_question(course, history, body.message, gemini_client, settings)
+        reply = await answer_question(course, history, body.message, gemini_client, settings, body.section_id)
 
     user = CourseChatMessage(
         id=uuid.uuid4(), session_id=session_id, role="user", content=body.message, status=reply.status, sources=[],

@@ -63,3 +63,81 @@ def test_tolerates_missing_or_malformed_fields():
     assert block_text({"type": "chart", "chart": {"caption": "Ventes", "labels": ["a"], "series": [{"name": "s", "values": [1]}]}}) == (
         "Graphique : Ventes\ns : a=1"
     )
+
+
+# --- Sélection des sections pertinentes (chat : on n'envoie plus le cours entier) ---
+
+SELECT_COURSE = {
+    "meta": {"title": "Électricité"},
+    "introduction": {"why": "Introduction générale."},
+    "summary": "Synthèse du cours.",
+    "sections": [
+        {"id": "s1", "title": "Le transformateur", "subsections": [
+            {"title": "Rapport de transformation", "blocks": [{"type": "text", "text": "Le rapport des spires fixe la tension."}]}]},
+        {"id": "s2", "title": "Les condensateurs", "subsections": [
+            {"title": "Capacité", "blocks": [{"type": "text", "text": "Un condensateur stocke une charge électrique."}]}]},
+        {"id": "s3", "title": "Les diodes", "subsections": [
+            {"title": "Redressement", "blocks": [{"type": "text", "text": "La diode laisse passer le courant dans un sens."}]}]},
+    ],
+}
+
+
+def test_select_keeps_outline_and_only_the_matching_section():
+    from app.services.lesson_context import select_lesson_context
+
+    context = select_lesson_context(SELECT_COURSE, "Comment fonctionne un condensateur ?", max_chars=5000, top_sections=1)
+
+    assert "Plan du cours" in context and "1. Le transformateur" in context and "3. Les diodes" in context
+    assert "stocke une charge" in context
+    assert "fixe la tension" not in context and "laisse passer" not in context
+
+
+def test_select_is_accent_insensitive_and_weights_titles():
+    from app.services.lesson_context import rank_sections
+
+    ranking = rank_sections(SELECT_COURSE["sections"], [("redressement diode", 1.0)])
+
+    assert ranking and ranking[0][0] == 2
+
+
+def test_select_section_id_is_prioritary_and_unknown_id_is_ignored():
+    from app.services.lesson_context import select_lesson_context
+
+    forced = select_lesson_context(
+        SELECT_COURSE, "condensateur", section_id="s3", max_chars=5000, top_sections=2
+    )
+    assert "laisse passer" in forced and "stocke une charge" in forced
+
+    unknown = select_lesson_context(SELECT_COURSE, "condensateur", section_id="zzz", max_chars=5000, top_sections=1)
+    assert "stocke une charge" in unknown and "laisse passer" not in unknown
+
+
+def test_select_short_followup_uses_previous_question():
+    from app.services.lesson_context import select_lesson_context
+
+    context = select_lesson_context(
+        SELECT_COURSE, "Et pour la suite ?", previous_question="le transformateur", max_chars=5000, top_sections=1
+    )
+
+    assert "fixe la tension" in context
+
+
+def test_select_without_match_falls_back_to_outline_intro_and_summary():
+    from app.services.lesson_context import select_lesson_context
+
+    context = select_lesson_context(SELECT_COURSE, "blabla xyz", max_chars=5000)
+
+    assert "Plan du cours" in context and "Introduction générale." in context and "Synthèse du cours." in context
+    assert "fixe la tension" not in context
+
+
+def test_select_respects_the_character_budget():
+    from app.services.lesson_context import select_lesson_context
+
+    big = {**SELECT_COURSE, "sections": [
+        {**SELECT_COURSE["sections"][0], "subsections": [
+            {"title": "Rapport", "blocks": [{"type": "text", "text": "transformateur " * 2000}]}]},
+        *SELECT_COURSE["sections"][1:],
+    ]}
+
+    assert len(select_lesson_context(big, "transformateur", max_chars=1500)) <= 1500 + 60

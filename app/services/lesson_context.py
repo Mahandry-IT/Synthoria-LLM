@@ -6,6 +6,10 @@ sur les champs hérités (`quoi`/`pourquoi`/`comment`, `worked_example`, `tables
 sessions sans sous-sections. Ne lève jamais : un champ absent ou mal typé est simplement ignoré.
 """
 
+import math
+import re
+import unicodedata
+from collections import Counter
 from typing import Any
 
 TRUNCATION_MARKER = "\n[… leçon tronquée …]"
@@ -147,6 +151,107 @@ def _answer_text(answer: dict) -> list[str]:
     parts.extend(_legacy_section_body(answer))
     parts.extend(f"- {_s(p)}" for p in _items(answer.get("key_points")) if _s(p))
     return parts
+
+
+_WORD_RE = re.compile(r"[a-z0-9]{3,}")
+_STOPWORDS = frozenset(
+    "les des une aux que qui quoi est sont pour par sur dans avec sans cette ces mais plus comme "
+    "donc alors aussi tout tous elle elles ils nous vous leur leurs son ses mes tes the and "
+    "est-ce quel quelle quels quelles peux peut faire fait etre avoir cela celui celle expliquer "
+    "explique peut-tu moi pourquoi comment exemple".split()
+)
+_PREVIOUS_QUESTION_WEIGHT = 0.5
+_TITLE_WEIGHT = 3
+
+
+def _tokens(text: str) -> list[str]:
+    """Mots significatifs (sans accents, minuscules, sans mots vides) pour le classement lexical."""
+    folded = unicodedata.normalize("NFKD", text.lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return [w for w in _WORD_RE.findall(folded) if w not in _STOPWORDS]
+
+
+def _section_title_text(section: dict) -> str:
+    titles = [_s(section.get("title"))] + [_s(_dict(sub).get("title")) for sub in _items(section.get("subsections"))]
+    return " ".join(t for t in titles if t)
+
+
+def rank_sections(sections: list[dict], queries: list[tuple[str, float]]) -> list[tuple[int, float]]:
+    """Classe les sections (indices, score décroissant, score > 0) selon des requêtes pondérées.
+
+    Score lexical local de type TF-IDF : aucun appel Gemini, donc aucun token consommé. Les mots du
+    titre de la section et de ses sous-sections comptent `_TITLE_WEIGHT` fois plus.
+    """
+    docs: list[Counter] = []
+    for section in sections:
+        counts = Counter(_tokens(_section_text(0, section)))
+        for token in _tokens(_section_title_text(section)):
+            counts[token] += _TITLE_WEIGHT
+        docs.append(counts)
+    n = len(docs)
+    scores = [0.0] * n
+    for query, weight in queries:
+        for token in set(_tokens(query)):
+            df = sum(1 for d in docs if token in d)
+            if not df:
+                continue
+            idf = math.log(1 + n / df)
+            for i, d in enumerate(docs):
+                if token in d:
+                    scores[i] += weight * idf * (1 + math.log(d[token]))
+    return sorted(((i, s) for i, s in enumerate(scores) if s > 0), key=lambda t: -t[1])
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - len(TRUNCATION_MARKER))].rstrip() + TRUNCATION_MARKER
+
+
+def select_lesson_context(
+    gemini_response: dict,
+    message: str,
+    *,
+    previous_question: str = "",
+    section_id: str | None = None,
+    max_chars: int,
+    top_sections: int = 2,
+) -> str:
+    """Contexte réduit : plan du cours + seulement les sections visées par la question.
+
+    Sections retenues : `section_id` (si connu), puis les mieux classées pour `message` (et, avec un
+    poids moindre, la question précédente pour les relances courtes). Sans correspondance : plan +
+    introduction/synthèse tronquées. Sans sections (cours « réponse directe ») : cours borné.
+    """
+    course = _dict(gemini_response)
+    sections = [_dict(s) for s in _items(course.get("sections"))]
+    if not sections:
+        return build_lesson_context(course, max_chars)
+
+    title = _s(_dict(course.get("meta")).get("title"))
+    outline = "\n".join(f"{i}. {_s(s.get('title'))}" for i, s in enumerate(sections, start=1))
+    header = (f"# {title}\n" if title else "") + f"Plan du cours :\n{outline}"
+
+    chosen: list[int] = []
+    if section_id:
+        chosen += [i for i, s in enumerate(sections) if str(s.get("id")) == str(section_id)][:1]
+    queries = [(message, 1.0)] + ([(previous_question, _PREVIOUS_QUESTION_WEIGHT)] if previous_question else [])
+    for i, _score in rank_sections(sections, queries):
+        if len(chosen) >= max(1, top_sections):
+            break
+        if i not in chosen:
+            chosen.append(i)
+
+    budget = max(0, max_chars - len(header))
+    if not chosen:
+        extras = [_s(v) for v in _dict(course.get("introduction")).values()]
+        if _s(course.get("summary")):
+            extras.append(f"Synthèse : {_s(course.get('summary'))}")
+        return header + "\n\n" + _truncate("\n\n".join(e for e in extras if e), budget)
+
+    share = budget // len(chosen)
+    parts = [_truncate(_section_text(i + 1, sections[i]), share) for i in sorted(chosen)]
+    return header + "\n\n" + "\n\n".join(parts)
 
 
 def build_lesson_context(gemini_response: dict, max_chars: int) -> str:

@@ -834,6 +834,9 @@ class PodcastSummaryList(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="Question de l'apprenant sur le cours (≤ 1000 caractères).")
+    section_id: str | None = Field(
+        None, max_length=64, description="Section en cours de lecture (facultatif) : prioritaire dans le contexte."
+    )
 
     @field_validator("message")
     @classmethod
