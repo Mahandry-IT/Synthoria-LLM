@@ -164,11 +164,16 @@ _PREVIOUS_QUESTION_WEIGHT = 0.5
 _TITLE_WEIGHT = 3
 
 
+def _stem(word: str) -> str:
+    return word[:-1] if len(word) > 4 and word[-1] in "sx" else word
+
+
 def _tokens(text: str) -> list[str]:
     """Mots significatifs (sans accents, minuscules, sans mots vides) pour le classement lexical."""
     folded = unicodedata.normalize("NFKD", text.lower())
     folded = "".join(c for c in folded if not unicodedata.combining(c))
-    return [w for w in _WORD_RE.findall(folded) if w not in _STOPWORDS]
+    # Racinisation minimale : « diodes » et « diode » (pluriels en s/x) doivent se rejoindre
+    return [_stem(w) for w in _WORD_RE.findall(folded) if w not in _STOPWORDS]
 
 
 def _section_title_text(section: dict) -> str:
