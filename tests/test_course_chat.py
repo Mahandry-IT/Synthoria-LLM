@@ -105,10 +105,38 @@ async def test_answer_question_sends_only_relevant_sections_and_asks_for_web_che
     }
     gemini = AsyncMock()
     gemini.chat.return_value = ("Réponse.", [])
-    settings = Settings(gemini_api_key="k", chat_context_max_chars=5000, chat_context_top_sections=1)
+    settings = Settings(
+        gemini_api_key="k", chat_context_max_chars=5000, chat_context_top_sections=1, gemini_use_search_grounding=True
+    )
 
     await answer_question(course, [], "Comment marche une diode ?", gemini, settings, section_id=None)
 
     system = gemini.chat.await_args.args[0]
     assert "Courant dans un sens." in system and "Spires et tension." not in system
     assert "EXTRAIT" in system and "recherche web" in system
+
+
+@pytest.mark.asyncio
+async def test_chat_is_not_grounded_when_search_grounding_is_disabled():
+    gemini = AsyncMock()
+    gemini.chat.return_value = ("Réponse.", [])
+    settings = Settings(gemini_api_key="k", gemini_use_search_grounding=False)
+
+    await answer_question(COURSE, [], "Question ?", gemini, settings)
+
+    assert gemini.chat.await_count == 1 and gemini.chat.await_args.kwargs["grounded"] is False
+    assert "PAS accès au web" in gemini.chat.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_chat_retries_without_web_search_when_grounding_quota_is_exceeded():
+    from app.core.exceptions import GeminiQuotaExceededError
+
+    gemini = AsyncMock()
+    gemini.chat.side_effect = [GeminiQuotaExceededError("429"), ("Réponse.", [])]
+    settings = Settings(gemini_api_key="k", gemini_use_search_grounding=True)
+
+    reply = await answer_question(COURSE, [], "Question ?", gemini, settings)
+
+    assert [c.kwargs["grounded"] for c in gemini.chat.await_args_list] == [True, False]
+    assert reply.content == "Réponse."
