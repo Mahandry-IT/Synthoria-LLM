@@ -140,3 +140,11 @@ async def test_chat_retries_without_web_search_when_grounding_quota_is_exceeded(
 
     assert [c.kwargs["grounded"] for c in gemini.chat.await_args_list] == [True, False]
     assert reply.content == "Réponse."
+
+
+def test_system_rules_ask_for_markdown_and_dollar_latex():
+    from app.services.course_chat import system_rules
+
+    for web in (True, False):
+        rules = system_rules(web)
+        assert "Markdown" in rules and "$...$" in rules and "$$...$$" in rules
