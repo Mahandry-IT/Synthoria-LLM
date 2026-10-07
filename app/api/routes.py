@@ -6,7 +6,9 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.schemas import (
@@ -29,6 +31,8 @@ from app.api.schemas import (
     CourseSection,
     DocumentQueryRequest,
     DocumentQueryResponse,
+    FileFolderResult,
+    FileInfo,
     FileListResponse,
     FolderMoveResult,
     FolderSummary,
@@ -38,6 +42,7 @@ from app.api.schemas import (
     MoreSectionsRequest,
     MoreSectionsResponse,
     MoveCourseFolderRequest,
+    MoveFileFolderRequest,
     PageParams,
     PaginatedResponse,
     PaginationMeta,
@@ -69,6 +74,7 @@ from app.repositories import (
     course_section_note_repository,
     course_session_repository,
     course_video_note_repository,
+    ingested_file_repository,
 )
 from app.schemas.course_generation import CoursePlanSchema, SectionType
 from app.services.challenge_evaluator import evaluate_challenge
@@ -220,13 +226,51 @@ async def _ingest_single_pdf(
         )
 
 
+def _ingest_folder_target(
+    folder: str | None = Form(None, description="Dossier cible (défaut : dossier par défaut)"),
+    subfolder: str | None = Form(None, description="Sous-dossier cible (défaut : sous-dossier par défaut)"),
+) -> MoveFileFolderRequest | None:
+    """Dossier cible optionnel de l'ingestion, validé comme un déplacement (422 sinon).
+
+    None si aucun des deux champs n'est fourni : les fichiers restent dans le dossier par défaut
+    sans qu'aucune ligne de rangement ne soit créée.
+    """
+    if folder is None and subfolder is None:
+        return None
+    try:
+        return MoveFileFolderRequest(folder=folder if folder is not None else DEFAULT_COURSE_FOLDER, subfolder=subfolder)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors(include_url=False)) from exc
+
+
+async def _place_ingested_files(
+    request: Request, filenames: list[str], target: MoveFileFolderRequest
+) -> None:
+    """Range les fichiers fraîchement ingérés dans le dossier cible.
+
+    Best-effort : les fichiers sont déjà dans le vector store, un échec ici ne doit pas faire
+    croire à un échec d'ingestion (le client réessaierait et obtiendrait « File already uploaded »).
+    Les fichiers restent alors dans le dossier par défaut et peuvent être déplacés ensuite.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    try:
+        async with session_factory() as db:
+            await ingested_file_repository.move_many(
+                db, filenames, folder=target.folder, subfolder=target.subfolder,
+            )
+    except Exception:
+        logger.exception("pdf_ingest_folder_placement_failed", extra={"files": len(filenames)})
+
+
 @router.post("/pdf/ingest")
 async def ingest_pdf(
     request: Request,
     files: list[UploadFile] = File(...),
+    target: MoveFileFolderRequest | None = Depends(_ingest_folder_target),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Ingestion de un ou plusieurs fichiers PDF dans le vector store.
+    """Ingestion de un ou plusieurs fichiers PDF dans le vector store, rangés directement dans le
+    dossier/sous-dossier `folder`/`subfolder` s'ils sont fournis (multipart, optionnels).
 
     Retourne toujours PDFIngestMultiResponse (compatible 1 ou N fichiers).
     """
@@ -239,6 +283,10 @@ async def ingest_pdf(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Aucun fichier PDF fourni",
         )
+
+    ingested = [r.filename for r in results if r.status == "ok"]
+    if target is not None and ingested:
+        await _place_ingested_files(request, ingested, target)
 
     # Rétrocompatibilité : si un seul fichier envoyé et succès, format simple
     if len(files) == 1 and results[0].status == "ok":
@@ -276,7 +324,8 @@ async def list_files(
     request: Request,
     pagination: PageParams = Depends(),
 ) -> FileListResponse:
-    """Liste les fichiers PDF stockés dans le vector store (paginé)."""
+    """Liste les fichiers PDF stockés dans le vector store (paginé), avec leur dossier/sous-dossier
+    (dossier par défaut pour un fichier jamais déplacé)."""
     vector_store = request.app.state.vector_store
     all_files = vector_store.list_files()
 
@@ -286,8 +335,23 @@ async def list_files(
     offset = (page - 1) * pagination.limit
     paginated = all_files[offset : offset + pagination.limit]
 
+    placements: dict[str, tuple[str, str]] = {}
+    if paginated:
+        session_factory: async_sessionmaker = request.app.state.db_session_factory
+        async with session_factory() as db:
+            placements = await ingested_file_repository.get_placements(db, (f["filename"] for f in paginated))
+    default_placement = (DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER)
+
     return FileListResponse(
-        data=paginated,
+        data=[
+            FileInfo(
+                id=f["id"],
+                filename=f["filename"],
+                folder=placements.get(f["filename"], default_placement)[0],
+                subfolder=placements.get(f["filename"], default_placement)[1],
+            )
+            for f in paginated
+        ],
         meta=PaginationMeta(
             page=page,
             limit=pagination.limit,
@@ -299,15 +363,61 @@ async def list_files(
 
 @router.delete("/pdf/files/{filename}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_file(filename: str, request: Request) -> None:
-    """Supprime un fichier PDF et tous ses chunks du vector store. 404 si inconnu.
+    """Supprime un fichier PDF, tous ses chunks du vector store et sa ligne de rangement. 404 si
+    inconnu.
 
-    Ne vérifie pas si ce fichier est encore référencé par un plan de cours en attente —
-    voir `NumpyVectorStore.remove_file`.
+    La ligne SQL est supprimée d'abord : si la base échoue, rien n'est perdu et l'appel peut être
+    rejoué ; l'ordre inverse laisserait une ligne orpheline qui rangerait un futur fichier de même
+    nom dans l'ancien dossier. Ne vérifie pas si ce fichier est encore référencé par un plan de
+    cours en attente — voir `NumpyVectorStore.remove_file`.
     """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        await ingested_file_repository.delete(db, filename)
     vector_store = request.app.state.vector_store
     removed = vector_store.remove_file(filename)
     if not removed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fichier introuvable")
+
+
+@router.put("/pdf/files/{filename}/folder", response_model=FileFolderResult)
+async def move_file_folder(
+    filename: str, body: MoveFileFolderRequest, request: Request,
+) -> FileFolderResult:
+    """Déplace un fichier ingéré vers un dossier/sous-dossier, créés implicitement (casse
+    existante réutilisée). Idempotent. 404 si le fichier est inconnu du vector store."""
+    if not request.app.state.vector_store.has_file(filename):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fichier introuvable")
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        folder, subfolder = await ingested_file_repository.move(
+            db, filename, folder=body.folder, subfolder=body.subfolder,
+        )
+    return FileFolderResult(filename=filename, folder=folder, subfolder=subfolder)
+
+
+@router.delete("/pdf/folders/{folder_name}", response_model=FolderMoveResult)
+async def delete_file_folder(folder_name: str, request: Request) -> FolderMoveResult:
+    """Supprime un dossier de fichiers : ses fichiers rejoignent le dossier par défaut (aucun
+    fichier n'est supprimé). 400 si c'est le dossier par défaut."""
+    _reject_default_folder(folder_name)
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        moved = await ingested_file_repository.delete_folder(db, folder_name)
+    return FolderMoveResult(moved=moved)
+
+
+@router.delete("/pdf/folders/{folder_name}/subfolders/{subfolder_name}", response_model=FolderMoveResult)
+async def delete_file_subfolder(
+    folder_name: str, subfolder_name: str, request: Request,
+) -> FolderMoveResult:
+    """Supprime un sous-dossier de fichiers : ses fichiers rejoignent le sous-dossier par défaut
+    du même dossier. 400 si c'est le sous-dossier par défaut."""
+    _reject_default_subfolder(subfolder_name)
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        moved = await ingested_file_repository.delete_subfolder(db, folder_name, subfolder_name)
+    return FolderMoveResult(moved=moved)
 
 
 # Repli si aucun `retry_at` exploitable (quota minute, classification "unknown" — voir
@@ -878,11 +988,7 @@ async def delete_course_folder(folder_name: str, request: Request) -> FolderMove
     """Supprime un dossier : ses cours (et ceux de ses sous-dossiers) rejoignent le dossier par
     défaut (aucun cours n'est jamais supprimé par cette opération). 400 si `folder_name` est le
     dossier par défaut lui-même — il n'est jamais supprimable, c'est la racine de repli."""
-    if folder_name.strip().casefold() == DEFAULT_COURSE_FOLDER.casefold():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Le dossier par défaut « {DEFAULT_COURSE_FOLDER} » ne peut pas être supprimé",
-        )
+    _reject_default_folder(folder_name)
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         moved = await course_session_repository.delete_folder(db, folder_name)
@@ -898,15 +1004,29 @@ async def delete_course_subfolder(
     """Supprime un sous-dossier : ses cours rejoignent le sous-dossier par défaut, dans le même
     dossier (aucun cours n'est jamais supprimé). 400 si `subfolder_name` est le sous-dossier par
     défaut lui-même."""
+    _reject_default_subfolder(subfolder_name)
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        moved = await course_session_repository.delete_subfolder(db, folder_name, subfolder_name)
+    return FolderMoveResult(moved=moved)
+
+
+def _reject_default_folder(folder_name: str) -> None:
+    """400 si `folder_name` désigne le dossier par défaut (racine de repli, jamais supprimable)."""
+    if folder_name.strip().casefold() == DEFAULT_COURSE_FOLDER.casefold():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Le dossier par défaut « {DEFAULT_COURSE_FOLDER} » ne peut pas être supprimé",
+        )
+
+
+def _reject_default_subfolder(subfolder_name: str) -> None:
+    """400 si `subfolder_name` désigne le sous-dossier par défaut."""
     if subfolder_name.strip().casefold() == DEFAULT_COURSE_SUBFOLDER.casefold():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Le sous-dossier par défaut « {DEFAULT_COURSE_SUBFOLDER} » ne peut pas être supprimé",
         )
-    session_factory: async_sessionmaker = request.app.state.db_session_factory
-    async with session_factory() as db:
-        moved = await course_session_repository.delete_subfolder(db, folder_name, subfolder_name)
-    return FolderMoveResult(moved=moved)
 
 
 def _limit_recall(request: Request, settings: Settings = Depends(get_settings)) -> None:
