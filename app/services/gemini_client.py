@@ -413,6 +413,44 @@ class GeminiClient:
         text = getattr(response, "text", "") or ""
         return text, self._extract_web_sources(response)
 
+    async def chat(
+        self,
+        system_instruction: str,
+        history: list[dict],
+        message: str,
+        *,
+        grounded: bool = True,
+    ) -> tuple[str, list[dict]]:
+        """Conversation multi-tour indépendante (chat d'un cours), sans cache de réponses.
+
+        Paramètres:
+            system_instruction: prompt système de la conversation.
+            history: tours précédents, `[{"role": "user"|"model", "text": str}, …]` (ordre chronologique).
+            message: nouveau message utilisateur (déjà balisé par l'appelant).
+            grounded: active l'outil `google_search` (recherche web si la leçon ne suffit pas).
+
+        Retour: `(texte, sources_web)`, même format de sources que `search_grounded`.
+
+        Lève: GeminiUnavailableError, GeminiQuotaExceededError (cascade sur `gemini_chain_search`).
+        """
+        self._ensure_configured()
+        contents = [
+            types.Content(role=turn["role"], parts=[types.Part(text=turn["text"])]) for turn in history
+        ]
+        contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
+        tools = [types.Tool(google_search=types.GoogleSearch())] if grounded else None
+
+        def _run(model: str) -> Any:
+            return self._client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(system_instruction=system_instruction, tools=tools),
+            )
+
+        response = await self._call_with_model_cascade(_run, self._settings.gemini_chain_search, method="chat")
+        text = getattr(response, "text", "") or ""
+        return text, self._extract_web_sources(response)
+
     def _extract_web_sources(self, response: Any) -> list[dict]:
         """Extrait les sources web du grounding_metadata renvoyé par Gemini. Ne bloque jamais."""
         web_sources: list[dict] = []

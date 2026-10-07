@@ -105,6 +105,44 @@ async def test_search_grounded_without_grounding_metadata_returns_empty_sources(
 
 
 @pytest.mark.asyncio
+async def test_chat_sends_multi_turn_contents_with_search_tool():
+    response = SimpleNamespace(
+        text="réponse du tuteur",
+        candidates=[
+            SimpleNamespace(
+                grounding_metadata=SimpleNamespace(
+                    grounding_chunks=[SimpleNamespace(web=SimpleNamespace(title="Doc", uri="https://d.example"))]
+                )
+            )
+        ],
+    )
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    client = GeminiClient(_settings(), client=fake_client)
+    history = [{"role": "user", "text": "q1"}, {"role": "model", "text": "r1"}]
+
+    text, sources = await client.chat("system", history, "q2")
+
+    assert text == "réponse du tuteur"
+    assert sources == [{"type": "web", "label": "Doc", "reference": "https://d.example"}]
+    kwargs = fake_client.models.generate_content.call_args.kwargs
+    assert [(c.role, c.parts[0].text) for c in kwargs["contents"]] == [
+        ("user", "q1"), ("model", "r1"), ("user", "q2"),
+    ]
+    assert kwargs["config"].system_instruction == "system"
+    assert kwargs["config"].tools and kwargs["config"].tools[0].google_search is not None
+
+
+@pytest.mark.asyncio
+async def test_chat_without_grounding_disables_tools():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text="ok", candidates=[]))
+    client = GeminiClient(_settings(), client=fake_client)
+
+    await client.chat("system", [], "q", grounded=False)
+
+    assert fake_client.models.generate_content.call_args.kwargs["config"].tools is None
+
+
+@pytest.mark.asyncio
 async def test_format_structured_parses_json():
     response = SimpleNamespace(text='{"summary": "ok"}')
     fake_client = _fake_genai_client(generate_content_return_value=response)

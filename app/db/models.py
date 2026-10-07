@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import Boolean, Date, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
@@ -186,6 +186,33 @@ class CourseVideoNote(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class CourseChatMessage(Base):
+    """Message du chatbot d'un cours (question de l'apprenant ou réponse du tuteur).
+
+    Table séparée de `gemini_response`, comme les notes : le chat n'altère jamais le contenu
+    généré. Le quota journalier est dérivé de cette table (messages `user` depuis minuit UTC),
+    sans table de compteur dédiée.
+    """
+
+    __tablename__ = "course_chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # user | assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="answered")  # answered | off_topic
+    sources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utc_now, nullable=False)
+
+    __table_args__ = (Index("idx_course_chat_messages_session_created", "session_id", "created_at"),)
 
 
 class MediaAsset(Base):
