@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -8,10 +9,17 @@ from app.api import routes
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     app = FastAPI()
     app.include_router(routes.router)
     app.state.vector_store = MagicMock()
+
+    @asynccontextmanager
+    async def factory():
+        yield object()
+
+    app.state.db_session_factory = factory
+    monkeypatch.setattr(routes.ingested_file_repository, "delete", AsyncMock())
     return TestClient(app)
 
 

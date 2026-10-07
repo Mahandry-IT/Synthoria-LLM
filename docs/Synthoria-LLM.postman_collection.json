@@ -48,6 +48,21 @@
       "key": "chatMessageId",
       "value": "",
       "description": "UUID d'une question du chat (user_message.id) à supprimer"
+    },
+    {
+      "key": "filename",
+      "value": "cours_regression.pdf",
+      "description": "Nom d'un fichier ingéré (champ filename de GET /pdf/files) ; Postman l'encode dans l'URL"
+    },
+    {
+      "key": "fileFolder",
+      "value": "SFI",
+      "description": "Dossier de rangement des fichiers ingérés"
+    },
+    {
+      "key": "fileSubfolder",
+      "value": "2026",
+      "description": "Sous-dossier de rangement des fichiers ingérés"
     }
   ],
   "item": [
@@ -172,6 +187,45 @@
           "response": []
         },
         {
+          "name": "POST /pdf/ingest — Dans un dossier",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pdf/ingest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "ingest"
+              ]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": "/path/to/document.pdf"
+                },
+                {
+                  "key": "folder",
+                  "value": "{{fileFolder}}",
+                  "type": "text"
+                },
+                {
+                  "key": "subfolder",
+                  "value": "{{fileSubfolder}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "description": "Ingère et range directement les fichiers dans folder/subfolder (multipart, optionnels ; dossier créé implicitement, casse existante réutilisée ; subfolder seul = dossier par défaut « Général »). Les doublons ne sont pas déplacés. Codes: 200 succès, 422 nom de dossier invalide (vide après nettoyage ou > 200 caractères)."
+          },
+          "response": []
+        },
+        {
           "name": "POST /pdf/search",
           "request": {
             "method": "POST",
@@ -261,16 +315,118 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/pdf/files",
+              "raw": "{{baseUrl}}/pdf/files?page=1&limit=20",
               "host": [
                 "{{baseUrl}}"
               ],
               "path": [
                 "pdf",
                 "files"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
               ]
             },
-            "description": "Liste les fichiers PDF stockés. Retourne FileListResponse { status, files: [{ id, filename }] }."
+            "description": "Liste paginée des fichiers PDF stockés : { status, data: [{ id, filename, folder, subfolder }], meta }. Un fichier jamais déplacé est dans le dossier par défaut « Général » / « Non classé ». page ≥ 1, limit 1-100 (défaut 20)."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /pdf/files/{filename}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pdf/files/{{filename}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "files",
+                "{{filename}}"
+              ]
+            },
+            "description": "Supprime un fichier, tous ses chunks et sa ligne de rangement. Codes: 204 supprimé, 404 fichier inconnu."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /pdf/files/{filename}/folder",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pdf/files/{{filename}}/folder",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "files",
+                "{{filename}}",
+                "folder"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"folder\": \"{{fileFolder}}\",\n  \"subfolder\": \"{{fileSubfolder}}\"\n}"
+            },
+            "description": "Range un fichier dans un dossier/sous-dossier (créé implicitement, casse existante réutilisée). folder : 1-200 caractères après nettoyage ; subfolder optionnel (absent ou vide = « Non classé »). Idempotent. Retourne { filename, folder, subfolder }. Codes: 200, 404 fichier inconnu, 422 validation."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /pdf/folders/{folder}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pdf/folders/{{fileFolder}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "folders",
+                "{{fileFolder}}"
+              ]
+            },
+            "description": "Supprime un dossier de fichiers : ses fichiers rejoignent « Général » / « Non classé », aucun fichier n'est supprimé. Retourne { moved }. Codes: 200, 400 dossier par défaut."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /pdf/folders/{folder}/subfolders/{subfolder}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/pdf/folders/{{fileFolder}}/subfolders/{{fileSubfolder}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pdf",
+                "folders",
+                "{{fileFolder}}",
+                "subfolders",
+                "{{fileSubfolder}}"
+              ]
+            },
+            "description": "Supprime un sous-dossier de fichiers : ses fichiers rejoignent « Non classé » du même dossier. Retourne { moved }. Codes: 200, 400 sous-dossier par défaut."
           },
           "response": []
         }
