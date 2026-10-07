@@ -11,6 +11,7 @@ from app.db.base import Base
 # séparée, aucun dossier physique) : ces valeurs par défaut jouent le rôle de « racine » toujours
 # existante, jamais supprimable — supprimer un dossier/sous-dossier n'efface aucun cours, ça y
 # replace juste ses cours (voir course_session_repository.delete_folder/delete_subfolder).
+# Les fichiers ingérés (`IngestedFile`) partagent ces mêmes valeurs par défaut.
 DEFAULT_COURSE_FOLDER = "Général"
 DEFAULT_COURSE_SUBFOLDER = "Non classé"
 
@@ -310,3 +311,23 @@ class GeminiResponseCache(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
 
     __table_args__ = (Index("idx_gemini_response_cache_created_at", created_at),)
+
+
+class IngestedFile(Base):
+    """Rangement (dossier/sous-dossier) d'un fichier ingéré dans le vector store.
+
+    Le vector store JSON ne connaît que `filename` : le classement vit ici pour qu'un déplacement
+    ne réécrive jamais le store. Un fichier sans ligne est rangé dans le dossier par défaut (mêmes
+    valeurs que les cours) — aucune ligne n'est donc créée tant qu'on ne le déplace pas.
+    """
+
+    __tablename__ = "ingested_files"
+
+    filename: Mapped[str] = mapped_column(String(512), primary_key=True)
+    folder: Mapped[str] = mapped_column(String(200), nullable=False, default=DEFAULT_COURSE_FOLDER)
+    subfolder: Mapped[str] = mapped_column(String(200), nullable=False, default=DEFAULT_COURSE_SUBFOLDER)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (Index("idx_ingested_files_folder", "folder", "subfolder"),)
