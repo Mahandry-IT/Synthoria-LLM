@@ -10,6 +10,7 @@ from app.services.course_chat import (
     OFF_TOPIC_MARKER,
     OFF_TOPIC_REPLY,
     answer_question,
+    branch_history,
     build_history,
     build_system_instruction,
     parse_reply,
@@ -148,3 +149,29 @@ def test_system_rules_ask_for_markdown_and_dollar_latex():
     for web in (True, False):
         rules = system_rules(web)
         assert "Markdown" in rules and "$...$" in rules and "$$...$$" in rules
+
+
+def _node(name: str, role: str, parent=None):
+    return SimpleNamespace(id=name, parent_id=parent, role=role, content=name, status="answered")
+
+
+def test_branch_history_follows_only_the_ancestors_of_the_parent():
+    # q1 → a1 → (q2 → a2 | q2bis → a2bis) : q2bis est une version éditée de q2.
+    messages = [
+        _node("q1", "user"), _node("a1", "assistant", "q1"),
+        _node("q2", "user", "a1"), _node("a2", "assistant", "q2"),
+        _node("q2bis", "user", "a1"), _node("a2bis", "assistant", "q2bis"),
+    ]
+
+    assert [m.id for m in branch_history(messages, "a2bis")] == ["q1", "a1", "q2bis", "a2bis"]
+    assert [m.id for m in branch_history(messages, "a1")] == ["q1", "a1"]
+    assert branch_history(messages, None) == []
+
+
+def test_branch_history_stops_at_a_missing_ancestor_and_never_loops():
+    orphan = [_node("q2", "user", "deleted"), _node("a2", "assistant", "q2")]
+    cycle = [_node("a", "assistant", "b"), _node("b", "user", "a")]
+
+    assert [m.id for m in branch_history(orphan, "a2")] == ["q2", "a2"]
+    assert len(branch_history(cycle, "a")) == 2
+    assert branch_history(orphan, "unknown") == []
