@@ -1,12 +1,13 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import asc, desc, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import CourseGenerationResponse
 from app.core.text_sanitize import sanitize_json
 from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER, CourseSession
+from app.repositories import folder_casing
 
 
 async def save(
@@ -89,32 +90,14 @@ async def resolve_folder_casing(
     Casse canonique = celle utilisée par le plus de cours (égalité : la plus ancienne). Retourne la
     valeur fournie telle quelle si aucune variante n'existe déjà (nouveau dossier/sous-dossier).
     """
-    folder_stmt = (
-        select(CourseSession.folder, func.count().label("n"), func.min(CourseSession.created_at).label("first"))
-        .where(func.lower(CourseSession.folder) == folder.lower())
-        .group_by(CourseSession.folder)
-        .order_by(desc("n"), asc("first"))
-        .limit(1)
+    return await folder_casing.resolve_folder_casing(
+        session,
+        folder_column=CourseSession.folder,
+        subfolder_column=CourseSession.subfolder,
+        age_column=CourseSession.created_at,
+        folder=folder,
+        subfolder=subfolder,
     )
-    folder_row = (await session.execute(folder_stmt)).first()
-    canonical_folder = folder_row.folder if folder_row else folder
-
-    if not subfolder:
-        return canonical_folder, subfolder
-
-    subfolder_stmt = (
-        select(CourseSession.subfolder, func.count().label("n"), func.min(CourseSession.created_at).label("first"))
-        .where(
-            func.lower(CourseSession.folder) == canonical_folder.lower(),
-            func.lower(CourseSession.subfolder) == subfolder.lower(),
-        )
-        .group_by(CourseSession.subfolder)
-        .order_by(desc("n"), asc("first"))
-        .limit(1)
-    )
-    subfolder_row = (await session.execute(subfolder_stmt)).first()
-    canonical_subfolder = subfolder_row.subfolder if subfolder_row else subfolder
-    return canonical_folder, canonical_subfolder
 
 
 async def move_to_folder(
