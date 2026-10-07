@@ -6,6 +6,7 @@ from fastapi import Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import get_settings
+from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER
 from app.services.course_depth import LEGACY_DEPTH, CourseDepth
 
 T = TypeVar("T")
@@ -104,6 +105,8 @@ class FileInfo(BaseModel):
     """Informations sur un fichier stocké dans le vector store."""
     id: int = Field(..., description="Identifiant séquentiel du fichier (1, 2, 3...)")
     filename: str = Field(..., description="Nom du fichier PDF")
+    folder: str = Field(DEFAULT_COURSE_FOLDER, description="Dossier de rangement")
+    subfolder: str = Field(DEFAULT_COURSE_SUBFOLDER, description="Sous-dossier de rangement")
 
 
 class FileListResponse(BaseModel):
@@ -763,8 +766,11 @@ class FolderSummary(BaseModel):
     subfolders: list[SubfolderSummary]
 
 
-class MoveCourseFolderRequest(BaseModel):
-    """`subfolder` omis ou vide = sous-dossier par défaut du dossier cible."""
+class FolderTarget(BaseModel):
+    """Dossier/sous-dossier cible d'un déplacement (cours ou fichier ingéré).
+
+    `subfolder` omis ou vide = sous-dossier par défaut du dossier cible.
+    """
     folder: str = Field(..., min_length=1, max_length=200)
     subfolder: str | None = Field(None, max_length=200)
 
@@ -783,9 +789,27 @@ class MoveCourseFolderRequest(BaseModel):
         return v or None
 
 
+class MoveCourseFolderRequest(FolderTarget):
+    """Body de PUT /courses/history/{session_id}/folder."""
+
+
 class FolderMoveResult(BaseModel):
-    """Nombre de cours déplacés vers le dossier/sous-dossier par défaut après une suppression."""
+    """Nombre d'éléments (cours ou fichiers) reclassés au dossier/sous-dossier par défaut après une
+    suppression."""
     moved: int
+
+
+# ─── Dossiers de fichiers ingérés (même rangement virtuel que les cours) ─────────
+
+
+class MoveFileFolderRequest(FolderTarget):
+    """Body de PUT /pdf/files/{filename}/folder."""
+
+
+class FileFolderResult(BaseModel):
+    filename: str
+    folder: str
+    subfolder: str
 
 # ─── Podcast ────────────────────────────────────────────────
 
