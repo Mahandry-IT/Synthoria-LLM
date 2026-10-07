@@ -3,15 +3,17 @@
 Conversation Gemini propre au chat (indépendante de la génération du cours) : seuls le plan et les
 sections visées par la question (sélection lexicale locale, sans token) sont injectés dans le prompt
 système comme **donnée** (`<lesson>`), chaque message de l'apprenant aussi
-(`<learner_message>`), balises neutralisées pour empêcher d'en sortir. Seuls les derniers tours
-utiles sont renvoyés (`chat_history_turns`). Un hors-sujet est signalé par le modèle via un
+(`<learner_message>`), balises neutralisées pour empêcher d'en sortir. L'historique est la branche
+suivie dans l'arbre des versions (`branch_history`), dont seuls les derniers tours utiles sont
+renvoyés (`chat_history_turns`). Un hors-sujet est signalé par le modèle via un
 marqueur en tête de réponse ; le serveur le remplace par un refus fixe.
 """
 
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
+from uuid import UUID
 
 from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiQuotaExceededError
@@ -62,6 +64,30 @@ class ChatHistoryMessage(Protocol):
     role: str
     content: str
     status: str
+
+
+class ChatTreeMessage(ChatHistoryMessage, Protocol):
+    id: UUID
+    parent_id: UUID | None
+
+
+TreeMessage = TypeVar("TreeMessage", bound=ChatTreeMessage)
+
+
+def branch_history(messages: list[TreeMessage], parent_id: UUID | None) -> list[TreeMessage]:
+    """Chemin racine → `parent_id` dans l'arbre des versions, en ordre chronologique.
+
+    Seule la branche suivie fait le contexte de la question : les autres versions et leurs suites
+    sont écartées. Un ancêtre absent de `messages` (supprimé) coupe le chemin.
+    """
+    by_id = {m.id: m for m in messages}
+    path: list[TreeMessage] = []
+    current = by_id.get(parent_id) if parent_id is not None else None
+    while current is not None and len(path) < len(by_id):  # borne : aucun cycle ne peut boucler
+        path.append(current)
+        current = by_id.get(current.parent_id) if current.parent_id is not None else None
+    path.reverse()
+    return path
 
 
 @dataclass(frozen=True)

@@ -18,7 +18,7 @@ from app.api import routes
 from app.api.schemas import ApiPlannedSection, CourseMeta
 from app.core.config import Settings
 from app.db.models import CoursePlan
-from app.db.schema_sync import ADDED_COLUMNS, sync_added_columns
+from app.db.schema_sync import ADDED_COLUMNS, DATA_BACKFILLS, sync_added_columns
 from app.repositories import course_plan_repository
 from app.schemas.course_generation import CourseGenerationSchema, CoursePlanSchema, SectionsBatchSchema
 from app.services.course_plan_generator import generate_course_from_validated_plan, generate_course_plan
@@ -146,7 +146,7 @@ def test_migration_015_adds_depth_idempotently(monkeypatch):
 async def test_startup_schema_sync_executes_every_added_column():
     conn = AsyncMock()
     await sync_added_columns(conn)
-    assert conn.execute.await_count == len(ADDED_COLUMNS)
+    assert conn.execute.await_count == len(ADDED_COLUMNS) + len(DATA_BACKFILLS)
 
 
 # ─── Services ────────────────────────────────────────────────────────────────

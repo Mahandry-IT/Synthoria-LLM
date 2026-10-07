@@ -211,8 +211,18 @@ class CourseChatMessage(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="answered")  # answered | off_topic
     sources: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utc_now, nullable=False)
+    # Arbre des versions : parent d'une question = réponse précédente (NULL = racine), parent d'une
+    # réponse = sa question. Des questions de même parent sont des versions l'une de l'autre.
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_chat_messages.id", ondelete="CASCADE"), nullable=True
+    )
+    # Suppression logique : le message reste compté dans le quota du jour.
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
-    __table_args__ = (Index("idx_course_chat_messages_session_created", "session_id", "created_at"),)
+    __table_args__ = (
+        Index("idx_course_chat_messages_session_created", "session_id", "created_at"),
+        Index("idx_course_chat_messages_parent", "parent_id"),
+    )
 
 
 class MediaAsset(Base):
