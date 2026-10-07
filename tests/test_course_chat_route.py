@@ -252,7 +252,7 @@ def test_invalid_parent_is_404_without_calling_gemini(env, target):
         "deleted": first["assistant_message"]["id"],
     }[target]
     if target == "deleted":
-        assert env.client.delete(f"{URL}/messages/{first['user_message']['id']}").status_code == 204
+        assert env.client.delete(f"{URL}/messages/{first['user_message']['id']}").status_code == 200
 
     res = env.client.post(URL, json={"message": "q2", "parent_id": parent})
 
@@ -285,7 +285,7 @@ def test_delete_message_removes_its_answer_and_descendants_but_keeps_siblings_an
 
     res = env.client.delete(f"{URL}/messages/{original['user_message']['id']}")
 
-    assert res.status_code == 204 and res.content == b""
+    assert res.status_code == 200 and res.json() == {"status": "deleted"}
     body = env.client.get(URL).json()
     assert [m["content"] for m in body["messages"] if m["role"] == "user"] == ["q1", "q2 éditée"]
     assert len(body["messages"]) == 4
@@ -325,13 +325,13 @@ def test_delete_whole_chat_hides_history_keeps_quota_and_restarts_at_root(env):
     _ask(env, "q1")
     _ask(env, "q2")
 
-    assert env.client.delete(URL).status_code == 204
+    assert env.client.delete(URL).status_code == 200
     body = env.client.get(URL).json()
     assert body["messages"] == [] and body["quota"]["used"] == 2
 
     restarted = _ask(env, "q3")
     assert restarted["user_message"]["parent_id"] is None
-    assert env.client.delete(URL).status_code == 204  # idempotent
+    assert env.client.delete(URL).status_code == 200  # idempotent
 
 
 def test_quota_counts_deleted_questions(env):

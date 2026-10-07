@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.routes import _gemini_http_errors, get_gemini_client
@@ -89,6 +89,9 @@ def _resolve_parent_id(body: ChatRequest, messages: list[CourseChatMessage]) -> 
     if parent is None or parent.role != "assistant":
         raise _parent_not_found()
     return parent.id
+
+# Corps des réponses de suppression (voir delete_course_chat_message).
+_DELETED = {"status": "deleted"}
 
 
 @router.get("/courses/{session_id}/chat", response_model=ChatHistoryResponse)
@@ -178,8 +181,8 @@ async def post_course_chat(
     )
 
 
-@router.delete("/courses/{session_id}/chat/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_course_chat_message(session_id: UUID, message_id: UUID, request: Request) -> Response:
+@router.delete("/courses/{session_id}/chat/messages/{message_id}")
+async def delete_course_chat_message(session_id: UUID, message_id: UUID, request: Request) -> dict[str, str]:
     """Supprime (logiquement) une question, sa réponse et toute leur descendance.
 
     404 si la session n'existe pas ou si le message n'est pas une question active de ce cours.
@@ -192,14 +195,16 @@ async def delete_course_chat_message(session_id: UUID, message_id: UUID, request
         if message is None or message.role != "user":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message introuvable")
         await course_chat_repository.soft_delete_branch(db, session_id, message_id, _utc_now())
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # 200 + corps JSON plutôt que 204 vide : un corps vide sans Content-Type est lu comme du XML
+    # par Firefox via XHR (« Erreur d'analyse XML » en console).
+    return _DELETED
 
 
-@router.delete("/courses/{session_id}/chat", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_course_chat(session_id: UUID, request: Request) -> Response:
+@router.delete("/courses/{session_id}/chat")
+async def delete_course_chat(session_id: UUID, request: Request) -> dict[str, str]:
     """Supprime (logiquement) tout le chat du cours. 404 si la session n'existe pas. Ne rend pas de quota."""
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         await _require_session(db, session_id)
         await course_chat_repository.soft_delete_all(db, session_id, _utc_now())
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return _DELETED

@@ -744,7 +744,7 @@
                 "{{chatMessageId}}"
               ]
             },
-            "description": "Supprime (logiquement) une question, sa réponse et toute leur descendance ; les autres versions sont conservées. Ne rend pas de quota. Codes : 204 supprimé, 404 session inconnue ou message qui n'est pas une question active du cours."
+            "description": "Supprime (logiquement) une question, sa réponse et toute leur descendance ; les autres versions sont conservées. Ne rend pas de quota. Codes : 200 supprimé ({status: deleted}), 404 session inconnue ou message qui n'est pas une question active du cours."
           }
         },
         {
@@ -763,7 +763,7 @@
                 "chat"
               ]
             },
-            "description": "Supprime (logiquement) tout le chat du cours ; la prochaine question repart d'une racine. Ne rend pas de quota. Codes : 204 supprimé, 404 session inconnue."
+            "description": "Supprime (logiquement) tout le chat du cours ; la prochaine question repart d'une racine. Ne rend pas de quota. Codes : 200 supprimé ({status: deleted}), 404 session inconnue."
           }
         },
         {
