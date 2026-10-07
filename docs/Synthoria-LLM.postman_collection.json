@@ -38,6 +38,16 @@
       "key": "assetId",
       "value": "",
       "description": "UUID d'une image ré-hébergée (champ image.asset_id d'un bloc IMAGE résolu)"
+    },
+    {
+      "key": "chatParentId",
+      "value": "",
+      "description": "UUID d'une réponse du tuteur (assistant_message.id) après laquelle poser la question, ou parent_id d'une question à éditer"
+    },
+    {
+      "key": "chatMessageId",
+      "value": "",
+      "description": "UUID d'une question du chat (user_message.id) à supprimer"
     }
   ],
   "item": [
@@ -680,7 +690,7 @@
                 "chat"
               ]
             },
-            "description": "Historique du chatbot du cours, en ordre chronologique croissant, et quota du jour. Réponse : {messages: [{id, role: user | assistant, content, status: answered | off_topic, sources: [{label, reference}], created_at}], quota: {limit, used, remaining, resets_at}} (resets_at = prochain minuit UTC). Codes : 200 ok, 404 session inconnue."
+            "description": "Historique du chatbot du cours (messages non supprimés, toutes versions), en ordre chronologique croissant, et quota du jour. Réponse : {messages: [{id, role: user | assistant, content, status: answered | off_topic, sources: [{label, reference}], created_at, parent_id}], quota: {limit, used, remaining, resets_at}} (resets_at = prochain minuit UTC). Arbre via parent_id : question → réponse précédente (null = racine), réponse → sa question ; les questions de même parent sont des versions l'une de l'autre. Codes : 200 ok, 404 session inconnue."
           }
         },
         {
@@ -704,7 +714,7 @@
                 "chat"
               ]
             },
-            "description": "Pose une question au tuteur du cours (conversation Gemini propre au chat, seuls le plan et les sections pertinentes en contexte (classement lexical local, sans token), complétés par une recherche web ; body : message + section_id facultatif = section en cours de lecture). Hors-sujet : status off_topic et refus fixe. Réponse : {user_message, assistant_message, quota}. Quota : CHAT_DAILY_LIMIT (15) questions par cours et par jour UTC, non consommé si Gemini échoue. Codes : 200 ok, 404 session inconnue, 422 message vide ou > 1000 caractères, 429 quota du jour (detail explicite + Retry-After jusqu'à minuit UTC) ou CHAT_RATE_LIMIT_PER_MINUTE (10/min), 502/503 échec Gemini.",
+            "description": "Pose une question au tuteur du cours (conversation Gemini propre au chat, seuls le plan et les sections pertinentes en contexte (classement lexical local, sans token), complétés par une recherche web si GEMINI_USE_SEARCH_GROUNDING=true ; body : message + section_id facultatif = section en cours de lecture + parent_id facultatif). parent_id = réponse du tuteur après laquelle s'insère la question (null = racine) ; éditer une question = renvoyer le parent_id de la question éditée (nouvelle version sœur) ; absent = suite de la réponse active la plus récente (pour éditer, ajouter \"parent_id\": \"{{chatParentId}}\" au body). Seule la branche racine → parent_id est envoyée au tuteur. Hors-sujet : status off_topic et refus fixe. Réponse : {user_message, assistant_message, quota} (messages avec parent_id). Quota : CHAT_DAILY_LIMIT (15) questions par cours et par jour UTC (éditions et messages supprimés compris), non consommé si Gemini échoue. Codes : 200 ok, 404 session inconnue ou parent_id qui n'est pas une réponse active du cours, 422 message vide ou > 1000 caractères, 429 quota du jour (detail explicite + Retry-After jusqu'à minuit UTC) ou CHAT_RATE_LIMIT_PER_MINUTE (10/min), 502/503 échec Gemini.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"message\": \"Pourquoi la tension double-t-elle quand on double les spires du secondaire ?\",\n  \"section_id\": null\n}",
@@ -714,6 +724,46 @@
                 }
               }
             }
+          }
+        },
+        {
+          "name": "DELETE /courses/{session_id}/chat/messages/{message_id}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/chat/messages/{{chatMessageId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "chat",
+                "messages",
+                "{{chatMessageId}}"
+              ]
+            },
+            "description": "Supprime (logiquement) une question, sa réponse et toute leur descendance ; les autres versions sont conservées. Ne rend pas de quota. Codes : 204 supprimé, 404 session inconnue ou message qui n'est pas une question active du cours."
+          }
+        },
+        {
+          "name": "DELETE /courses/{session_id}/chat",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/chat",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "chat"
+              ]
+            },
+            "description": "Supprime (logiquement) tout le chat du cours ; la prochaine question repart d'une racine. Ne rend pas de quota. Codes : 204 supprimé, 404 session inconnue."
           }
         },
         {
