@@ -837,6 +837,14 @@ class ChatRequest(BaseModel):
     section_id: str | None = Field(
         None, max_length=64, description="Section en cours de lecture (facultatif) : prioritaire dans le contexte."
     )
+    parent_id: UUID | None = Field(
+        None,
+        description=(
+            "Réponse du tuteur après laquelle s'insère la question (null = racine). Éditer une question = "
+            "renvoyer le `parent_id` de la question éditée (nouvelle version). Absent : suite de la "
+            "réponse non supprimée la plus récente."
+        ),
+    )
 
     @field_validator("message")
     @classmethod
@@ -862,6 +870,13 @@ class ChatMessage(BaseModel):
     status: Literal["answered", "off_topic"]
     sources: list[ChatSource] = Field(default_factory=list)
     created_at: datetime
+    parent_id: UUID | None = Field(
+        None,
+        description=(
+            "Question : réponse précédente (null = racine) ; réponse : sa question. Les questions de même "
+            "parent sont des versions l'une de l'autre."
+        ),
+    )
 
 
 class ChatQuota(BaseModel):
@@ -872,7 +887,9 @@ class ChatQuota(BaseModel):
 
 
 class ChatHistoryResponse(BaseModel):
-    messages: list[ChatMessage] = Field(..., description="Ordre chronologique croissant.")
+    messages: list[ChatMessage] = Field(
+        ..., description="Messages non supprimés, toutes versions, en ordre chronologique croissant (arbre via parent_id)."
+    )
     quota: ChatQuota
 
 
