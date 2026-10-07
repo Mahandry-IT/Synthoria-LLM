@@ -50,17 +50,79 @@ async def test_list_for_session_is_chronological():
 
     sql = _sql(session.execute.await_args.args[0])
     assert "ORDER BY course_chat_messages.created_at, course_chat_messages.role DESC" in sql
+    assert "course_chat_messages.deleted_at IS NULL" in sql
 
 
 @pytest.mark.asyncio
-async def test_add_exchange_commits_both_messages_once():
+async def test_count_user_messages_since_includes_deleted_messages():
     session = _session()
+    session.execute.return_value = MagicMock(scalar_one=lambda: 0)
+
+    await repo.count_user_messages_since(session, SID, MIDNIGHT)
+
+    assert "deleted_at" not in _sql(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("for_update", [False, True])
+async def test_get_active_message_filters_session_and_deleted(for_update):
+    session = _session()
+    session.execute.return_value = MagicMock(scalar_one_or_none=lambda: None)
+    mid = uuid.uuid4()
+
+    assert await repo.get_active_message(session, SID, mid, for_update=for_update) is None
+
+    sql = _sql(session.execute.await_args.args[0])
+    assert f"course_chat_messages.id = '{mid}'" in sql
+    assert f"course_chat_messages.session_id = '{SID}'" in sql
+    assert "course_chat_messages.deleted_at IS NULL" in sql
+    assert ("FOR UPDATE" in sql) is for_update
+
+
+@pytest.mark.asyncio
+async def test_add_exchange_inserts_question_before_answer_in_one_commit():
+    session = _session()
+    session.flush = AsyncMock()
+    calls: list[str] = []
+    session.add.side_effect = lambda m: calls.append(f"add:{m.role}")
+    session.flush.side_effect = lambda: calls.append("flush")
     user = CourseChatMessage(session_id=SID, role="user", content="q")
     assistant = CourseChatMessage(session_id=SID, role="assistant", content="r")
 
     assert await repo.add_exchange(session, user, assistant) == (user, assistant)
 
-    session.add_all.assert_called_once_with([user, assistant])
+    assert calls == ["add:user", "flush", "add:assistant"]
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_branch_marks_message_and_descendants():
+    session = _session()
+    session.execute.return_value = MagicMock(rowcount=4)
+    mid = uuid.uuid4()
+
+    assert await repo.soft_delete_branch(session, SID, mid, MIDNIGHT) == 4
+
+    sql = _sql(session.execute.await_args.args[0])
+    assert "WITH RECURSIVE branch" in sql
+    assert f"course_chat_messages.id = '{mid}'" in sql and f"course_chat_messages.session_id = '{SID}'" in sql
+    assert "course_chat_messages.parent_id = branch.id" in sql
+    assert "SET deleted_at='2026-10-04 00:00:00+00:00'" in sql
+    assert "course_chat_messages.deleted_at IS NULL" in sql
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_all_marks_every_active_message_of_the_course():
+    session = _session()
+    session.execute.return_value = MagicMock(rowcount=6)
+
+    assert await repo.soft_delete_all(session, SID, MIDNIGHT) == 6
+
+    sql = _sql(session.execute.await_args.args[0])
+    assert sql.startswith("UPDATE course_chat_messages SET deleted_at=")
+    assert f"course_chat_messages.session_id = '{SID}'" in sql
+    assert "course_chat_messages.deleted_at IS NULL" in sql
     session.commit.assert_awaited_once()
 
 
