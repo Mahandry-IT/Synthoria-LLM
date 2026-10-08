@@ -1,6 +1,6 @@
 services:
   api:
-    build: ../Synthoria LLM
+    build: .
     ports:
       - "8000:8000"
     env_file:
@@ -19,7 +19,7 @@ services:
       # voir README, « Limite de débit Gemini ». Les deux parts n'ont pas besoin de sommer à 1.0.
       GEMINI_RPM_SHARE: ${GEMINI_RPM_SHARE_API:-0.7}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
-      DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-synthoria}:${POSTGRES_PASSWORD:-synthoria}@postgres:5432/${POSTGRES_DB:-synthoria}   # construite depuis POSTGRES_* (mot de passe sans @ : / ? #)
       MEDIA_STORAGE_DIR: /data/media
       MEDIA_WEB_USER_AGENT: ${MEDIA_WEB_USER_AGENT:-}
       OPENVERSE_CLIENT_ID: ${OPENVERSE_CLIENT_ID:-}
@@ -38,23 +38,20 @@ services:
       - chroma-data:/data
       - podcast-data:/data/podcasts   # partagé avec le worker : l'API sert les MP3 produits par lui
       - media-data:/data/media   # images ré-hébergées, servies par GET /media/{id}
-    networks:
-      - default
-      - synthoria-net   # ajouté : accessible depuis Studio
 
   worker:
-    build: ../Synthoria LLM
+    build: .
     command: ["python", "-m", "app.workers.podcast_worker"]
     env_file:
     - .env
     dns:
-      - 8.8.8.8
-      - 8.8.4.4
+      - ${DNS_PRIMARY:-8.8.8.8}
+      - ${DNS_SECONDARY:-1.1.1.1}
     environment:
       PYTHONUNBUFFERED: 1
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_RPM_SHARE: ${GEMINI_RPM_SHARE_WORKER:-0.3}
-      DATABASE_URL: postgresql+asyncpg://synthoria:synthoria@postgres:5432/synthoria
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-synthoria}:${POSTGRES_PASSWORD:-synthoria}@postgres:5432/${POSTGRES_DB:-synthoria}
       PODCAST_TTS_BASE_URL: http://piper:5000
       PODCAST_STORAGE_DIR: /data/podcasts
       MEDIA_STORAGE_DIR: /data/media
@@ -62,6 +59,10 @@ services:
       postgres:
         condition: service_healthy
       piper:
+        condition: service_healthy
+      # Le schéma PostgreSQL est créé au démarrage de l'api (create_all) : sans cette attente, le
+      # worker interroge podcast_jobs avant sa création et journalise des erreurs au premier démarrage.
+      api:
         condition: service_healthy
     healthcheck:
       disable: true   # le worker n'expose pas d'HTTP : ne pas hériter du healthcheck /health de l'image
@@ -71,8 +72,6 @@ services:
     volumes:
       - podcast-data:/data/podcasts
       - media-data:/data/media
-    networks:
-      - default
 
   piper:
     build:
@@ -180,11 +179,6 @@ services:
       - chroma-data:/chroma/chroma
     restart: unless-stopped
     
-networks:
-  default:
-  synthoria-net:
-    external: true
-
 volumes:
   ollama-data:
   chroma-data:

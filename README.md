@@ -1,5 +1,7 @@
 # Synthoria LLM
 
+[![CI / Publish images](https://github.com/Mahandry-IT/Synthoria-LLM/actions/workflows/publish.yml/badge.svg?branch=master)](https://github.com/Mahandry-IT/Synthoria-LLM/actions/workflows/publish.yml)
+
 API FastAPI dédiée à l'ingestion et à la recherche de documents PDF via une pipeline RAG locale : extraction de texte, tableaux, images, chunking, embeddings Ollama et stockage vectoriel local.
 
 ## Stack
@@ -33,12 +35,33 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Le docker compose démarre :
-- l'API FastAPI sur `http://localhost:8000`
-- Ollama sur `http://localhost:11435`
-- PostgreSQL sur `localhost:5432`
-- `piper` (synthèse vocale, réseau interne uniquement) et `worker` (génération des podcasts)
-- un conteneur d'initialisation qui télécharge les modèles nécessaires
+Ce compose sert au **développement local** (images construites depuis le dépôt). Il démarre :
+
+| Service | Rôle | Exposition |
+| --- | --- | --- |
+| `api` | API FastAPI | `http://localhost:8000` |
+| `worker` | génération des podcasts (même image que `api`) | interne |
+| `ollama` / `ollama-init` | LLM + embeddings / téléchargement des modèles | `http://localhost:11435` |
+| `postgres` | sessions, plans, jobs, quotas (PostgreSQL 16) | interne |
+| `chroma` | base vectorielle | `http://localhost:8001` |
+| `piper` / `piper-init` | synthèse vocale / téléchargement des voix | interne |
+
+`DATABASE_URL` est construite par le compose à partir de `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_DB` (défaut `synthoria`, à remplacer hors dev ; mot de passe sans `@ : / ? #`). Le schéma est créé au démarrage de l'API (`create_all` + colonnes ajoutées idempotentes, `app/db/schema_sync.py`) : une nouvelle image n'altère ni ne supprime les tables existantes.
+
+Pour le **déploiement**, utiliser le dépôt parapluie [`Mahandry-IT/Synthoria`](https://github.com/Mahandry-IT/Synthoria) (LLM + Studio, images GHCR, mise à jour automatique) plutôt que ce compose.
+
+### Images publiées
+
+Branches : les branches de travail partent de `develop` et leurs PR ciblent `develop` ; une PR `develop` → `master` livre en production.
+
+Le workflow `.github/workflows/publish.yml` lance `pytest` (avec un PostgreSQL de service) sur chaque push et PR vers `develop` ou `master`, puis, sur un push de `develop` ou `master` uniquement et après tests verts, publie :
+
+| Image | Dockerfile | Utilisée par |
+| --- | --- | --- |
+| `ghcr.io/mahandry-it/synthoria-llm` | `Dockerfile` | `api`, `worker` |
+| `ghcr.io/mahandry-it/synthoria-piper` | `docker/piper/Dockerfile` | `piper`, `piper-init` |
+
+Tags : `latest` (dernier `master` vert, stack de production), `develop` (dernier `develop` vert, stack de test) et `sha-<7>` (commit, pour revenir en arrière). Aucun secret n'est embarqué : les clés restent dans le `.env` de l'hôte.
 
 Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama :
 - `llama3.2`
@@ -190,7 +213,7 @@ MEDIA_STORAGE_DIR=/data/media
 MEDIA_MAX_BYTES=5242880
 ```
 
-> `DATABASE_URL` pointe vers le conteneur PostgreSQL du compose. Pour un dev local sans Docker, ajustez l'URL (ex. `postgresql+asyncpg://user:pass@localhost:5432/synthoria`).
+> Sous Docker, `DATABASE_URL` est ignorée au profit de `POSTGRES_USER/PASSWORD/DB` (voir Démarrage rapide). Pour un dev local sans Docker, ajustez l'URL (ex. `postgresql+asyncpg://user:pass@localhost:5432/synthoria`).
 
 > `GEMINI_API_KEY` est indispensable pour générer des cours — c'est la seule variable réellement obligatoire de l'application. Elle sert aussi, en plus de la génération de cours, à l'extraction optionnelle des images clés d'un PDF : sans clé, cette extraction précise est simplement ignorée (le reste de l'ingestion PDF continue normalement). Les règles de sélection des images sont chargées depuis le fichier `instruction/vision_instructions.md` et Gemini retourne une réponse vide si une image n'est pas informative. Cette extraction (jusqu'à 5 pages, 2 images/page par PDF ingéré) préfiltre les candidats (taille minimale, dédoublonnage par hash) puis les décrit en **un seul appel groupé** via `GeminiClient.describe_images` (`gemini_model_flash_lite`, moins coûteux que `flash`) plutôt qu'un appel par image — passe par le même rate limiter que les autres appels Gemini (`GEMINI_RPM_LIMIT`) ; si l'appel échoue (quota, indisponibilité), les images de ce PDF sont simplement ignorées.
 >
@@ -261,6 +284,8 @@ uvicorn app.main:app --reload
 ```bash
 pytest -v
 ```
+
+Les tests de routes démarrent le lifespan FastAPI et exigent un PostgreSQL joignable via `DATABASE_URL` (fourni par un service PostgreSQL en CI).
 
 ## Structure du projet
 

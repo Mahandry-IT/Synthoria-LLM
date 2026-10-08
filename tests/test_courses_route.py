@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +8,7 @@ from app.core.exceptions import (
     GeminiQuotaExceededError,
     GeminiUnavailableError,
 )
+from app.core.config import get_settings
 from app.main import app
 from app.services.course_plan_generator import MoreSectionsResult
 
@@ -34,6 +35,8 @@ def client():
         app.state.ollama_client = AsyncMock()
         app.state.vector_store = AsyncMock()
         app.state.gemini_client = AsyncMock()
+        # track_calls est un context manager synchrone (pas une coroutine comme sur un AsyncMock).
+        app.state.gemini_client.track_calls = MagicMock()
         yield test_client
 
 
@@ -72,7 +75,7 @@ def test_generate_course_empty_question_uses_default(client, payload):
 
 
 def test_generate_course_question_too_long_rejected(client):
-    res = client.post("/courses/generate", json={"question": "a" * 3000})
+    res = client.post("/courses/generate", json={"question": "a" * (get_settings().course_question_max_length + 1)})
     assert res.status_code == 413
 
 
@@ -260,7 +263,7 @@ def test_create_course_plan_success(plan_client):
 
 
 def test_create_course_plan_question_too_long_rejected(plan_client):
-    res = plan_client.post("/courses/plan", json={"question": "a" * 3000})
+    res = plan_client.post("/courses/plan", json={"question": "a" * (get_settings().course_question_max_length + 1)})
     assert res.status_code == 413
 
 

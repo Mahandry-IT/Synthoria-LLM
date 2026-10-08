@@ -1,4 +1,11 @@
+import os
+
 import pytest
+
+# `app.main.app` est instancié à l'import, donc son RateLimitMiddleware (mémoire, par IP) est
+# partagé par toute la session : avec la limite par défaut (30/min), les tests de routes
+# s'enchaînent assez vite pour recevoir des 429 parasites. Fixé avant tout import de l'app.
+os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "100000")
 
 
 @pytest.fixture(autouse=True)
