@@ -52,14 +52,16 @@ Pour le **déploiement**, utiliser le dépôt parapluie [`Mahandry-IT/Synthoria`
 
 ### Images publiées
 
-Le workflow `.github/workflows/publish.yml` lance `pytest` (avec un PostgreSQL de service) sur chaque push et PR vers `master`, puis, sur `master` uniquement et après tests verts, publie :
+Branches : les branches de travail partent de `develop` et leurs PR ciblent `develop` ; une PR `develop` → `master` livre en production.
+
+Le workflow `.github/workflows/publish.yml` lance `pytest` (avec un PostgreSQL de service) sur chaque push et PR vers `develop` ou `master`, puis, sur un push de `develop` ou `master` uniquement et après tests verts, publie :
 
 | Image | Dockerfile | Utilisée par |
 | --- | --- | --- |
 | `ghcr.io/mahandry-it/synthoria-llm` | `Dockerfile` | `api`, `worker` |
 | `ghcr.io/mahandry-it/synthoria-piper` | `docker/piper/Dockerfile` | `piper`, `piper-init` |
 
-Tags : `latest` (dernier `master` vert) et `sha-<7>` (commit, pour revenir en arrière). Aucun secret n'est embarqué : les clés restent dans le `.env` de l'hôte.
+Tags : `latest` (dernier `master` vert, stack de production), `develop` (dernier `develop` vert, stack de test) et `sha-<7>` (commit, pour revenir en arrière). Aucun secret n'est embarqué : les clés restent dans le `.env` de l'hôte.
 
 Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama :
 - `llama3.2`
