@@ -137,7 +137,12 @@ class FormulaData(BaseModel):
 
 
 class WorkedExample(BaseModel):
-    statement: str = Field(description="Concrete, non-placeholder statement of the example (with real numbers/data).")
+    statement: str = Field(
+        description=(
+            "Concrete, non-placeholder statement of the example (with real numbers/data)."
+            " Programming code in the statement (only when the subject is programming) is never bare: a single short statement goes in single backticks (`int s = 0;`), several statements (a loop, a function) go in a fenced block ```c ... ``` with one statement per line, real line breaks and 4-space indentation."
+        )
+    )
     steps: list[str] = Field(
         description=(
             "Explicit intermediate steps, in order. Never skip to the final result. "
@@ -291,7 +296,12 @@ class QuizQuestion(BaseModel):
 class FadedExample(BaseModel):
     """Exemple à trous : le début de la résolution est donné, l'apprenant complète la fin."""
 
-    statement: str = Field(description="Statement of a NEW example, close to the worked example but with other data.")
+    statement: str = Field(
+        description=(
+            "Statement of a NEW example, close to the worked example but with other data."
+            " Programming code in the statement (only when the subject is programming) is never bare: a single short statement goes in single backticks (`int s = 0;`), several statements (a loop, a function) go in a fenced block ```c ... ``` with one statement per line, real line breaks and 4-space indentation."
+        )
+    )
     given_steps: list[str] = Field(description="First steps of the solution, shown to the learner.")
     hidden_steps: list[str] = Field(description="Remaining steps, revealed one by one after the learner tried.")
     result: str = Field(description="Final result, commented.")
