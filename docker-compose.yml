@@ -60,6 +60,10 @@ services:
         condition: service_healthy
       piper:
         condition: service_healthy
+      # Le schéma PostgreSQL est créé au démarrage de l'api (create_all) : sans cette attente, le
+      # worker interroge podcast_jobs avant sa création et journalise des erreurs au premier démarrage.
+      api:
+        condition: service_healthy
     healthcheck:
       disable: true   # le worker n'expose pas d'HTTP : ne pas hériter du healthcheck /health de l'image
     cpus: 1.5   # borne le CPU de la synthèse vocale pour préserver l'API
