@@ -1,0 +1,19 @@
+# Contexte de build minimal : les Dockerfiles ne copient que app/, instruction/,
+# requirements.txt et docker/piper/. Exclut surtout les secrets et les données locales.
+.git
+.github
+.env
+.env.*
+!.env.example
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.idea
+.vscode
+.agents
+.claude
+.freebuff
+chroma_db
