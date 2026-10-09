@@ -38,6 +38,9 @@ services:
       - chroma-data:/data
       - podcast-data:/data/podcasts   # partagé avec le worker : l'API sert les MP3 produits par lui
       - media-data:/data/media   # images ré-hébergées, servies par GET /media/{id}
+    networks:
+      - default
+      - synthoria-net   # joignable sous le nom `api` par le compose de Synthoria Studio (dev)
 
   worker:
     build: .
@@ -186,3 +189,10 @@ volumes:
   piper-voices:
   podcast-data:
   media-data:
+
+networks:
+  default:
+  # Réseau partagé avec le compose de développement de Synthoria Studio (à créer une fois :
+  # `docker network create synthoria-net`). Le dépôt parapluie Synthoria n'en a pas besoin.
+  synthoria-net:
+    external: true
