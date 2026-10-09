@@ -4,7 +4,8 @@ Contrairement à la génération complète du cours (best-effort, replis silenci
 régénération ciblée lève toujours en cas d'échec du premier appel : l'apprenant doit savoir que sa
 tentative n'a pas abouti plutôt que de se voir renvoyer silencieusement l'ancienne section
 incomplète. La section obtenue passe ensuite par la même validation que la génération depuis un
-plan (sous-sections, ratio non textuel, budget du mode) et la même réparation bornée.
+plan (sous-sections, ratio non textuel, budget du mode) et une réparation bornée par
+`section_regenerate_max_repairs` (1 par défaut, contre 2 pour la génération complète).
 """
 
 import logging
@@ -17,7 +18,7 @@ from app.db.models import CourseSession
 from app.schemas.course_generation import Section, SectionType, SectionsBatchSchema
 from app.services.course_depth import DepthProfile, depth_of_session, get_profile, render_rules
 from app.services.course_generator import _get_teacher_instructions, session_context_block
-from app.services.course_plan_generator import _MAX_REPAIR_ATTEMPTS, is_better_replacement, section_issues
+from app.services.course_plan_generator import is_better_replacement, section_issues
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
 
@@ -46,11 +47,12 @@ async def _repair(
     profile: DepthProfile,
     system_instruction: str,
     gemini_client: GeminiClient,
+    max_repairs: int,
 ) -> Section:
-    """Boucle de validation bornée (`_MAX_REPAIR_ATTEMPTS`) : garde la meilleure version (score
-    pondéré) ; un échec Gemini pendant la réparation conserve la meilleure version obtenue."""
+    """Boucle de validation bornée (`max_repairs`) : garde la meilleure version (score pondéré) ;
+    un échec Gemini pendant la réparation conserve la meilleure version obtenue."""
     best, best_issues = section, section_issues(section, None, profile)
-    for attempt in range(_MAX_REPAIR_ATTEMPTS):
+    for attempt in range(max_repairs):
         if not best_issues:
             break
         logger.info(
@@ -111,6 +113,9 @@ async def regenerate_section(
         "Retourne le JSON selon le schéma fourni."
     )
     section = await _generate_one(prompt, section_title, system_instruction, gemini_client)
+    # Régénération déclenchée par l'utilisateur : borne de réparation plus basse que la génération
+    # complète, chaque tentative supplémentaire étant un appel Gemini qu'il attend (et un risque de 429).
     return await _repair(
-        section, prompt, profile=profile, system_instruction=system_instruction, gemini_client=gemini_client
+        section, prompt, profile=profile, system_instruction=system_instruction, gemini_client=gemini_client,
+        max_repairs=max(0, settings.section_regenerate_max_repairs),
     )
