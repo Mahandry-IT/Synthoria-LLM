@@ -32,8 +32,11 @@ PDF
 
 ```bash
 cp .env.example .env
+docker network create synthoria-net   # une seule fois : réseau partagé avec le compose de Synthoria Studio
 docker compose up -d --build
 ```
+
+L'api rejoint le réseau externe `synthoria-net` pour que le compose de développement de Synthoria Studio la joigne sous le nom `api` (`http://api:8000`). Sans ce réseau, `docker compose up` échoue (« network synthoria-net declared as external, but could not be found »).
 
 Ce compose sert au **développement local** (images construites depuis le dépôt). Il démarre :
 
@@ -46,7 +49,7 @@ Ce compose sert au **développement local** (images construites depuis le dépô
 | `chroma` | base vectorielle | `http://localhost:8001` |
 | `piper` / `piper-init` | synthèse vocale / téléchargement des voix | interne |
 
-`DATABASE_URL` est construite par le compose à partir de `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_DB` (défaut `synthoria`, à remplacer hors dev ; mot de passe sans `@ : / ? #`). Le schéma est créé au démarrage de l'API (`create_all` + colonnes ajoutées idempotentes, `app/db/schema_sync.py`) : une nouvelle image n'altère ni ne supprime les tables existantes.
+`DATABASE_URL` est construite par le compose à partir de `POSTGRES_USER`, `POSTGRES_PASSWORD` et `POSTGRES_DB` (défaut `synthoria`, à remplacer hors dev ; mot de passe sans `@ : / ? #`). Elle prime sur une `DATABASE_URL` du `.env` : pour changer d'identifiants, modifier les variables `POSTGRES_*`, jamais `DATABASE_URL` seule. Le schéma est créé au démarrage de l'API (`create_all` + colonnes ajoutées idempotentes, `app/db/schema_sync.py`) : une nouvelle image n'altère ni ne supprime les tables existantes.
 
 Pour le **déploiement**, utiliser le dépôt parapluie [`Mahandry-IT/Synthoria`](https://github.com/Mahandry-IT/Synthoria) (LLM + Studio, images GHCR, mise à jour automatique) plutôt que ce compose.
 
