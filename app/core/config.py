@@ -124,6 +124,11 @@ class Settings(BaseSettings):
     course_note_max_length: int = 2000
     course_note_rate_limit_per_minute: int = 20
 
+    # Tentatives de quiz notées (banque de questions renouvelée par Gemini quand elle s'épuise)
+    quiz_attempt_rate_limit_per_minute: int = 10
+    quiz_submit_rate_limit_per_minute: int = 20
+    quiz_bank_context_max_chars: int = 12000
+
     # Ajout de contenu (sections) sur un cours déjà généré
     add_course_sections_rate_limit_per_minute: int = 6
 
