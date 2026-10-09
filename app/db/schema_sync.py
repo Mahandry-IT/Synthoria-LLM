@@ -17,6 +17,8 @@ ADDED_COLUMNS: tuple[str, ...] = (
     "REFERENCES course_chat_messages(id) ON DELETE CASCADE",
     "ALTER TABLE course_chat_messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
     "CREATE INDEX IF NOT EXISTS idx_course_chat_messages_parent ON course_chat_messages (parent_id)",
+    # migration 020_add_flashcard_variants
+    "ALTER TABLE flashcard_reviews ADD COLUMN IF NOT EXISTS variant_no INTEGER NOT NULL DEFAULT 0",
 )
 
 # Rattrapages de données idempotents, joués après les colonnes.

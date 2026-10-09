@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     review_intervals_days: list[int] = [1, 3, 7, 21]
     review_sessions_scan_limit: int = 50
     review_rate_limit_per_minute: int = 60
+    # Variantes des cartes sues : cartes max par appel Gemini (1 appel par cours), cours en contexte
+    flashcard_variants_max_cards_per_call: int = 15
+    flashcard_variants_context_max_chars: int = 8000
 
     # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
     course_regenerate_rate_limit_per_minute: int = 6
