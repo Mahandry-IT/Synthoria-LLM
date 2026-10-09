@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     ollama_max_retries: int = 3
     request_max_prompt_length: int = 8000
     cors_allowed_origins: list[str] = ["*"]
-    rate_limit_per_minute: int = 30
+    rate_limit_per_minute: int = 60
     chroma_persist_directory: str = "./chroma_db"
     chroma_collection_name: str = "synthoria_documents"
     pdf_chunk_target_tokens: int = 400
@@ -119,6 +119,8 @@ class Settings(BaseSettings):
 
     # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
     course_regenerate_rate_limit_per_minute: int = 6
+    # Tentatives de réparation après la régénération d'une section (chacune = 1 appel Gemini).
+    section_regenerate_max_repairs: int = 1
     course_note_max_length: int = 2000
     course_note_rate_limit_per_minute: int = 20
 
