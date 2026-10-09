@@ -112,6 +112,21 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | GET | `/courses/plans/{plan_id}` | Plan proposé relu tel quel, avec la `question`, les `filenames` et le `depth` d'origine (reprise, « Régénérer le plan » garde le mode ; plan antérieur au mode = `approfondi`). `404` inconnu, `410` expiré |
 | GET | `/media/{asset_id}` | Sert une image ré-hébergée (jamais de hotlink vers la source d'origine) : téléchargée, ré-encodée en WebP et servie depuis le stockage local. `404` image inconnue, `410` fichier expiré/supprimé, `422` `asset_id` invalide (doit être un UUID). `Cache-Control: public, max-age=31536000, immutable`. |
 
+### Format des erreurs
+
+Toutes les erreurs (HTTP, validation, limiteurs, Gemini, 500) renvoient le même JSON :
+
+```json
+{ "detail": "Quota Gemini atteint.", "error_code": "gemini_quota", "request_id": "3f2c…" }
+```
+
+- `detail` : message en français destiné à l'utilisateur (422 : champs en cause, sans jargon pydantic) ;
+- `error_code` : code stable (`not_found`, `validation_error`, `conflict`, `rate_limited`, `quota_exceeded`, `gemini_quota`, `gemini_unavailable`, `gemini_invalid_response`, `ollama_unavailable`, `internal_error`…) ;
+- `request_id` : identifiant de corrélation, repris de l'en-tête `X-Request-ID` reçu (sinon généré), renvoyé en en-tête `X-Request-ID` et présent dans les logs ;
+- `debug` (type/message de l'exception, détail de la validation) : **uniquement si `APP_ENV=development`**, jamais en production (défaut). Un 500 ne contient jamais de trace.
+
+Les 429 portent `Retry-After` (secondes).
+
 ### Tester l'API
 
 Une collection Postman pré-configurée est disponible dans [`docs/Synthoria-LLM.postman_collection.json`](docs/Synthoria-LLM.postman_collection.json). Importez-la dans Postman (Import → fichier) pour tester tous les endpoints avec des exemples de body réalistes.

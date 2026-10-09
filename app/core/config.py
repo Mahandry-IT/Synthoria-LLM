@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "Synthoria LLM"
+    # `development` ajoute un champ `debug` (exception, détail de validation) aux erreurs JSON.
+    # Toute autre valeur (défaut `production`) ne l'expose jamais.
+    app_env: str = "production"
     ollama_base_url: str = "http://ollama:11435"
     ollama_default_model: str = "llama3.2"
     ollama_embedding_model: str = "nomic-embed-text"
@@ -156,6 +159,10 @@ class Settings(BaseSettings):
     # V2 : classement / catégorisation pédagogique des candidats (1 appel Flash-Lite de plus par cours).
     course_videos_ranking_enabled: bool = True
     youtube_ranking_min_score: int = 40
+
+    @property
+    def is_development(self) -> bool:
+        return self.app_env.strip().lower() == "development"
 
     @property
     def youtube_cache_ttl(self) -> timedelta:

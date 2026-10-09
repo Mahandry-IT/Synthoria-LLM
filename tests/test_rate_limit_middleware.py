@@ -28,7 +28,8 @@ def test_write_over_the_limit_returns_429_json_with_retry_after_not_500():
     response = client.post("/write")
 
     assert response.status_code == 429
-    assert response.json() == {"detail": "Trop de requêtes, réessayez plus tard"}
+    assert response.json()["detail"] == "Trop de requêtes, réessayez plus tard"
+    assert response.json()["error_code"] == "rate_limited"
     retry_after = int(response.headers["Retry-After"])
     assert 1 <= retry_after <= WINDOW_SECONDS
 
