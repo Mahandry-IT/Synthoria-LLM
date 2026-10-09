@@ -250,7 +250,7 @@ async def test_regenerate_section_repair_is_bounded_and_keeps_original_when_neve
 
     result = await regenerate_section(_session_row(None), "Notion", gemini, _store(), Settings(gemini_api_key="k"))
 
-    assert gemini.format_structured.await_count == 3  # 1 génération + _MAX_REPAIR_ATTEMPTS (2)
+    assert gemini.format_structured.await_count == 2  # 1 génération + section_regenerate_max_repairs (1)
     assert "500 mots" in gemini.format_structured.call_args_list[0].kwargs["raw_answer"]  # absent = approfondi
     assert result.title == "Notion"
 
