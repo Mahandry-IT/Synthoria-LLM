@@ -3,8 +3,9 @@ import time
 from collections import defaultdict
 
 from fastapi import HTTPException, Request, status
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.core.errors import ErrorCode, error_response
 
 WINDOW_SECONDS = 60
 RATE_LIMITED_DETAIL = "Trop de requêtes, réessayez plus tard"
@@ -22,8 +23,8 @@ def _retry_after_seconds(oldest_hit: float, now: float) -> int:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Rate limiting en mémoire (par IP) des requêtes d'écriture. Suffisant pour une instance unique.
 
-    Renvoie directement une `JSONResponse` 429 : une `HTTPException` levée depuis un
-    `BaseHTTPMiddleware` n'est pas convertie par Starlette et finit en 500.
+    Renvoie directement une réponse 429 au format d'erreur commun : une `HTTPException` levée
+    depuis un `BaseHTTPMiddleware` n'est pas convertie par Starlette et finit en 500.
 
     ⚠️ Pour un déploiement multi-instance, remplacer par un backend partagé (Redis).
     """
@@ -43,9 +44,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if len(recent) >= self._limit:
             self._hits[client_ip] = recent
-            return JSONResponse(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={"detail": RATE_LIMITED_DETAIL},
+            return error_response(
+                request,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                RATE_LIMITED_DETAIL,
+                ErrorCode.RATE_LIMITED,
                 headers={"Retry-After": str(_retry_after_seconds(recent[0], now))},
             )
 

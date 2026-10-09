@@ -59,6 +59,7 @@ from app.api.schemas import (
     VideoNoteResponse,
 )
 from app.core.config import Settings, get_settings
+from app.core.errors import ApiError, ErrorCode, exception_debug
 from app.core.rate_limit import SlidingWindowLimiter
 from app.core.exceptions import (
     GeminiDailyQuotaExceededError,
@@ -426,30 +427,50 @@ async def delete_file_subfolder(
 _DEFAULT_QUOTA_RETRY_AFTER_SECONDS = 60
 
 
+_GEMINI_QUOTA_DETAIL = "Quota Gemini atteint."
+_GEMINI_DAILY_QUOTA_DETAIL = "Quota Gemini journalier atteint."
+_GEMINI_UNAVAILABLE_DETAIL = "Le service Gemini est momentanément indisponible."
+_GEMINI_INVALID_DETAIL = "La réponse de Gemini est inexploitable, réessayez."
+_OLLAMA_UNAVAILABLE_DETAIL = "Le service d'embeddings local (Ollama) est indisponible."
+
+
 @contextmanager
 def _gemini_http_errors() -> Iterator[None]:
-    """Traduit les erreurs Gemini/Ollama de la génération de cours en erreurs HTTP."""
+    """Traduit les erreurs Gemini/Ollama de la génération de cours en erreurs HTTP.
+
+    Le `detail` est un message utilisateur fixe : le message brut (qui peut citer la réponse de
+    Google) ne part qu'en `debug`, exposé seulement en développement.
+    """
     try:
         yield
     except GeminiDailyQuotaExceededError as exc:
         retry_after = _DEFAULT_QUOTA_RETRY_AFTER_SECONDS
         if exc.retry_at is not None:
             retry_after = max(1, round((exc.retry_at - datetime.now(timezone.utc)).total_seconds()))
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc),
-            headers={"Retry-After": str(retry_after)},
+        raise ApiError(
+            status.HTTP_429_TOO_MANY_REQUESTS, _GEMINI_DAILY_QUOTA_DETAIL, ErrorCode.GEMINI_QUOTA,
+            headers={"Retry-After": str(retry_after)}, debug=exception_debug(exc),
         ) from exc
     except GeminiUnavailableError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE, _GEMINI_UNAVAILABLE_DETAIL, ErrorCode.GEMINI_UNAVAILABLE,
+            debug=exception_debug(exc),
+        ) from exc
     except GeminiQuotaExceededError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc),
-            headers={"Retry-After": str(_DEFAULT_QUOTA_RETRY_AFTER_SECONDS)},
+        raise ApiError(
+            status.HTTP_429_TOO_MANY_REQUESTS, _GEMINI_QUOTA_DETAIL, ErrorCode.GEMINI_QUOTA,
+            headers={"Retry-After": str(_DEFAULT_QUOTA_RETRY_AFTER_SECONDS)}, debug=exception_debug(exc),
         ) from exc
     except GeminiInvalidResponseError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise ApiError(
+            status.HTTP_502_BAD_GATEWAY, _GEMINI_INVALID_DETAIL, ErrorCode.GEMINI_INVALID_RESPONSE,
+            debug=exception_debug(exc),
+        ) from exc
     except (OllamaUnavailableError, OllamaModelNotFoundError) as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE, _OLLAMA_UNAVAILABLE_DETAIL, ErrorCode.OLLAMA_UNAVAILABLE,
+            debug=exception_debug(exc),
+        ) from exc
 
 
 def _resolve_question_and_mode(body: CourseGenerationRequest, settings: Settings) -> tuple[str, str]:
