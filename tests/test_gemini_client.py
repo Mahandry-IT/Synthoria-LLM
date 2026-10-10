@@ -1,3 +1,6 @@
+import asyncio
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -765,3 +768,174 @@ async def test_call_with_retry_still_retries_on_unclassified_quota_error():
 
     assert result == {"ok": True}
     assert fake_client.models.generate_content.call_count == 2
+
+# ─── retryDelay Google, concurrence, tokens (TPM) ──────────────
+
+
+def _sdk_rate_limit_error(retry_delay: str, quota_id: str = "GenerateRequestsPerMinutePerProjectPerModel") -> Exception:
+    """429 sous la forme réelle du SDK `google-genai` : corps décodé dans `exc.details`."""
+    exc = Exception("429 RESOURCE_EXHAUSTED")
+    exc.details = {
+        "error": {
+            "code": 429, "status": "RESOURCE_EXHAUSTED", "message": "quota exceeded",
+            "details": [
+                {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{"quotaId": quota_id}]},
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": retry_delay},
+            ],
+        }
+    }
+    return exc
+
+
+@pytest.fixture
+def recorded_sleeps(monkeypatch) -> list[float]:
+    """Remplace l'attente entre deux tentatives par un enregistrement (aucune attente réelle)."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("app.services.gemini_client.asyncio.sleep", fake_sleep)
+    return sleeps
+
+
+def test_classify_quota_error_reads_sdk_details_attribute():
+    assert _classify_quota_error(_sdk_rate_limit_error("5s")) == "minute"
+
+
+@pytest.mark.asyncio
+async def test_retry_waits_at_least_the_google_retry_delay(recorded_sleeps):
+    fake_client = MagicMock()
+    fake_client.models.generate_content.side_effect = [_sdk_rate_limit_error("7s"), SimpleNamespace(text='{"ok": true}')]
+    client = GeminiClient(_settings(), client=fake_client)
+
+    result = await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+    assert result == {"ok": True}
+    assert len(recorded_sleeps) == 1
+    assert 7.0 <= recorded_sleeps[0] <= 8.0  # jamais avant l'échéance donnée par Google
+
+
+@pytest.mark.asyncio
+async def test_retry_delay_above_the_cap_fails_fast_with_retry_after(recorded_sleeps):
+    fake_client = _fake_genai_client(generate_content_side_effect=_sdk_rate_limit_error("90s"))
+    client = GeminiClient(_settings(gemini_retry_delay_max_seconds=60), client=fake_client)
+
+    with pytest.raises(GeminiQuotaExceededError) as exc_info:
+        await client._call_with_retry(
+            lambda model: fake_client.models.generate_content(model=model), "flash-lite"
+        )
+
+    assert fake_client.models.generate_content.call_count == 1  # pas de retry sur ce modèle
+    assert recorded_sleeps == []
+    assert exc_info.value.retry_after_seconds == 90.0
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retries_carry_the_last_google_retry_delay(recorded_sleeps):
+    fake_client = _fake_genai_client(generate_content_side_effect=_sdk_rate_limit_error("12s"))
+    client = GeminiClient(_settings(), client=fake_client)  # gemini_max_retries=2
+
+    with pytest.raises(GeminiQuotaExceededError) as exc_info:
+        await client._call_with_retry(
+            lambda model: fake_client.models.generate_content(model=model), "flash-lite"
+        )
+
+    assert fake_client.models.generate_content.call_count == 2
+    assert exc_info.value.retry_after_seconds == 12.0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_are_serialized_by_default():
+    lock = threading.Lock()
+    running = 0
+    max_running = 0
+
+    def slow_call(model: str) -> SimpleNamespace:
+        nonlocal running, max_running
+        with lock:
+            running += 1
+            max_running = max(max_running, running)
+        time.sleep(0.05)
+        with lock:
+            running -= 1
+        return SimpleNamespace(text="ok")
+
+    client = GeminiClient(_settings(), client=MagicMock())  # gemini_max_concurrency=1
+
+    await asyncio.gather(*(client._call_with_retry(slow_call, "flash-lite") for _ in range(4)))
+
+    assert max_running == 1
+
+
+@pytest.mark.asyncio
+async def test_max_concurrency_setting_allows_parallel_calls():
+    barrier = threading.Barrier(2, timeout=0.5)
+
+    def call(model: str) -> SimpleNamespace:
+        barrier.wait()  # ne passe que si deux appels tournent en même temps
+        return SimpleNamespace(text="ok")
+
+    client = GeminiClient(_settings(gemini_max_concurrency=2), client=MagicMock())
+
+    await asyncio.gather(*(client._call_with_retry(call, "flash-lite") for _ in range(2)))
+
+
+def _reserved_tokens(client: GeminiClient, model: str) -> list[int]:
+    return [hit.tokens for hit in client._rate_limiter._token_hits.get(model, [])]
+
+
+@pytest.mark.asyncio
+async def test_input_tokens_are_counted_and_reserved_before_the_call():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"ok": true}'))
+    fake_client.models.count_tokens.return_value = SimpleNamespace(total_tokens=120)
+    model = _settings().gemini_chain_generation[0]
+    client = GeminiClient(_settings(gemini_model_tpm_limits={model: 10_000}), client=fake_client)
+
+    await client.format_structured("raw", response_schema={}, system_instruction="s" * 40)
+
+    assert fake_client.models.count_tokens.call_args.kwargs == {"model": model, "contents": "raw"}
+    assert _reserved_tokens(client, model) == [130]  # 120 comptés + 40 caractères d'instruction / 4
+
+
+@pytest.mark.asyncio
+async def test_token_count_falls_back_to_an_estimate_when_count_tokens_fails():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"ok": true}'))
+    fake_client.models.count_tokens.side_effect = Exception("réseau")
+    model = _settings().gemini_chain_generation[0]
+    client = GeminiClient(_settings(gemini_model_tpm_limits={model: 10_000}), client=fake_client)
+
+    result = await client.format_structured("a" * 400, response_schema={}, system_instruction="")
+
+    assert result == {"ok": True}  # le comptage en échec ne bloque jamais la génération
+    assert _reserved_tokens(client, model) == [100]
+
+
+@pytest.mark.asyncio
+async def test_tokens_are_not_counted_for_a_model_without_tpm_limit():
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"ok": true}'))
+    client = GeminiClient(_settings(), client=fake_client)
+
+    await client.format_structured("raw", response_schema={}, system_instruction="system")
+
+    fake_client.models.count_tokens.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reservation_is_corrected_with_the_real_prompt_token_count():
+    response = SimpleNamespace(text='{"ok": true}', usage_metadata=SimpleNamespace(prompt_token_count=77))
+    fake_client = _fake_genai_client(generate_content_return_value=response)
+    fake_client.models.count_tokens.return_value = SimpleNamespace(total_tokens=120)
+    model = _settings().gemini_chain_generation[0]
+    client = GeminiClient(_settings(gemini_model_tpm_limits={model: 10_000}), client=fake_client)
+
+    await client.format_structured("raw", response_schema={}, system_instruction="")
+
+    assert _reserved_tokens(client, model) == [77]
+
+
+@pytest.mark.asyncio
+async def test_rpm_share_also_scales_the_token_limit():
+    client = GeminiClient(_settings(gemini_rpm_share=0.5, gemini_model_tpm_limits={"flash": 1000}))
+
+    assert client._rate_limiter._tpm_limits == {"flash": 500}

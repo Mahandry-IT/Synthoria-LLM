@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     # docker-compose, pour répartir le RPM partagé plutôt que de laisser chacun croire qu'il a
     # la totalité du quota — voir app/services/gemini_quota_manager.py.
     gemini_rpm_share: float = 1.0
+    # Tokens d'ENTRÉE par minute, par modèle (clé = nom du modèle), en complément du RPM : un seul
+    # gros prompt peut épuiser le quota TPM bien avant le RPM. Un modèle absent n'est pas limité en
+    # tokens (ni compté : aucun appel `count_tokens`). `gemini_rpm_share` s'y applique aussi.
+    gemini_model_tpm_limits: dict[str, int] = {}
+    # Appels Gemini simultanés par processus : 1 = strictement un à la fois, les requêtes HTTP
+    # concurrentes (ex. deux régénérations de section) font la queue au lieu de partir en rafale.
+    gemini_max_concurrency: int = 1
+    # Au-delà de ce `retryDelay` renvoyé par Google sur un 429, le modèle n'est pas réessayé :
+    # bascule immédiate sur le modèle suivant de la chaîne plutôt que de bloquer la requête.
+    gemini_retry_delay_max_seconds: float = 60.0
     # Quota JOURNALIER par modèle (clé = nom du modèle), en complément du RPM. Un modèle absent
     # de ce mapping n'a pas de budget RPD suivi (le disjoncteur ne s'appuie alors que sur
     # `exhausted_until`, posé après un 429 jour effectivement reçu de Google).

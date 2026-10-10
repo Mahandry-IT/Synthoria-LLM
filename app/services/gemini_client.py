@@ -32,10 +32,45 @@ logger = logging.getLogger(__name__)
 _BACKOFF_BASE_SECONDS = 2.0
 _BACKOFF_MAX_SECONDS = 60.0
 _BACKOFF_JITTER = 0.25
+# Marge ajoutée au `retryDelay` de Google (jamais retranchée) pour désynchroniser les retries.
+_RETRY_DELAY_JITTER_SECONDS = 1.0
+
+# Comptage des tokens d'entrée (limiteur TPM) : `count_tokens` est borné par un timeout court et
+# ne doit jamais faire échouer une génération — repli sur une estimation locale.
+_COUNT_TOKENS_TIMEOUT_SECONDS = 10.0
+_CHARS_PER_TOKEN = 4
+_IMAGE_TOKENS_ESTIMATE = 258
 
 # Accumule les appels Gemini du contexte async courant (voir `GeminiClient.track_calls`) — `None`
 # hors d'un `track_calls()`, ce qui ne doit jamais empêcher un appel Gemini de fonctionner.
 _call_log: ContextVar[list[dict[str, Any]] | None] = ContextVar("gemini_call_log", default=None)
+
+
+def _error_body(exc: Exception) -> dict | None:
+    """Corps JSON de l'erreur Google (`{"error": {...}}`), ou `None` s'il n'est pas exploitable.
+
+    Le SDK `google-genai` l'expose déjà décodé dans `exc.details` ; `exc.response.json()` reste
+    lu en repli (autres formes d'exception, réponse HTTP brute).
+    """
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        return details
+    try:
+        response = getattr(exc, "response", None)
+        if response is None:
+            return None
+        data = getattr(response, "json", lambda: None)()
+    except Exception:  # noqa: BLE001
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _error_details(exc: Exception) -> list[dict]:
+    """Liste `error.details[]` du corps d'erreur (RetryInfo, QuotaFailure…), vide si absente."""
+    body = _error_body(exc) or {}
+    error = body.get("error")
+    details = error.get("details") if isinstance(error, dict) else None
+    return [detail for detail in details if isinstance(detail, dict)] if isinstance(details, list) else []
 
 
 def _parse_gemini_error(exc: Exception) -> tuple[int | None, str | None, str | None]:
@@ -43,17 +78,11 @@ def _parse_gemini_error(exc: Exception) -> tuple[int | None, str | None, str | N
 
     Retour: (error_code, error_status, error_message)
     """
-    try:
-        body = getattr(exc, "response", None)
-        if body is None:
-            return None, None, None
-        data = getattr(body, "json", lambda: None)()
-        if data is None:
-            return None, None, None
-        err = data.get("error", {})
-        return err.get("code"), err.get("status"), err.get("message")
-    except Exception:  # noqa: BLE001
+    body = _error_body(exc)
+    err = body.get("error") if body else None
+    if not isinstance(err, dict):
         return None, None, None
+    return err.get("code"), err.get("status"), err.get("message")
 
 
 def _is_rate_limited(exc: Exception) -> bool:
@@ -69,22 +98,28 @@ def _is_rate_limited(exc: Exception) -> bool:
 
 
 def _extract_retry_delay(exc: Exception) -> float | None:
-    """Extrait le retryDelay de la réponse d'erreur Google API, si disponible."""
-    try:
-        error_body = getattr(exc, "response", None)
-        if error_body is None:
-            return None
-        body = getattr(error_body, "json", lambda: None)()
-        if body is None:
-            return None
-        for detail in body.get("error", {}).get("details", []):
-            if detail.get("@type", "").endswith("RetryInfo"):
-                delay_str = detail.get("retryDelay", "")
-                if delay_str.endswith("s"):
-                    return float(delay_str[:-1])
-    except Exception:  # noqa: BLE001
-        pass
+    """Extrait le retryDelay (secondes) de la réponse d'erreur Google API, si disponible."""
+    for detail in _error_details(exc):
+        if not str(detail.get("@type", "")).endswith("RetryInfo"):
+            continue
+        delay = str(detail.get("retryDelay", ""))
+        if delay.endswith("s"):
+            try:
+                return float(delay[:-1])
+            except ValueError:
+                return None
     return None
+
+
+def _quota_ids(exc: Exception) -> list[str]:
+    """`quotaId` des violations `QuotaFailure` du 429 (ex. `…PerMinutePerProjectPerModel`)."""
+    return [
+        str(violation.get("quotaId", ""))
+        for detail in _error_details(exc)
+        if str(detail.get("@type", "")).endswith("QuotaFailure")
+        for violation in detail.get("violations") or []
+        if isinstance(violation, dict) and violation.get("quotaId")
+    ]
 
 
 def _classify_quota_error(exc: Exception) -> str:
@@ -96,27 +131,47 @@ def _classify_quota_error(exc: Exception) -> str:
 
     Le format exact de `quotaId` n'a pas été confirmé sur un vrai 429 de ce projet — tant que ce
     n'est pas vérifié en conditions réelles, `"unknown"` reste traité comme retryable (voir
-    `_call_with_retry`) : ne jamais fail-fast sur une classification incertaine.
+    `_call_with_retry`) : ne jamais fail-fast sur une classification incertaine. Le log
+    `gemini_rate_limited` affiche le `quotaId` reçu pour permettre cette vérification.
     """
-    try:
-        body = getattr(exc, "response", None)
-        if body is None:
-            return "unknown"
-        data = getattr(body, "json", lambda: None)()
-        if data is None:
-            return "unknown"
-        for detail in data.get("error", {}).get("details", []):
-            if not detail.get("@type", "").endswith("QuotaFailure"):
-                continue
-            for violation in detail.get("violations", []):
-                quota_id = violation.get("quotaId", "")
-                if "PerDay" in quota_id:
-                    return "day"
-                if "PerMinute" in quota_id:
-                    return "minute"
-    except Exception:  # noqa: BLE001
-        pass
+    for quota_id in _quota_ids(exc):
+        if "PerDay" in quota_id:
+            return "day"
+        if "PerMinute" in quota_id:
+            return "minute"
     return "unknown"
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Backoff exponentiel plafonné (sans jitter) pour la tentative `attempt` (0-indexée)."""
+    return min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS)
+
+
+def _rate_limit_delay(attempt: int, google_delay: float | None) -> float:
+    """Attente avant de retenter un 429.
+
+    Si Google a renvoyé un `retryDelay`, il fait foi : jitter uniquement POSITIF, retenter plus
+    tôt serait un 429 garanti. Sinon backoff exponentiel avec jitter ±25 %.
+    """
+    if google_delay:
+        return google_delay + random.uniform(0.0, _RETRY_DELAY_JITTER_SECONDS)
+    backoff = _backoff_delay(attempt)
+    return max(0.1, backoff + backoff * _BACKOFF_JITTER * (2 * random.random() - 1))
+
+
+def _estimate_tokens(contents: Any) -> int:
+    """Estimation locale grossière des tokens d'entrée (repli quand `count_tokens` échoue)."""
+    if isinstance(contents, str):
+        return len(contents) // _CHARS_PER_TOKEN
+    if isinstance(contents, (list, tuple)):
+        return sum(_estimate_tokens(item) for item in contents)
+    parts = getattr(contents, "parts", None)
+    if parts:
+        return sum(_estimate_tokens(part) for part in parts)
+    text = getattr(contents, "text", None)
+    if isinstance(text, str):
+        return len(text) // _CHARS_PER_TOKEN
+    return _IMAGE_TOKENS_ESTIMATE
 
 
 def _strip_additional_properties(schema: dict) -> dict:
@@ -165,7 +220,17 @@ class GeminiClient:
         # tant que `GeminiClient` reste un singleton applicatif (app.state.gemini_client).
         # `gemini_rpm_share` répartit le RPM partagé entre api/worker (ex. 0.7/0.3) plutôt que de
         # laisser chacun croire qu'il dispose de la totalité du quota.
-        self._rate_limiter = GeminiRateLimiter(max(1, round(settings.gemini_rpm_limit * settings.gemini_rpm_share)))
+        # Le même partage s'applique au budget de tokens par minute (TPM), lui aussi commun.
+        self._rate_limiter = GeminiRateLimiter(
+            max(1, round(settings.gemini_rpm_limit * settings.gemini_rpm_share)),
+            tpm_limits={
+                model: max(1, round(limit * settings.gemini_rpm_share))
+                for model, limit in settings.gemini_model_tpm_limits.items()
+            },
+        )
+        # Sérialise les appels réseau du processus : des requêtes HTTP concurrentes (ex. deux
+        # régénérations de section) attendent leur tour au lieu de partir ensemble vers Google.
+        self._concurrency = asyncio.Semaphore(max(1, settings.gemini_max_concurrency))
         # `session_factory=None` : GeminiQuotaManager devient un no-op silencieux (toujours
         # disponible) — utilisable sans DB (scripts, tests) sans changer le comportement.
         self._quota_manager = GeminiQuotaManager(settings, session_factory)
@@ -224,7 +289,38 @@ class GeminiClient:
             )
             _call_log.reset(token)
 
-    async def _call_with_retry(self, func: Any, *args: Any, method: str = "", **kwargs: Any) -> Any:
+    async def _count_input_tokens(self, model: str, contents: Any, system_instruction: str) -> int:
+        """Tokens d'entrée de l'appel à venir, pour le limiteur TPM — 0 (aucun appel réseau) si
+        `model` n'a pas de limite TPM configurée.
+
+        `count_tokens` compte `contents` ; l'instruction système (non acceptée par cet endpoint)
+        est estimée localement, le schema de sortie n'est pas compté : `usage_metadata` corrige
+        la réservation après l'appel. Ne lève jamais : estimation locale en repli.
+        """
+        if contents is None or not self._rate_limiter.has_token_limit(model):
+            return 0
+        extra = len(system_instruction) // _CHARS_PER_TOKEN
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(self._client.models.count_tokens, model=model, contents=contents),
+                timeout=_COUNT_TOKENS_TIMEOUT_SECONDS,
+            )
+            total = getattr(response, "total_tokens", None)
+            if isinstance(total, int):
+                return total + extra
+        except Exception as exc:  # noqa: BLE001 - le comptage ne doit jamais bloquer l'appel
+            logger.warning("gemini_count_tokens_failed", extra={"model": model, "error": str(exc)})
+        return _estimate_tokens(contents) + extra
+
+    async def _call_with_retry(
+        self,
+        func: Any,
+        *args: Any,
+        method: str = "",
+        contents: Any = None,
+        system_instruction: str = "",
+        **kwargs: Any,
+    ) -> Any:
         """Retry avec backoff exponentiel + jitter.
 
         Stratégie :
@@ -232,12 +328,16 @@ class GeminiClient:
           - 429 rate-limited, quota JOURNALIER identifié → échec immédiat, aucun retry
             (`GeminiDailyQuotaExceededError`, voir `_classify_quota_error`) : aucune tentative
             supplémentaire ne peut réussir avant le prochain reset.
-          - 429 rate-limited, quota minute ou non classifiable → retry avec backoff (extrait
-            `retryDelay` si dispo).
+          - 429 rate-limited, quota minute ou non classifiable → retry après le `retryDelay` de
+            Google s'il est fourni (sinon backoff) ; si ce délai dépasse
+            `gemini_retry_delay_max_seconds`, échec immédiat (`GeminiQuotaExceededError`) pour
+            laisser `_call_with_model_cascade` passer au modèle suivant.
           - Timeout / autres erreurs → retry avec backoff standard.
 
         `method` (nom de la méthode publique appelante, ex. "format_structured") sert uniquement
         au log `gemini_call`/`gemini_calls_summary` — jamais au comportement de retry.
+        `contents`/`system_instruction` : entrée de l'appel, uniquement pour compter ses tokens
+        (limiteur TPM, voir `_count_input_tokens`) — `None` : pas de comptage.
         """
         last_error: Exception | None = None
         rate_limit_delay: float | None = None
@@ -252,20 +352,31 @@ class GeminiClient:
                 retry_at=next_pacific_midnight_utc(),
             )
 
+        # Réservé une seule fois pour toutes les tentatives : un 429 ne consomme pas de tokens.
+        token_reservation = await self._rate_limiter.acquire_tokens(
+            model, await self._count_input_tokens(model, contents, system_instruction)
+        )
+
         for attempt in range(self._settings.gemini_max_retries):
             started = time.monotonic()
+            delay = _backoff_delay(attempt)
             try:
-                # Espace les appels (y compris les retries) pour rester sous GEMINI_RPM_LIMIT
-                # plutôt que de laisser Google renvoyer 429 puis retenter après coup.
-                await self._rate_limiter.acquire()
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(func, *args, **kwargs),
-                    timeout=self._settings.gemini_timeout_seconds,
-                )
+                async with self._concurrency:
+                    # Espace les appels (y compris les retries) pour rester sous GEMINI_RPM_LIMIT
+                    # plutôt que de laisser Google renvoyer 429 puis retenter après coup.
+                    await self._rate_limiter.acquire()
+                    started = time.monotonic()
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(func, *args, **kwargs),
+                        timeout=self._settings.gemini_timeout_seconds,
+                    )
                 self._log_call(
                     model=model, method=method, duration_ms=(time.monotonic() - started) * 1000,
                     status="ok", attempt=attempt + 1,
                 )
+                prompt_tokens = getattr(getattr(result, "usage_metadata", None), "prompt_token_count", None)
+                if isinstance(prompt_tokens, int):
+                    self._rate_limiter.correct_tokens(token_reservation, prompt_tokens)
                 await self._quota_manager.record_success(model)
                 return result
             except TimeoutError as exc:
@@ -287,47 +398,49 @@ class GeminiClient:
                         f"Modèle Gemini introuvable (404): {error_message or exc}",
                         error_code=404, error_message=error_message,
                     ) from exc
-                if _is_rate_limited(exc) and _classify_quota_error(exc) == "day":
-                    # Quota JOURNALIER : mathématiquement impossible de réussir avant le reset,
-                    # retenter ne ferait que gaspiller du RPM partagé avec l'autre process (api/worker).
-                    retry_at = next_pacific_midnight_utc()
-                    logger.warning("gemini_daily_quota_exceeded", extra={"model": model, "retry_at": retry_at.isoformat()})
-                    await self._quota_manager.record_daily_exhausted(model)
-                    raise GeminiDailyQuotaExceededError(
-                        f"Quota Gemini journalier dépassé: {error_message or exc}",
-                        error_code=error_code, error_message=error_message, retry_at=retry_at,
-                    ) from exc
-                if _is_rate_limited(exc):
-                    last_error = exc
-                    rate_limit_delay = _extract_retry_delay(exc)
-                    backoff = (
-                        min(rate_limit_delay, _BACKOFF_MAX_SECONDS)
-                        if rate_limit_delay
-                        else min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS)
-                    )
-                    jitter = backoff * _BACKOFF_JITTER * (2 * random.random() - 1)
-                    delay = max(0.1, backoff + jitter)
-                    logger.warning(
-                        "gemini_rate_limited",
-                        extra={"attempt": attempt + 1, "delay": round(delay, 2), "retry_after": rate_limit_delay},
-                    )
-                else:
-                    last_error = exc
+                last_error = exc
+                if not _is_rate_limited(exc):
                     logger.warning(
                         "gemini_call_failed", extra={"attempt": attempt + 1, "error": str(exc)}
                     )
+                else:
+                    quota_kind = _classify_quota_error(exc)
+                    quota_ids = _quota_ids(exc)
+                    if quota_kind == "day":
+                        # Quota JOURNALIER : mathématiquement impossible de réussir avant le reset,
+                        # retenter ne ferait que gaspiller du RPM partagé avec l'autre process (api/worker).
+                        retry_at = next_pacific_midnight_utc()
+                        logger.warning(
+                            "gemini_daily_quota_exceeded model=%s quota_id=%s", model, ",".join(quota_ids) or "-",
+                            extra={"model": model, "retry_at": retry_at.isoformat(), "quota_ids": quota_ids},
+                        )
+                        await self._quota_manager.record_daily_exhausted(model)
+                        raise GeminiDailyQuotaExceededError(
+                            f"Quota Gemini journalier dépassé: {error_message or exc}",
+                            error_code=error_code, error_message=error_message, retry_at=retry_at,
+                        ) from exc
+                    rate_limit_delay = _extract_retry_delay(exc)
+                    delay = _rate_limit_delay(attempt, rate_limit_delay)
+                    # Champs utiles dans le message : le format de log n'affiche pas `extra`.
+                    logger.warning(
+                        "gemini_rate_limited model=%s attempt=%d quota_id=%s retry_after=%s delay=%.1fs",
+                        model, attempt + 1, ",".join(quota_ids) or "-", rate_limit_delay, delay,
+                        extra={
+                            "model": model, "attempt": attempt + 1, "delay": round(delay, 2),
+                            "retry_after": rate_limit_delay, "quota_ids": quota_ids, "quota_kind": quota_kind,
+                        },
+                    )
+                    if rate_limit_delay and rate_limit_delay > self._settings.gemini_retry_delay_max_seconds:
+                        # Attendre aussi longtemps bloquerait la requête : autant essayer tout de
+                        # suite le modèle suivant de la chaîne (quota distinct par modèle).
+                        raise GeminiQuotaExceededError(
+                            f"Quota Gemini dépassé: {error_message or exc}",
+                            error_code=error_code, error_message=error_message,
+                            retry_after_seconds=rate_limit_delay,
+                        ) from exc
 
             if attempt < self._settings.gemini_max_retries - 1:
-                if last_error and _is_rate_limited(last_error):
-                    backoff = (
-                        min(rate_limit_delay, _BACKOFF_MAX_SECONDS)
-                        if rate_limit_delay
-                        else min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS)
-                    )
-                    jitter = backoff * _BACKOFF_JITTER * (2 * random.random() - 1)
-                    await asyncio.sleep(max(0.1, backoff + jitter))
-                else:
-                    await asyncio.sleep(min(_BACKOFF_BASE_SECONDS ** (attempt + 1), _BACKOFF_MAX_SECONDS))
+                await asyncio.sleep(delay)
 
         # Extraire les infos structurées de la dernière erreur
         error_code, error_status, error_message = _parse_gemini_error(last_error) if last_error else (None, None, None)
@@ -338,6 +451,7 @@ class GeminiClient:
                 f"Quota Gemini dépassé: {detail}",
                 error_code=error_code,
                 error_message=detail,
+                retry_after_seconds=rate_limit_delay,
             ) from last_error
 
         raise GeminiUnavailableError(
@@ -346,7 +460,15 @@ class GeminiClient:
             error_message=detail,
         ) from last_error
 
-    async def _call_with_model_cascade(self, build_request: Any, models: list[str], *, method: str = "") -> Any:
+    async def _call_with_model_cascade(
+        self,
+        build_request: Any,
+        models: list[str],
+        *,
+        method: str = "",
+        contents: Any = None,
+        system_instruction: str = "",
+    ) -> Any:
         """Essaie chaque modèle de `models` dans l'ordre, bascule sur le suivant
         si l'appel échoue avec une erreur Gemini non transitoire côté appelant
         (`GeminiQuotaExceededError`/`GeminiUnavailableError` — `_call_with_retry`
@@ -358,6 +480,8 @@ class GeminiClient:
             build_request: callable `(model: str) -> Any` construisant l'appel
                 Gemini pour un modèle donné (passé à `_call_with_retry`).
             models: liste ordonnée de modèles à essayer (ex. [flash, flash_lite]).
+            contents, system_instruction: entrée de l'appel, transmise à `_call_with_retry`
+                pour le comptage des tokens (limiteur TPM).
 
         Retour: la réponse du premier modèle qui réussit.
 
@@ -366,7 +490,9 @@ class GeminiClient:
         last_error: GeminiServiceError | None = None
         for i, model in enumerate(models):
             try:
-                return await self._call_with_retry(build_request, model, method=method)
+                return await self._call_with_retry(
+                    build_request, model, method=method, contents=contents, system_instruction=system_instruction,
+                )
             except (GeminiQuotaExceededError, GeminiUnavailableError) as exc:
                 last_error = exc
                 next_model = models[i + 1] if i + 1 < len(models) else None
@@ -409,6 +535,7 @@ class GeminiClient:
 
         response = await self._call_with_model_cascade(
             _run, self._settings.gemini_chain_search, method="search_grounded",
+            contents=prompt, system_instruction=system_instruction,
         )
         text = getattr(response, "text", "") or ""
         return text, self._extract_web_sources(response)
@@ -447,7 +574,10 @@ class GeminiClient:
                 config=types.GenerateContentConfig(system_instruction=system_instruction, tools=tools),
             )
 
-        response = await self._call_with_model_cascade(_run, self._settings.gemini_chain_search, method="chat")
+        response = await self._call_with_model_cascade(
+            _run, self._settings.gemini_chain_search, method="chat",
+            contents=contents, system_instruction=system_instruction,
+        )
         text = getattr(response, "text", "") or ""
         return text, self._extract_web_sources(response)
 
@@ -516,7 +646,7 @@ class GeminiClient:
 
         try:
             response = await self._call_with_model_cascade(
-                _run, self._settings.gemini_chain_light, method="reformulate_query"
+                _run, self._settings.gemini_chain_light, method="reformulate_query", contents=prompt,
             )
             text = getattr(response, "text", "") or ""
             data = json.loads(text)
@@ -567,7 +697,8 @@ class GeminiClient:
             )
 
         response = await self._call_with_model_cascade(
-            _run, self._settings.gemini_chain_generation, method="format_structured"
+            _run, self._settings.gemini_chain_generation, method="format_structured",
+            contents=raw_answer, system_instruction=system_instruction,
         )
 
         text = getattr(response, "text", "") or ""
@@ -625,7 +756,9 @@ class GeminiClient:
                 ),
             )
 
-        response = await self._call_with_model_cascade(_run, chain, method=method)
+        response = await self._call_with_model_cascade(
+            _run, chain, method=method, contents=parts, system_instruction=system_instruction,
+        )
         text = getattr(response, "text", "") or ""
         try:
             result = json.loads(text)
