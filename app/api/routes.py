@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from collections import defaultdict
 from collections.abc import Iterator
@@ -457,9 +458,12 @@ def _gemini_http_errors() -> Iterator[None]:
             debug=exception_debug(exc),
         ) from exc
     except GeminiQuotaExceededError as exc:
+        retry_after = _DEFAULT_QUOTA_RETRY_AFTER_SECONDS
+        if exc.retry_after_seconds:
+            retry_after = max(1, math.ceil(exc.retry_after_seconds))
         raise ApiError(
             status.HTTP_429_TOO_MANY_REQUESTS, _GEMINI_QUOTA_DETAIL, ErrorCode.GEMINI_QUOTA,
-            headers={"Retry-After": str(_DEFAULT_QUOTA_RETRY_AFTER_SECONDS)}, debug=exception_debug(exc),
+            headers={"Retry-After": str(retry_after)}, debug=exception_debug(exc),
         ) from exc
     except GeminiInvalidResponseError as exc:
         raise ApiError(

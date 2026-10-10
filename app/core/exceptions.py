@@ -27,7 +27,17 @@ class GeminiUnavailableError(GeminiServiceError):
 
 
 class GeminiQuotaExceededError(GeminiServiceError):
-    """Le quota / la limite de débit de l'API Gemini a été dépassé."""
+    """Le quota / la limite de débit de l'API Gemini a été dépassé.
+
+    `retry_after_seconds` : `retryDelay` renvoyé par Google sur le dernier 429, si connu — utilisé
+    pour l'en-tête `Retry-After` (voir `app/api/routes.py::_gemini_http_errors`)."""
+
+    def __init__(
+        self, message: str, *, error_code: int | None = None, error_message: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message, error_code=error_code, error_message=error_message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class GeminiDailyQuotaExceededError(GeminiQuotaExceededError):
