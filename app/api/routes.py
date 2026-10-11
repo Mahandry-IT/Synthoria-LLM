@@ -100,6 +100,7 @@ from app.services.course_section_adder import add_course_sections
 from app.services.gemini_client import GeminiClient
 from app.services.media.visual_resolver import resolve_visuals_in_sections
 from app.services.recall_evaluator import evaluate_recall
+from app.services.course_regenerator import is_incomplete_course, regenerate_course
 from app.services.section_regenerator import regenerate_section
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
@@ -1299,6 +1300,53 @@ async def regenerate_incomplete_course_sections(
         result.remaining_section_ids = [str(s.get("id")) for s in incomplete[limit:]]
         result.stopped_reason = "limit"
     return result
+
+
+@router.post(
+    "/courses/{session_id}/regenerate",
+    response_model=CourseGenerationResponse,
+    dependencies=[Depends(_limit_regenerate)],
+)
+async def regenerate_whole_course(
+    session_id: UUID,
+    request: Request,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
+) -> CourseGenerationResponse:
+    """Régénère en entier un cours incomplet et le remplace en place (même id, même dossier).
+
+    La structure est conservée (mêmes sections, mêmes titres) ; les notes de section suivent leur
+    section. Le quiz et les flashcards repartent de zéro, leur contenu ayant changé. Rien n'est
+    modifié si la génération échoue.
+
+    404 si la session n'existe pas ; 409 si le cours est complet (ni section incomplète, ni résumé
+    ou quiz manquant) ; 429/502/503 selon l'erreur Gemini ; 429 au-delà de
+    `course_regenerate_rate_limit_per_minute`.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+    if not is_incomplete_course(row.gemini_response):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ce cours est complet : seul un cours incomplet peut être régénéré en entier",
+        )
+
+    with gemini_client.track_calls(), _gemini_http_errors():
+        try:
+            response = await regenerate_course(
+                row, gemini_client, request.app.state.vector_store, settings, db_session_factory=session_factory
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    async with session_factory() as db:
+        saved = await course_session_repository.replace_course(db, session_id, response)
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+    return response.model_copy(update={"session_id": session_id})
 
 
 def _limit_add_sections(request: Request, settings: Settings = Depends(get_settings)) -> None:

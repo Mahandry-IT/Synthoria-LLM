@@ -133,6 +133,44 @@ def _normalize_plan(plan: CoursePlanSchema) -> CoursePlanSchema:
     return plan.model_copy(update={"planned_sections": renumbered})
 
 
+async def build_retrieval_context(
+    question: str,
+    vector_store: NumpyVectorStore,
+    gemini_client: GeminiClient,
+    settings: Settings,
+    *,
+    mode: str,
+    top_k: int | None = None,
+    filename: str | list[str] | None = None,
+    full_document: bool = False,
+) -> dict[str, Any]:
+    """Contexte source d'un cours généré depuis un plan : extraits des fichiers (RAG) et, en mode
+    question_only avec grounding, synthèse d'une recherche web (1 appel) — sans elle les lots
+    n'auraient aucune source. Figé avec le plan, ou reconstitué pour régénérer un cours entier."""
+    search_query, chunks = await _retrieve_chunks(
+        question, vector_store, gemini_client, settings, mode, top_k, filename, full_document
+    )
+
+    web_research: dict[str, Any] | None = None
+    if mode == "question_only" and settings.gemini_use_search_grounding:
+        raw_answer, web_sources = await gemini_client.search_grounded(
+            prompt=(
+                "Recherche les notions essentielles, mécanismes, formules et cas d'usage du sujet "
+                f"suivant, pour permettre de bâtir un plan de cours complet.\nSujet : {question}"
+            ),
+            system_instruction=_get_plan_instructions(),
+        )
+        web_research = {"raw_answer": raw_answer, "web_sources": web_sources}
+
+    return {
+        # Seuls content/metadata sont conservés : `distance` est un artefact de ranking non sérialisable de façon fiable.
+        "chunks": [{"content": c["content"], "metadata": c.get("metadata", {})} for c in chunks],
+        "file_sources": _file_sources_from_chunks(chunks),
+        "search_query": search_query,
+        "web_research": web_research,
+    }
+
+
 async def generate_course_plan(
     question: str,
     vector_store: NumpyVectorStore,
@@ -166,28 +204,10 @@ async def generate_course_plan(
 
     Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
     """
-    search_query, chunks = await _retrieve_chunks(
-        question, vector_store, gemini_client, settings, mode, top_k, filename, full_document
+    retrieval_context = await build_retrieval_context(
+        question, vector_store, gemini_client, settings,
+        mode=mode, top_k=top_k, filename=filename, full_document=full_document,
     )
-
-    web_research: dict[str, Any] | None = None
-    if mode == "question_only" and settings.gemini_use_search_grounding:
-        raw_answer, web_sources = await gemini_client.search_grounded(
-            prompt=(
-                "Recherche les notions essentielles, mécanismes, formules et cas d'usage du sujet "
-                f"suivant, pour permettre de bâtir un plan de cours complet.\nSujet : {question}"
-            ),
-            system_instruction=_get_plan_instructions(),
-        )
-        web_research = {"raw_answer": raw_answer, "web_sources": web_sources}
-
-    retrieval_context: dict[str, Any] = {
-        # Seuls content/metadata sont conservés : `distance` est un artefact de ranking non sérialisable de façon fiable.
-        "chunks": [{"content": c["content"], "metadata": c.get("metadata", {})} for c in chunks],
-        "file_sources": _file_sources_from_chunks(chunks),
-        "search_query": search_query,
-        "web_research": web_research,
-    }
 
     prompt = (
         f'mode="{mode}"\n'
