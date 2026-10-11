@@ -57,6 +57,7 @@ from app.services.course_depth import (
 )
 from app.services.course_generator import (
     INCOMPLETE_SECTION_NOTICE,
+    NO_SOURCE_CONTEXT,
     _build_context_block,
     _coerce_known_format,
     ensure_distinct_direct_answer,
@@ -78,7 +79,7 @@ from app.services.visual_validation import visual_issues
 
 logger = logging.getLogger(__name__)
 
-_NO_CONTEXT = "Aucun contexte source fourni : s'appuyer sur les connaissances générales et signaler toute incertitude."
+_NO_CONTEXT = NO_SOURCE_CONTEXT
 _INCOMPLETE_NOTICE = INCOMPLETE_SECTION_NOTICE  # ré-export local : nombreux appels internes à ce module
 _WRAP_UP_FAILED_NOTE = (
     "Introduction, pièges courants, résumé et quiz non générés (erreur temporaire) : "
