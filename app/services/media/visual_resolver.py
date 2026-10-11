@@ -12,7 +12,7 @@ parce que sa résolution peut échouer.
 
 Lot 1 (fondations) : squelette (sémaphore, timeout, dédup sha256, route GET /media/{id}).
 Lot 3 : `_resolve_web` branché (Wikimedia Commons → Openverse, licence, vérification Gemini, cache).
-`_resolve_pdf` (Lot 2) et `_resolve_generated` (Lot 5) restent non branchés.
+`_resolve_pdf` (Lot 2) reste non branché.
 """
 
 from __future__ import annotations
@@ -229,18 +229,9 @@ async def _resolve_web(
     )
 
 
-async def _resolve_generated(
-    block: ApiContentBlock, *, settings: Settings, gemini_client: GeminiClient | None,
-    session_factory: async_sessionmaker | None, section_title: str,
-) -> ImageResolution | MediaAsset | None:
-    """Image générée par IA (Lot 5, sous flag). Non branché."""
-    return None
-
-
 _RESOLVERS = {
     "pdf": _resolve_pdf,
     "web": _resolve_web,
-    "generated": _resolve_generated,
 }
 
 
