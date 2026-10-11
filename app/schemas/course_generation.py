@@ -251,7 +251,7 @@ class ContentBlock(BaseModel):
         default=None,
         description="Set for IMAGE when image_source='web' — a short, specific search query (subject, in French or the course's language) to find the image, never a URL.",
     )
-    image_reference: str | None = Field(default=None, description="Set for IMAGE when image_source='pdf' — chunk/page reference of the source figure.")
+    image_reference: str | None = Field(default=None, description="Set for IMAGE when image_source='pdf' — the exact `fig-…` reference of a figure listed in the provided context, copied verbatim. Never invent one.")
     image_alt: str | None = Field(default=None, description="Set for IMAGE — short accessible alt text describing the image content, independent of the caption.")
     diagram: DiagramData | None = Field(default=None, description="Set for DIAGRAM — flows, sequences, hierarchies, cycles.")
     chart: ChartData | None = Field(default=None, description="Set for CHART — only for real numeric data, never invented figures.")

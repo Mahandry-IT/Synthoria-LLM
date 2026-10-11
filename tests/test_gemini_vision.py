@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from app.core.exceptions import GeminiQuotaExceededError
-from app.services.gemini_vision import extract_key_image_descriptions
+from app.services.gemini_vision import extract_key_images
 
 _LARGE_SIZE = 60  # au-dessus du seuil _MIN_IMAGE_DIMENSION_PX (50px)
 _SMALL_SIZE = 10  # en dessous, doit être écarté par le préfiltre
@@ -43,14 +43,14 @@ def _items(*, informative: bool = True, description: str = "desc", count: int = 
 
 @pytest.mark.asyncio
 async def test_returns_empty_when_no_gemini_client():
-    assert await extract_key_image_descriptions(_pdf_with_images(), None) == []
+    assert await extract_key_images(_pdf_with_images(), None) == []
 
 
 @pytest.mark.asyncio
 async def test_returns_empty_when_gemini_client_not_configured():
     client = AsyncMock()
     client.is_configured = False
-    assert await extract_key_image_descriptions(_pdf_with_images(), client) == []
+    assert await extract_key_images(_pdf_with_images(), client) == []
     client.describe_images.assert_not_awaited()
 
 
@@ -58,7 +58,7 @@ async def test_returns_empty_when_gemini_client_not_configured():
 async def test_returns_empty_for_pdf_without_images():
     client = AsyncMock()
     client.is_configured = True
-    assert await extract_key_image_descriptions(_pdf_without_images(), client) == []
+    assert await extract_key_images(_pdf_without_images(), client) == []
     client.describe_images.assert_not_awaited()
 
 
@@ -73,12 +73,13 @@ async def test_describes_images_via_a_single_batched_call():
         ]
     }
 
-    descriptions = await extract_key_image_descriptions(_pdf_with_images(images_per_page=2), client)
+    descriptions = await extract_key_images(_pdf_with_images(images_per_page=2), client)
 
     client.describe_images.assert_awaited_once()  # 1 seul appel réseau pour les 2 images
     assert len(descriptions) == 2
-    assert "Un graphique montrant une croissance." in descriptions[0]
-    assert "page 1" in descriptions[0]
+    assert descriptions[0].description == "Un graphique montrant une croissance."
+    assert (descriptions[0].page, descriptions[0].index) == (1, 1)
+    assert descriptions[0].data == client.describe_images.await_args.args[0][0][0]  # octets de l'image envoyée
 
 
 @pytest.mark.asyncio
@@ -87,7 +88,7 @@ async def test_skips_non_informative_image_without_failing():
     client.is_configured = True
     client.describe_images.return_value = _items(informative=False, description="")
 
-    assert await extract_key_image_descriptions(_pdf_with_images(), client) == []
+    assert await extract_key_images(_pdf_with_images(), client) == []
 
 
 @pytest.mark.asyncio
@@ -103,10 +104,10 @@ async def test_one_malformed_item_does_not_discard_the_others_in_the_same_batch(
         ]
     }
 
-    descriptions = await extract_key_image_descriptions(_pdf_with_images(images_per_page=2), client)
+    descriptions = await extract_key_images(_pdf_with_images(images_per_page=2), client)
 
     assert len(descriptions) == 1
-    assert "Description valide." in descriptions[0]
+    assert descriptions[0].description == "Description valide."
 
 
 @pytest.mark.asyncio
@@ -120,10 +121,10 @@ async def test_duplicate_index_in_response_only_uses_the_first_occurrence():
         ]
     }
 
-    descriptions = await extract_key_image_descriptions(_pdf_with_images(), client)
+    descriptions = await extract_key_images(_pdf_with_images(), client)
 
     assert len(descriptions) == 1
-    assert "Première description." in descriptions[0]
+    assert descriptions[0].description == "Première description."
 
 
 @pytest.mark.asyncio
@@ -134,7 +135,7 @@ async def test_best_effort_returns_empty_when_batched_call_fails():
     client.is_configured = True
     client.describe_images.side_effect = GeminiQuotaExceededError("quota dépassé")
 
-    descriptions = await extract_key_image_descriptions(_pdf_with_images(images_per_page=2), client)
+    descriptions = await extract_key_images(_pdf_with_images(images_per_page=2), client)
 
     assert descriptions == []
     client.describe_images.assert_awaited_once()
@@ -148,7 +149,7 @@ async def test_caps_pages_and_images_per_page_within_a_single_call():
     client.is_configured = True
     client.describe_images.return_value = _items(description="desc", count=10)
 
-    descriptions = await extract_key_image_descriptions(_pdf_with_images(images_per_page=3, pages=7), client)
+    descriptions = await extract_key_images(_pdf_with_images(images_per_page=3, pages=7), client)
 
     client.describe_images.assert_awaited_once()
     sent_images = client.describe_images.await_args.args[0]
@@ -157,12 +158,26 @@ async def test_caps_pages_and_images_per_page_within_a_single_call():
 
 
 @pytest.mark.asyncio
+async def test_page_and_image_caps_are_configurable():
+    client = AsyncMock()
+    client.is_configured = True
+    client.describe_images.return_value = _items(description="desc", count=3)
+
+    images = await extract_key_images(
+        _pdf_with_images(images_per_page=3, pages=7), client, max_pages=3, max_images_per_page=1
+    )
+
+    assert len(client.describe_images.await_args.args[0]) == 3
+    assert [image.page for image in images] == [1, 2, 3]
+
+
+@pytest.mark.asyncio
 async def test_filters_out_undersized_images_before_calling_gemini():
     """Une image trop petite (icône/puce décorative) est écartée localement, sans appel Gemini."""
     client = AsyncMock()
     client.is_configured = True
 
-    assert await extract_key_image_descriptions(_pdf_with_images(size=_SMALL_SIZE), client) == []
+    assert await extract_key_images(_pdf_with_images(size=_SMALL_SIZE), client) == []
     client.describe_images.assert_not_awaited()
 
 
@@ -183,7 +198,7 @@ async def test_deduplicates_identical_images_by_hash_before_calling_gemini():
     client.is_configured = True
     client.describe_images.return_value = _items(description="desc", count=1)
 
-    await extract_key_image_descriptions(pdf_bytes, client)
+    await extract_key_images(pdf_bytes, client)
 
     client.describe_images.assert_awaited_once()
     sent_images = client.describe_images.await_args.args[0]

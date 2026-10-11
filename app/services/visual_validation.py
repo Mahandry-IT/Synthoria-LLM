@@ -19,12 +19,11 @@ _SENTENCE_END_RE = re.compile(r"[.!?…]+(?:\s|$)")
 _WORD_RE = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
 # Blocs textuels : ne comptent pas comme « non textuels » dans le ratio.
 _TEXTUAL = {BlockType.TEXT, BlockType.DEFINITION, BlockType.CALLOUT}
-# TODO(supports visuels, Lot 2/3/5) : une fois un résolveur d'images réel branché
-# (app/services/media/visual_resolver.py), ajouter IMAGE ici. Tant qu'aucun résolveur n'existe
-# (Lot 1), chaque bloc IMAGE est de toute façon retiré : le compter comme textuel ne ferait que
-# déclencher un appel Gemini de régénération payant (_repair_incomplete_sections dans
-# course_plan_generator.py) sans jamais pouvoir aboutir à une image réellement affichée — pur
-# surcoût de quota tant que ce n'est pas le cas.
+# TODO(supports visuels) : les résolveurs d'images web et PDF étant branchés
+# (app/services/media/visual_resolver.py), ajouter IMAGE ici — sa résolution peut échouer, il ne
+# garantit donc pas un visuel. Non fait tant que le surcoût n'est pas mesuré : une section dont
+# le seul visuel est une image déclencherait un appel Gemini de régénération payant
+# (_repair_incomplete_sections dans course_plan_generator.py).
 _NOT_A_VISUAL_GUARANTEE = _TEXTUAL
 
 

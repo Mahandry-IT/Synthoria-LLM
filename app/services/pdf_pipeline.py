@@ -5,11 +5,13 @@ import re
 from typing import Any
 
 import fitz
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings
 from app.services.chunker import chunk_text
 from app.services.gemini_client import GeminiClient
-from app.services.gemini_vision import extract_key_image_descriptions
+from app.services.gemini_vision import KeyImage, extract_key_images
+from app.services.media.pdf_figures import store_pdf_figures
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +54,20 @@ def _extract_tables_from_pdf(pdf_bytes: bytes) -> list[str]:
     return tables
 
 
+def _image_part(image: KeyImage, ref: str | None) -> str:
+    """Texte indexé pour une image : avec `ref`, la figure est stockée et le modèle peut la citer
+    (`image_source="pdf"`, `image_reference=ref`) ; sans, seule sa description est exploitable."""
+    if ref is None:
+        return f"Image page {image.page} ({image.index}): {image.description}"
+    return f"Figure {ref} (page {image.page}) : {image.description}"
+
+
 async def extract_pdf_chunks(
-    pdf_bytes: bytes, filename: str, settings: Settings, gemini_client: GeminiClient | None = None
+    pdf_bytes: bytes,
+    filename: str,
+    settings: Settings,
+    gemini_client: GeminiClient | None = None,
+    db_session_factory: async_sessionmaker | None = None,
 ) -> list[dict[str, Any]]:
     # `fitz`/`camelot` sont synchrones et purement CPU-bound : sur un PDF de plusieurs centaines de
     # pages, les exécuter directement dans la coroutine bloquerait la boucle événementielle (donc
@@ -61,7 +75,12 @@ async def extract_pdf_chunks(
     # `asyncio.to_thread` les délègue à un thread, le event loop reste réactif entre-temps.
     text_pages = await asyncio.to_thread(_extract_text_from_pdf, pdf_bytes)
     table_pages = await asyncio.to_thread(_extract_tables_from_pdf, pdf_bytes)
-    image_descriptions = await extract_key_image_descriptions(pdf_bytes, gemini_client)
+    images = await extract_key_images(
+        pdf_bytes, gemini_client,
+        max_pages=settings.pdf_vision_max_pages, max_images_per_page=settings.pdf_vision_max_images_per_page,
+    )
+    refs = await store_pdf_figures(images, filename, settings=settings, session_factory=db_session_factory)
+    image_descriptions = [_image_part(image, ref) for image, ref in zip(images, refs, strict=True)]
     content_parts = text_pages + table_pages + image_descriptions
 
     chunks: list[dict[str, Any]] = []
@@ -90,6 +109,7 @@ async def extract_pdf_chunks(
             "text_pages": len(text_pages),
             "table_pages": len(table_pages),
             "image_descriptions": len(image_descriptions),
+            "figures_stored": sum(1 for ref in refs if ref is not None),
             "chunks": len(chunks),
         },
     )
