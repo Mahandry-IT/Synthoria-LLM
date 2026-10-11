@@ -124,3 +124,25 @@ async def test_prompt_references_the_original_course_question_and_section_title(
 
     prompt = gemini.format_structured.await_args.kwargs["raw_answer"]
     assert "Comment fonctionne un transformateur ?" in prompt and "Le transformateur" in prompt
+
+
+def _incomplete_section(title: str = "Le transformateur") -> dict:
+    """Sans sous-sections : toujours signalée par `section_issues`, donc déclenche la réparation."""
+    return {"type": "development", "title": title, "blocks": [{"type": "text", "text": "court"}], "subsections": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_repairs, expected_calls", [(1, 2), (0, 1), (2, 3)])
+async def test_repair_loop_respects_section_regenerate_max_repairs(max_repairs, expected_calls):
+    gemini = AsyncMock()
+    gemini.search_grounded.return_value = ("synthèse web", [])
+    gemini.format_structured.return_value = {"sections": [_incomplete_section()]}
+    settings = Settings(gemini_api_key="k", section_regenerate_max_repairs=max_repairs)
+
+    await regenerate_section(_row(mode="question_only"), "Le transformateur", gemini, AsyncMock(), settings)
+
+    assert gemini.format_structured.await_count == expected_calls
+
+
+def test_section_regenerate_max_repairs_defaults_to_one():
+    assert Settings(gemini_api_key="k").section_regenerate_max_repairs == 1

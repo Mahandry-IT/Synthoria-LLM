@@ -71,3 +71,11 @@ def test_invalid_response_maps_to_502():
             raise GeminiInvalidResponseError("json invalide")
 
     assert exc_info.value.status_code == 502
+
+
+def test_plain_quota_exceeded_uses_google_retry_delay_rounded_up():
+    with pytest.raises(HTTPException) as exc_info:
+        with _gemini_http_errors():
+            raise GeminiQuotaExceededError("rate limit minute", retry_after_seconds=37.2)
+
+    assert exc_info.value.headers["Retry-After"] == "38"

@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Date, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -129,6 +129,8 @@ class FlashcardReview(Base):
     box: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     due_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     last_result: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Variante à présenter à la prochaine échéance (0 = dérivée des `check_questions`, non stockée).
+    variant_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     __table_args__ = (Index("idx_flashcard_reviews_due_at", due_at),)
 
@@ -331,3 +333,69 @@ class IngestedFile(Base):
     )
 
     __table_args__ = (Index("idx_ingested_files_folder", "folder", "subfolder"),)
+
+
+class QuizBankQuestion(Base):
+    """Question de la banque de QCM d'un cours (lot 0 = quiz d'origine, lots suivants = recharges).
+
+    `payload` est la question complète au format d'API (`QuizQuestion`), bonnes réponses comprises :
+    elle n'est jamais renvoyée telle quelle au démarrage d'une tentative.
+    """
+
+    __tablename__ = "quiz_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    batch: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    times_served: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_served_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utc_now, nullable=False)
+
+    __table_args__ = (Index("idx_quiz_questions_session_served", "session_id", "times_served"),)
+
+
+class QuizAttempt(Base):
+    """Tentative de quiz notée côté serveur (`in_progress` → `completed` | `aborted`)."""
+
+    __tablename__ = "quiz_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_ids: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    answers: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    score: Mapped[float | None] = mapped_column(Numeric(5, 2, asdecimal=False), nullable=True)
+    max_score: Mapped[float] = mapped_column(Numeric(5, 2, asdecimal=False), nullable=False, default=20)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="in_progress")
+    abort_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utc_now, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (Index("idx_quiz_attempts_session_started", "session_id", "started_at"),)
+
+
+class FlashcardVariant(Base):
+    """Variante générée d'une carte de révision (même notion, autre formulation), numérotée à
+    partir de 1 ; la variante 0 reste celle dérivée des `check_questions` du cours."""
+
+    __tablename__ = "flashcard_variants"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    card_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    variant_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    front: Mapped[str] = mapped_column(Text, nullable=False)
+    choices: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    correct_indices: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utc_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "card_id", "variant_no", name="uq_flashcard_variants_card_variant"),
+    )

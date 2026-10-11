@@ -27,13 +27,18 @@ async def upsert(
     box: int,
     due_at: datetime,
     last_result: str,
+    variant_no: int = 0,
 ) -> FlashcardReview:
-    """Crée ou met à jour la révision d'une carte."""
+    """Crée ou met à jour la révision d'une carte (et la variante à présenter ensuite)."""
     review = await get_one(session, session_id, card_id)
     if review is None:
-        review = FlashcardReview(session_id=session_id, card_id=card_id, box=box, due_at=due_at, last_result=last_result)
+        review = FlashcardReview(
+            session_id=session_id, card_id=card_id, box=box, due_at=due_at, last_result=last_result,
+            variant_no=variant_no,
+        )
         session.add(review)
     else:
         review.box, review.due_at, review.last_result = box, due_at, last_result
+        review.variant_no = variant_no
     await session.commit()
     return review

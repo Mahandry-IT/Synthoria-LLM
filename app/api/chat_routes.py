@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.api.routes import _gemini_http_errors, get_gemini_client
 from app.api.schemas import ChatExchangeResponse, ChatHistoryResponse, ChatMessage, ChatQuota, ChatRequest
 from app.core.config import Settings, get_settings
+from app.core.errors import ApiError, ErrorCode
 from app.core.rate_limit import SlidingWindowLimiter
 from app.db.models import CourseChatMessage
 from app.repositories import course_chat_repository, course_session_repository
@@ -140,12 +141,13 @@ async def post_course_chat(
         row = await _require_session(db, session_id)
         used = await course_chat_repository.count_user_messages_since(db, session_id, day_start)
         if used >= limit:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=(
+            raise ApiError(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                (
                     f"Limite de {limit} messages par jour atteinte pour ce cours. "
                     "Vous pourrez poser de nouvelles questions après minuit (UTC)."
                 ),
+                ErrorCode.QUOTA_EXCEEDED,
                 headers={"Retry-After": str(max(1, math.ceil((resets_at - received_at).total_seconds())))},
             )
         messages = await course_chat_repository.list_for_session(db, session_id)

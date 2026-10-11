@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "Synthoria LLM"
+    # `development` ajoute un champ `debug` (exception, détail de validation) aux erreurs JSON.
+    # Toute autre valeur (défaut `production`) ne l'expose jamais.
+    app_env: str = "production"
     ollama_base_url: str = "http://ollama:11435"
     ollama_default_model: str = "llama3.2"
     ollama_embedding_model: str = "nomic-embed-text"
@@ -19,7 +22,7 @@ class Settings(BaseSettings):
     ollama_max_retries: int = 3
     request_max_prompt_length: int = 8000
     cors_allowed_origins: list[str] = ["*"]
-    rate_limit_per_minute: int = 30
+    rate_limit_per_minute: int = 60
     chroma_persist_directory: str = "./chroma_db"
     chroma_collection_name: str = "synthoria_documents"
     pdf_chunk_target_tokens: int = 400
@@ -50,6 +53,16 @@ class Settings(BaseSettings):
     # docker-compose, pour répartir le RPM partagé plutôt que de laisser chacun croire qu'il a
     # la totalité du quota — voir app/services/gemini_quota_manager.py.
     gemini_rpm_share: float = 1.0
+    # Tokens d'ENTRÉE par minute, par modèle (clé = nom du modèle), en complément du RPM : un seul
+    # gros prompt peut épuiser le quota TPM bien avant le RPM. Un modèle absent n'est pas limité en
+    # tokens (ni compté : aucun appel `count_tokens`). `gemini_rpm_share` s'y applique aussi.
+    gemini_model_tpm_limits: dict[str, int] = {}
+    # Appels Gemini simultanés par processus : 1 = strictement un à la fois, les requêtes HTTP
+    # concurrentes (ex. deux régénérations de section) font la queue au lieu de partir en rafale.
+    gemini_max_concurrency: int = 1
+    # Au-delà de ce `retryDelay` renvoyé par Google sur un 429, le modèle n'est pas réessayé :
+    # bascule immédiate sur le modèle suivant de la chaîne plutôt que de bloquer la requête.
+    gemini_retry_delay_max_seconds: float = 60.0
     # Quota JOURNALIER par modèle (clé = nom du modèle), en complément du RPM. Un modèle absent
     # de ce mapping n'a pas de budget RPD suivi (le disjoncteur ne s'appuie alors que sur
     # `exhausted_until`, posé après un 429 jour effectivement reçu de Google).
@@ -116,11 +129,21 @@ class Settings(BaseSettings):
     review_intervals_days: list[int] = [1, 3, 7, 21]
     review_sessions_scan_limit: int = 50
     review_rate_limit_per_minute: int = 60
+    # Variantes des cartes sues : cartes max par appel Gemini (1 appel par cours), cours en contexte
+    flashcard_variants_max_cards_per_call: int = 15
+    flashcard_variants_context_max_chars: int = 8000
 
     # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
     course_regenerate_rate_limit_per_minute: int = 6
+    # Tentatives de réparation après la régénération d'une section (chacune = 1 appel Gemini).
+    section_regenerate_max_repairs: int = 1
     course_note_max_length: int = 2000
     course_note_rate_limit_per_minute: int = 20
+
+    # Tentatives de quiz notées (banque de questions renouvelée par Gemini quand elle s'épuise)
+    quiz_attempt_rate_limit_per_minute: int = 10
+    quiz_submit_rate_limit_per_minute: int = 20
+    quiz_bank_context_max_chars: int = 12000
 
     # Ajout de contenu (sections) sur un cours déjà généré
     add_course_sections_rate_limit_per_minute: int = 6
@@ -149,6 +172,10 @@ class Settings(BaseSettings):
     # V2 : classement / catégorisation pédagogique des candidats (1 appel Flash-Lite de plus par cours).
     course_videos_ranking_enabled: bool = True
     youtube_ranking_min_score: int = 40
+
+    @property
+    def is_development(self) -> bool:
+        return self.app_env.strip().lower() == "development"
 
     @property
     def youtube_cache_ttl(self) -> timedelta:
