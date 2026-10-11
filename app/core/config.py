@@ -172,6 +172,8 @@ class Settings(BaseSettings):
     # V2 : classement / catégorisation pédagogique des candidats (1 appel Flash-Lite de plus par cours).
     course_videos_ranking_enabled: bool = True
     youtube_ranking_min_score: int = 40
+    # Au-delà, les vidéos restent dans le cours mais sans section (affichées au niveau du cours).
+    course_videos_max_per_section: int = 2
 
     @property
     def is_development(self) -> bool:
