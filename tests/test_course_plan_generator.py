@@ -7,7 +7,7 @@ import pytest
 
 from app.api.schemas import ApiPlannedSection
 from app.core.config import Settings
-from app.core.exceptions import GeminiInvalidResponseError, GeminiUnavailableError
+from app.core.exceptions import GeminiInvalidResponseError, GeminiQuotaExceededError, GeminiUnavailableError
 from app.schemas.course_generation import (
     CoursePlanSchema,
     COURSE_GENERATION_GEMINI_SCHEMA,
@@ -296,7 +296,7 @@ async def test_from_plan_reflects_user_edits(settings):
     result = await generate_course_from_validated_plan(_plan_row(), edited, client, settings)
 
     assert [s.title for s in result.sections] == ["Introduction", "Gamma renommée", "Alpha"]
-    assert "Beta" not in client.format_structured.call_args_list[0].kwargs["raw_answer"].split("CE lot")[1]
+    assert "Beta" not in _batch_calls(client)[0].kwargs["raw_answer"].split("CE lot")[1]
 
 
 @pytest.mark.asyncio
@@ -322,15 +322,103 @@ async def test_from_plan_all_batches_failing_raises(settings):
         )
 
 
-@pytest.mark.asyncio
-async def test_from_plan_wrap_up_failure_degrades_gracefully(settings):
-    result = await generate_course_from_validated_plan(
-        _plan_row(), _api_sections(["Alpha", "Beta"]), _fake_gemini(fail_wrap_up=True), settings
-    )
+def _wrap_up_calls(client: AsyncMock) -> list:
+    return [
+        c for c in client.format_structured.call_args_list
+        if c.kwargs["response_schema"] is COURSE_GENERATION_GEMINI_SCHEMA
+    ]
 
-    assert [s.title for s in result.sections] == ["Alpha", "Beta"]
-    assert result.quiz is None
-    assert "relancez" in result.next_steps[0]
+
+@pytest.mark.asyncio
+async def test_from_plan_wrap_up_failure_aborts_before_any_section_batch(settings):
+    """Un cours n'est jamais livré sans introduction, pièges, résumé ni quiz ; la clôture étant
+    générée en premier, son échec ne coûte aucun appel de lot."""
+    client = _fake_gemini(fail_wrap_up=True)
+
+    with pytest.raises(GeminiUnavailableError):
+        await generate_course_from_validated_plan(_plan_row(), _api_sections(["Alpha", "Beta"]), client, settings)
+
+    assert len(_wrap_up_calls(client)) == 2  # une reprise, pas plus
+    assert _batch_calls(client) == []
+
+
+@pytest.mark.asyncio
+async def test_from_plan_wrap_up_is_generated_before_the_section_batches(settings):
+    client = _fake_gemini()
+
+    await generate_course_from_validated_plan(_plan_row(), _api_sections(["Alpha"]), client, settings)
+
+    assert client.format_structured.call_args_list[0].kwargs["response_schema"] is COURSE_GENERATION_GEMINI_SCHEMA
+
+
+def _gemini_with_wrap_ups(*wrap_ups) -> AsyncMock:
+    """Clôtures renvoyées dans l'ordre (un dict, ou une exception à lever) ; lots toujours conformes."""
+    pending = list(wrap_ups)
+
+    async def format_structured(raw_answer, system_instruction, *, response_schema=None):
+        if response_schema is SectionsBatchSchema:
+            count = int(re.search(r"Génère exactement (\d+)", raw_answer).group(1))
+            return {"sections": [_dev_section(f"brut-{i}") for i in range(count)]}
+        outcome = pending.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    client = AsyncMock()
+    client.format_structured.side_effect = format_structured
+    return client
+
+
+def _wrap_up_without(section_type: str) -> dict:
+    wrap_up = _wrap_up_structured()
+    wrap_up["sections"] = [s for s in wrap_up["sections"] if s["type"] != section_type]
+    return wrap_up
+
+
+@pytest.mark.asyncio
+async def test_from_plan_wrap_up_is_retried_once_then_succeeds(settings):
+    client = _gemini_with_wrap_ups(GeminiUnavailableError("indisponible"), _wrap_up_structured())
+
+    result = await generate_course_from_validated_plan(_plan_row(), _api_sections(["Alpha"]), client, settings)
+
+    assert result.quiz and result.summary == "résumé"
+    assert len(_wrap_up_calls(client)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [
+    _wrap_up_without("common_pitfalls"),  # section principale absente
+    {**_wrap_up_structured(), "quiz": []},  # quiz vide
+    {**_wrap_up_structured(), "sections": [  # section principale présente mais sans contenu
+        {**s, "blocks": []} if s["type"] == "summary" else s for s in _wrap_up_structured()["sections"]
+    ]},
+])
+async def test_from_plan_incomplete_wrap_up_is_retried_then_aborts(settings, broken):
+    client = _gemini_with_wrap_ups(broken, broken)
+
+    with pytest.raises(GeminiInvalidResponseError, match="incomplète"):
+        await generate_course_from_validated_plan(_plan_row(), _api_sections(["Alpha"]), client, settings)
+
+    assert len(_wrap_up_calls(client)) == 2 and _batch_calls(client) == []
+
+
+@pytest.mark.asyncio
+async def test_from_plan_incomplete_wrap_up_fixed_by_the_retry_delivers_the_course(settings):
+    client = _gemini_with_wrap_ups(_wrap_up_without("summary"), _wrap_up_structured())
+
+    result = await generate_course_from_validated_plan(_plan_row(), _api_sections(["Alpha"]), client, settings)
+
+    assert result.summary == "résumé" and [s.title for s in result.sections] == ["Introduction", "Alpha"]
+
+
+@pytest.mark.asyncio
+async def test_from_plan_quota_error_on_wrap_up_is_not_retried(settings):
+    client = _gemini_with_wrap_ups(GeminiQuotaExceededError("quota"))
+
+    with pytest.raises(GeminiQuotaExceededError):
+        await generate_course_from_validated_plan(_plan_row(), _api_sections(["Alpha"]), client, settings)
+
+    assert len(_wrap_up_calls(client)) == 1 and _batch_calls(client) == []
 
 
 @pytest.mark.asyncio

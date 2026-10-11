@@ -28,7 +28,7 @@ from app.api.schemas import (
     CourseGenerationResponse,
 )
 from app.core.config import Settings, get_settings
-from app.core.exceptions import GeminiInvalidResponseError, GeminiServiceError
+from app.core.exceptions import GeminiInvalidResponseError, GeminiQuotaExceededError, GeminiServiceError
 from app.core.markdown import markdown_to_plain
 from app.db.models import CoursePlan
 from app.schemas.course_generation import (
@@ -82,10 +82,8 @@ logger = logging.getLogger(__name__)
 
 _NO_CONTEXT = NO_SOURCE_CONTEXT
 _INCOMPLETE_NOTICE = INCOMPLETE_SECTION_NOTICE  # ré-export local : nombreux appels internes à ce module
-_WRAP_UP_FAILED_NOTE = (
-    "Introduction, pièges courants, résumé et quiz non générés (erreur temporaire) : "
-    "relancez la génération du cours."
-)
+# Appels de clôture (introduction, pièges, résumé, suite, quiz) tentés avant d'abandonner le cours.
+_WRAP_UP_ATTEMPTS = 2
 
 
 # ─── Contexte figé ───────────────────────────────────────────
@@ -599,8 +597,11 @@ async def _generate_wrap_up(
     sources: list[Source],
     gemini_client: GeminiClient,
     profile: DepthProfile | None = None,
-) -> CourseGenerationSchema | None:
-    """Introduction, pièges, résumé, suite et quiz (taille selon le mode). Best-effort : None en cas d'échec."""
+) -> CourseGenerationSchema:
+    """Introduction, pièges, résumé, suite et quiz (taille selon le mode), en un appel.
+
+    Lève: GeminiServiceError (appel en échec), GeminiInvalidResponseError (réponse inexploitable).
+    """
     profile = profile or get_profile(LEGACY_DEPTH)
     development = [s for s in planned if s.type == "development"]
     wanted = [s for s in planned if s.type != "development"]
@@ -620,12 +621,12 @@ async def _generate_wrap_up(
         "Propose dans `video_search_queries` 1 à 2 requêtes de recherche YouTube courtes (jamais une URL). "
         "Retourne le JSON selon le schéma fourni."
     )
+    structured = await gemini_client.format_structured(
+        raw_answer=prompt,
+        system_instruction=_get_teacher_instructions(),
+        response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
+    )
     try:
-        structured = await gemini_client.format_structured(
-            raw_answer=prompt,
-            system_instruction=_get_teacher_instructions(),
-            response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
-        )
         structured = _coerce_known_format(dict(structured), mode)
         # Champs dérivés du plan/contexte : écrasés côté code plutôt que confiés au modèle.
         structured["meta"] = meta
@@ -640,9 +641,70 @@ async def _generate_wrap_up(
             if not _is_quiz_difficulty_error(exc):
                 raise
             return CourseGenerationSchema.model_validate(_rebalance_quiz_difficulty(structured))
-    except (GeminiServiceError, ValidationError, AttributeError, TypeError) as exc:
-        logger.warning("course_plan_wrap_up_failed", extra={"error": str(exc)})
-        return None
+    except (ValidationError, AttributeError, TypeError, ValueError) as exc:
+        raise GeminiInvalidResponseError(f"Clôture du cours invalide: {exc}") from exc
+
+
+def _wrap_up_gaps(wrap_up: CourseGenerationSchema, planned: list[ApiPlannedSection]) -> list[str]:
+    """Ce qui manque à la clôture pour que le cours soit livrable ([] si rien).
+
+    Chaque section hors développement du plan doit être présente avec du contenu, et le quiz ne
+    doit pas être vide.
+    """
+    available = [s for s in wrap_up.sections if s.type is not SectionType.DEVELOPMENT and _has_content(s)]
+    gaps: list[str] = []
+    for plan_section in planned:
+        if plan_section.type == "development":
+            continue
+        match = next((s for s in available if s.type.value == plan_section.type), None)
+        if match is None:
+            gaps.append(f"section « {plan_section.title} » ({plan_section.type}) absente ou vide")
+        else:
+            available.remove(match)
+    if not wrap_up.quiz:
+        gaps.append("quiz vide")
+    return gaps
+
+
+async def _generate_required_wrap_up(
+    planned: list[ApiPlannedSection],
+    *,
+    question: str,
+    mode: str,
+    context_block: str,
+    meta: dict[str, Any],
+    sources: list[Source],
+    gemini_client: GeminiClient,
+    profile: DepthProfile,
+) -> CourseGenerationSchema:
+    """Clôture complète du cours, ou une erreur : un cours n'est jamais livré sans son introduction,
+    ses pièges, son résumé, sa suite ni son quiz.
+
+    Au plus `_WRAP_UP_ATTEMPTS` appels. Un quota dépassé n'est pas retenté (l'appel suivant
+    échouerait de même) : l'erreur remonte telle quelle pour que le client sache quand réessayer.
+
+    Lève: GeminiQuotaExceededError, GeminiUnavailableError, GeminiInvalidResponseError.
+    """
+    last_error: GeminiServiceError | None = None
+    for attempt in range(1, _WRAP_UP_ATTEMPTS + 1):
+        try:
+            wrap_up = await _generate_wrap_up(
+                planned, question=question, mode=mode, context_block=context_block,
+                meta=meta, sources=sources, gemini_client=gemini_client, profile=profile,
+            )
+        except GeminiQuotaExceededError:
+            raise
+        except GeminiServiceError as exc:
+            last_error = exc
+            logger.warning("course_plan_wrap_up_failed", extra={"attempt": attempt, "error": str(exc)})
+            continue
+        gaps = _wrap_up_gaps(wrap_up, planned)
+        if not gaps:
+            return wrap_up
+        last_error = GeminiInvalidResponseError("Clôture du cours incomplète : " + " ; ".join(gaps))
+        logger.warning("course_plan_wrap_up_incomplete", extra={"attempt": attempt, "gaps": gaps})
+    assert last_error is not None  # _WRAP_UP_ATTEMPTS >= 1
+    raise last_error
 
 
 async def generate_course_from_validated_plan(
@@ -663,10 +725,11 @@ async def generate_course_from_validated_plan(
 
     Retour: CourseGenerationResponse (contrat identique à `/courses/generate`).
 
-    Fonctionnement: N lots de `course_plan_batch_size` sections DEVELOPMENT
-    (séquentiels — respecte le rate limit Gemini), puis 1 appel pour
-    introduction / pièges / résumé / suite / quiz, fusionnés dans l'ordre du
-    plan et mappés par le pipeline existant (`_validate_and_map`). Aucun plafond
+    Fonctionnement: d'abord 1 appel pour introduction / pièges / résumé / suite / quiz
+    (obligatoires : en cas d'échec, aucun cours n'est produit et aucun lot n'est lancé),
+    puis N lots de `course_plan_batch_size` sections DEVELOPMENT (séquentiels — respecte
+    le rate limit Gemini), fusionnés dans l'ordre du plan et mappés par le pipeline
+    existant (`_validate_and_map`). Aucun plafond
     de sections ; pas de contrôle de couverture post-génération (le plan fait foi).
     Le mode du plan (`plan_row.depth`, absent = approfondi) fixe les règles de forme des
     sections, la taille du quiz, et est inscrit dans `meta.depth` de la réponse.
@@ -674,7 +737,9 @@ async def generate_course_from_validated_plan(
     Résilience: un lot en échec devient des sections marquées « incomplètes » sans
     bloquer les autres ; si TOUS les lots échouent, l'erreur est propagée (502/503).
 
-    Lève: GeminiInvalidResponseError (tous les lots en échec ou mapping impossible).
+    Lève: GeminiQuotaExceededError / GeminiUnavailableError / GeminiInvalidResponseError
+    (clôture impossible ou incomplète), GeminiInvalidResponseError (tous les lots en échec ou
+    mapping impossible).
     """
     mode = plan_row.mode
     question = plan_row.question
@@ -692,6 +757,20 @@ async def generate_course_from_validated_plan(
     outline = _format_sections(sections, detailed=False)
     development = [s for s in sections if s.type == "development"]
     batches = _chunked(development, settings.course_plan_batch_size)
+
+    plan_meta = plan_row.plan["meta"]
+    meta = {
+        "title": plan_meta["title"],
+        "subject": plan_meta["subject"],
+        "language": plan_meta.get("language", "fr"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    # Avant les lots : la clôture ne dépend que du plan, et si elle échoue le cours n'est pas
+    # livré — autant le savoir avant d'avoir dépensé un appel par lot de sections.
+    wrap_up = await _generate_required_wrap_up(
+        sections, question=question, mode=mode, context_block=context_block,
+        meta=meta, sources=sources, gemini_client=gemini_client, profile=profile,
+    )
 
     generated: list[Section] = []
     last_error: Exception | None = None
@@ -718,20 +797,8 @@ async def generate_course_from_validated_plan(
             f"Génération impossible : tous les lots de sections ont échoué ({last_error})"
         ) from last_error
 
-    plan_meta = plan_row.plan["meta"]
-    meta = {
-        "title": plan_meta["title"],
-        "subject": plan_meta["subject"],
-        "language": plan_meta.get("language", "fr"),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    wrap_up = await _generate_wrap_up(
-        sections, question=question, mode=mode, context_block=context_block,
-        meta=meta, sources=sources, gemini_client=gemini_client, profile=profile,
-    )
-
     wrap_sections = _align_wrap_up_titles(
-        [s for s in (wrap_up.sections if wrap_up else []) if s.type is not SectionType.DEVELOPMENT],
+        [s for s in wrap_up.sections if s.type is not SectionType.DEVELOPMENT and _has_content(s)],
         [s for s in sections if s.type != "development"],
     )
     ordered_sections = (
@@ -745,11 +812,11 @@ async def generate_course_from_validated_plan(
         "meta": meta,
         "sources": [s.model_dump(mode="json") for s in sources],
         "sections": [s.model_dump(mode="json") for s in ordered_sections],
-        "direct_answer": wrap_up.direct_answer.model_dump(mode="json") if wrap_up and wrap_up.direct_answer else None,
-        "quiz": [q.model_dump(mode="json") for q in wrap_up.quiz] if wrap_up else [],
-        "confidence": wrap_up.confidence.value if wrap_up else "medium",
-        "unconfirmed_points": wrap_up.unconfirmed_points if wrap_up else [_WRAP_UP_FAILED_NOTE],
-        "video_search_queries": wrap_up.video_search_queries if wrap_up else [],
+        "direct_answer": wrap_up.direct_answer.model_dump(mode="json") if wrap_up.direct_answer else None,
+        "quiz": [q.model_dump(mode="json") for q in wrap_up.quiz],
+        "confidence": wrap_up.confidence.value,
+        "unconfirmed_points": wrap_up.unconfirmed_points,
+        "video_search_queries": wrap_up.video_search_queries,
     }
     with_videos = await attach_verified_videos(
         with_depth(_validate_and_map(structured, mode), profile.name), settings, gemini_client,
