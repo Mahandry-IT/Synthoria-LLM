@@ -76,6 +76,7 @@ from app.repositories import (
     course_section_note_repository,
     course_session_repository,
     course_video_note_repository,
+    ingested_file_figure_repository,
     ingested_file_repository,
 )
 from app.schemas.course_generation import CoursePlanSchema, SectionType
@@ -188,7 +189,10 @@ async def _ingest_single_pdf(
     try:
         content = await file.read()
         log_extra = {"pdf_filename": file.filename, "bytes": len(content)}
-        chunks = await extract_pdf_chunks(content, file.filename, settings, request.app.state.gemini_client)
+        chunks = await extract_pdf_chunks(
+            content, file.filename, settings, request.app.state.gemini_client,
+            getattr(request.app.state, "db_session_factory", None),
+        )
         if not chunks:
             logger.warning("pdf_ingest_no_chunks", extra=log_extra)
             return PDFIngestResponse(
@@ -365,8 +369,8 @@ async def list_files(
 
 @router.delete("/pdf/files/{filename}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_file(filename: str, request: Request) -> None:
-    """Supprime un fichier PDF, tous ses chunks du vector store et sa ligne de rangement. 404 si
-    inconnu.
+    """Supprime un fichier PDF, tous ses chunks du vector store, sa ligne de rangement et ses
+    figures (les images déjà affichées dans des cours restent servies). 404 si inconnu.
 
     La ligne SQL est supprimée d'abord : si la base échoue, rien n'est perdu et l'appel peut être
     rejoué ; l'ordre inverse laisserait une ligne orpheline qui rangerait un futur fichier de même
@@ -376,6 +380,7 @@ async def delete_file(filename: str, request: Request) -> None:
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         await ingested_file_repository.delete(db, filename)
+        await ingested_file_figure_repository.delete_by_filename(db, filename)
     vector_store = request.app.state.vector_store
     removed = vector_store.remove_file(filename)
     if not removed:

@@ -335,6 +335,33 @@ class IngestedFile(Base):
     __table_args__ = (Index("idx_ingested_files_folder", "folder", "subfolder"),)
 
 
+class IngestedFileFigure(Base):
+    """Figure d'un PDF ingéré, réutilisable par un bloc IMAGE `image_source="pdf"`.
+
+    `ref` (dérivée du contenu, voir `app.services.media.pdf_figures`) est la référence inscrite
+    dans le chunk de description de la figure, donc recopiée par le modèle dans `image_reference`.
+    Clé sur `filename` (comme le vector store) plutôt que sur `ingested_files`, dont un fichier
+    n'a une ligne que s'il a été rangé. L'image elle-même vit dans `media_assets` et survit à la
+    suppression du fichier : les cours déjà générés continuent de l'afficher.
+    """
+
+    __tablename__ = "ingested_file_figures"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    ref: Mapped[str] = mapped_column(String(32), nullable=False)
+    page: Mapped[int] = mapped_column(Integer, nullable=False)
+    asset_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("media_assets.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("filename", "ref", name="uq_ingested_file_figures_filename_ref"),
+        Index("idx_ingested_file_figures_ref", "ref"),
+    )
+
+
 class QuizBankQuestion(Base):
     """Question de la banque de QCM d'un cours (lot 0 = quiz d'origine, lots suivants = recharges).
 

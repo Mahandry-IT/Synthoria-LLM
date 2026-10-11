@@ -217,6 +217,8 @@ CHROMA_PERSIST_DIRECTORY=./chroma_db
 CHROMA_COLLECTION_NAME=synthoria_documents
 PDF_CHUNK_TARGET_TOKENS=400
 PDF_CHUNK_OVERLAP_TOKENS=50
+PDF_VISION_MAX_PAGES=5
+PDF_VISION_MAX_IMAGES_PER_PAGE=2
 GEMINI_API_KEY=
 GEMINI_MODEL_FLASH=gemini-2.5-flash
 GEMINI_MODEL_FLASH_LITE=gemini-2.5-flash-lite
@@ -308,11 +310,20 @@ Un bloc `graph` décrit une structure de données en **données pures** : le ser
 Comme pour les vidéos, Gemini ne produit jamais d'URL ni de nom de fichier d'image (il en invente régulièrement) : un bloc `image` porte seulement une **intention** — `image_source` (`pdf` / `web`), `image_query` (recherche web) ou `image_reference` (figure d'un PDF source), `image_alt` — résolue déterministiquement côté serveur (`app/services/media/visual_resolver.py`).
 
 - **Jamais de hotlink** : toute image retenue est téléchargée, vérifiée par sa signature réelle (pas par le `Content-Type` déclaré), ré-encodée en WebP (EXIF retiré, dimension bornée) et stockée localement (table `media_assets`, migration `008_add_media_assets`) ; le cours ne référence que `GET /media/{asset_id}`.
-- **Best-effort** : la résolution (téléchargement, re-recherche) a un budget de temps et de concurrence dédié (`MEDIA_RESOLVE_TIMEOUT_SECONDS`, `MEDIA_RESOLVE_CONCURRENCY`) ; un bloc `image` dont la résolution échoue est simplement retiré du cours, jamais laissé sans image. À terme (une fois `pdf` branché aussi), un bloc `image` ne devra pas non plus compter comme le visuel de la règle « visuel d'abord » (`app/services/visual_validation.py`) — désactivé pour l'instant, ce contrôle ferait encore payer un appel Gemini de régénération pour la source non branchée sans jamais pouvoir aboutir.
+- **Best-effort** : la résolution (téléchargement, re-recherche) a un budget de temps et de concurrence dédié (`MEDIA_RESOLVE_TIMEOUT_SECONDS`, `MEDIA_RESOLVE_CONCURRENCY`) ; un bloc `image` dont la résolution échoue est simplement retiré du cours, jamais laissé sans image. Un bloc `image` compte encore comme visuel dans la règle « visuel d'abord » (`app/services/visual_validation.py`), alors que sa résolution peut échouer : à resserrer si des sections se retrouvent sans visuel.
 - **Déduplication** : les images sont indexées par sha256 du contenu ré-encodé ; deux blocs qui résolvent vers la même image (même figure PDF réutilisée, même image web) partagent une seule ligne.
 - **Attribution** : les images sous licence CC BY / CC BY-SA affichent obligatoirement leur auteur et leur licence ; un bloc sans licence connue n'est pas retenu.
 
-Lot 1 (fondations) pose le schéma, le stockage et le routage. `pdf` (figures de PDF sources) reste non branché. Aucune image n'est générée par IA : un schéma relève des blocs `diagram`/`chart`.
+Lot 1 (fondations) pose le schéma, le stockage et le routage. Aucune image n'est générée par IA : un schéma relève des blocs `diagram`/`chart`/`graph`.
+
+**Lot 2 — figures des PDF ingérés, actif** :
+- **À l'ingestion** : les images jugées informatives par Gemini (appel groupé existant, `describe_images` — aucun appel supplémentaire) sont ré-encodées et stockées comme toute autre image (`media_assets`, `kind = "source"`), puis reliées à leur fichier (table `ingested_file_figures`, migration `021_add_ingested_file_figures`). Chaque figure reçoit une référence courte `fig-…`, dérivée de son contenu, inscrite dans son chunk de description : `Figure fig-0123456789ab (page 3) : …`.
+- **À la génération** : quand ce chunk fait partie du contexte fourni, Gemini peut émettre un bloc `image` avec `image_source: "pdf"` et `image_reference: "fig-…"`. Le serveur retrouve l'image par cette référence, sans téléchargement ni appel Gemini. Une référence inconnue ou mal formée retire le bloc.
+- **Portée** : `PDF_VISION_MAX_PAGES` (5) premières pages et `PDF_VISION_MAX_IMAGES_PER_PAGE` (2) images par page ; augmenter ces valeurs alourdit l'appel groupé d'ingestion. Seules les images raster sont extraites : une figure dessinée en vectoriel dans le PDF n'est pas vue.
+- **Fichiers déjà ingérés** : leurs figures n'ont pas été stockées. Supprimer puis réimporter le PDF pour en bénéficier.
+- **Suppression d'un fichier** : ses figures ne sont plus proposables à de nouveaux cours, mais les images déjà affichées dans des cours existants restent servies.
+- **Best-effort** : une image non ré-encodable (format non supporté) ou une base indisponible laisse la figure décrite en texte seulement, sans faire échouer l'ingestion.
+- L'application n'a pas de comptes utilisateurs : une figure n'est pas restreinte aux fichiers d'un cours donné. La référence ne se devine pas et n'apparaît que dans le contexte tiré des fichiers interrogés.
 
 **Lot 3 — images web (Wikimedia Commons → Openverse), actif** :
 - `image_source: "web"` avec une `image_query` déclenche une recherche Wikimedia Commons, puis Openverse seulement si Commons n'a pas fourni assez de candidats (`MEDIA_WEB_MAX_CANDIDATES`). Chaque candidat est téléchargé depuis un **hôte en liste blanche uniquement** (`upload.wikimedia.org`, `api.openverse.org` — jamais l'hôte d'origine d'une photo Openverse, ex. Flickr), filtré par licence (`MEDIA_WEB_ALLOWED_LICENSES`, ND/NC exclus par défaut) et taille minimale (`MEDIA_WEB_MIN_WIDTH`).
@@ -323,7 +334,6 @@ Lot 1 (fondations) pose le schéma, le stockage et le routage. `pdf` (figures de
 
 **Créer les identifiants Openverse** (optionnel) : [api.openverse.org/v1/auth_tokens/register](https://api.openverse.org/v1/auth_tokens/register/) → remplir le formulaire (nom, description, email) → `client_id` et `client_secret` renvoyés immédiatement, à copier dans `OPENVERSE_CLIENT_ID`/`OPENVERSE_CLIENT_SECRET`. Augmente le quota de requêtes par rapport à l'accès anonyme ; sans identifiants, le résolveur fonctionne quand même (Wikimedia Commons seul, ou Openverse en quota anonyme).
 
-Le lot suivant branchera les figures de PDF sources (Lot 2).
 
 ## Développement local (sans Docker)
 

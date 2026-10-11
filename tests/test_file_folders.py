@@ -254,6 +254,7 @@ def test_delete_file_also_removes_its_folder_row(client, monkeypatch):
     client.app.state.vector_store.remove_file.return_value = 3
     mock_delete = AsyncMock()
     monkeypatch.setattr(routes.ingested_file_repository, "delete", mock_delete)
+    monkeypatch.setattr(routes.ingested_file_figure_repository, "delete_by_filename", AsyncMock())
 
     res = client.delete("/pdf/files/a.pdf")
 

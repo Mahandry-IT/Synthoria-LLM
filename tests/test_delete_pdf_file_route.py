@@ -20,6 +20,7 @@ def client(monkeypatch):
 
     app.state.db_session_factory = factory
     monkeypatch.setattr(routes.ingested_file_repository, "delete", AsyncMock())
+    monkeypatch.setattr(routes.ingested_file_figure_repository, "delete_by_filename", AsyncMock())
     return TestClient(app)
 
 
@@ -30,6 +31,7 @@ def test_delete_known_file_returns_204(client):
 
     assert res.status_code == 204
     client.app.state.vector_store.remove_file.assert_called_once_with("doc.pdf")
+    assert routes.ingested_file_figure_repository.delete_by_filename.await_args.args[1] == "doc.pdf"
 
 
 def test_delete_unknown_file_returns_404(client):

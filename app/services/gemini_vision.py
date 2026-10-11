@@ -1,5 +1,6 @@
 import hashlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
@@ -11,13 +12,25 @@ from app.services.gemini_client import GeminiClient
 
 logger = logging.getLogger(__name__)
 
-_MAX_PAGES = 5
-_MAX_IMAGES_PER_PAGE = 2
+DEFAULT_MAX_PAGES = 5
+DEFAULT_MAX_IMAGES_PER_PAGE = 2
 # Écarte les icônes/puces/séparateurs décoratifs avant même l'appel Gemini — jamais assez
 # informatifs pour justifier un appel, quelle que soit la classification du modèle. Basé sur les
 # dimensions (pas le poids en octets : une image décorative en aplat de couleur compresse tout
 # aussi bien qu'un vrai contenu informatif, ce n'est pas un signal fiable).
 _MIN_IMAGE_DIMENSION_PX = 50
+
+
+@dataclass(frozen=True)
+class KeyImage:
+    """Image d'un PDF jugée informative par Gemini : octets bruts (jamais servis tels quels, voir
+    `app.services.media.pdf_figures`) et description textuelle."""
+
+    page: int
+    index: int
+    data: bytes
+    mime: str
+    description: str
 
 
 def _load_vision_instructions() -> str:
@@ -31,8 +44,15 @@ def _load_vision_instructions() -> str:
     return ""
 
 
-async def extract_key_image_descriptions(pdf_bytes: bytes, gemini_client: GeminiClient | None) -> list[str]:
-    """Retourne les descriptions des images clés d'un PDF après filtrage selon le fichier d'instruction Markdown.
+async def extract_key_images(
+    pdf_bytes: bytes,
+    gemini_client: GeminiClient | None,
+    *,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    max_images_per_page: int = DEFAULT_MAX_IMAGES_PER_PAGE,
+) -> list[KeyImage]:
+    """Retourne les images clés d'un PDF (avec leur description) après filtrage selon le fichier
+    d'instruction Markdown. `max_pages`/`max_images_per_page` bornent la taille de l'appel groupé.
 
     Préfiltre local (taille minimale, dédoublonnage par sha256) puis **un seul appel multimodal
     groupé** (`gemini_client.describe_images`) pour toutes les images candidates du PDF, au lieu
@@ -51,13 +71,13 @@ async def extract_key_image_descriptions(pdf_bytes: bytes, gemini_client: Gemini
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-        for page_index in range(min(len(doc), _MAX_PAGES)):
+        for page_index in range(min(len(doc), max_pages)):
             page = doc[page_index]
             images = page.get_images(full=True)
             if not images:
                 continue
 
-            for img_index, img_info in enumerate(images[:_MAX_IMAGES_PER_PAGE]):
+            for img_index, img_info in enumerate(images[:max_images_per_page]):
                 xref = img_info[0]
                 try:
                     base_image = doc.extract_image(xref)
@@ -122,7 +142,7 @@ async def extract_key_image_descriptions(pdf_bytes: bytes, gemini_client: Gemini
         logger.warning("gemini_vision_response_missing_items")
         return []
 
-    descriptions: list[str] = []
+    key_images: list[KeyImage] = []
     seen_indices: set[int] = set()
     for raw_item in raw_items:
         # Chaque item est validé individuellement : un item malformé (ex. description trop longue
@@ -136,10 +156,10 @@ async def extract_key_image_descriptions(pdf_bytes: bytes, gemini_client: Gemini
         if item.index in seen_indices or not (0 <= item.index < len(candidates)):
             continue
         seen_indices.add(item.index)
-        page, img = candidates[item.index][0], candidates[item.index][1]
+        page, img, data, mime = candidates[item.index]
         if not item.informative or not item.description.strip():
             logger.info("skip_non_informative_image", extra={"page": page, "img": img})
             continue
-        descriptions.append(f"Image page {page} ({img}): {item.description.strip()}")
+        key_images.append(KeyImage(page=page, index=img, data=data, mime=mime, description=item.description.strip()))
 
-    return descriptions
+    return key_images

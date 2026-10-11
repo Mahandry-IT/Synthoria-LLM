@@ -12,7 +12,7 @@ parce que sa résolution peut échouer.
 
 Lot 1 (fondations) : squelette (sémaphore, timeout, dédup sha256, route GET /media/{id}).
 Lot 3 : `_resolve_web` branché (Wikimedia Commons → Openverse, licence, vérification Gemini, cache).
-`_resolve_pdf` (Lot 2) reste non branché.
+Lot 2 : `_resolve_pdf` branché (figures stockées à l'ingestion, voir pdf_figures.py).
 """
 
 from __future__ import annotations
@@ -27,10 +27,11 @@ from app.api.schemas import ApiContentBlock, ApiImage, ApiImageAttribution, Cour
 from app.core.config import Settings
 from app.core.exceptions import GeminiServiceError, MediaFetchRejected, MediaFetchTooLarge, MediaWebError
 from app.db.models import MediaAsset
-from app.repositories import media_asset_repository, media_query_cache_repository
+from app.repositories import ingested_file_figure_repository, media_asset_repository, media_query_cache_repository
 from app.services.gemini_client import GeminiClient
 from app.services.media import licenses
 from app.services.media.fetcher import fetch_image
+from app.services.media.pdf_figures import FIGURE_REF_RE
 from app.services.media.providers import ImageProvider, WebImageCandidate
 from app.services.media.providers.openverse import OpenverseProvider
 from app.services.media.providers.wikimedia import WikimediaProvider
@@ -78,8 +79,16 @@ async def _resolve_pdf(
     block: ApiContentBlock, *, settings: Settings, gemini_client: GeminiClient | None,
     session_factory: async_sessionmaker | None, section_title: str,
 ) -> ImageResolution | MediaAsset | None:
-    """Figure extraite d'un PDF source (Lot 2). Non branché."""
-    return None
+    """Figure d'un PDF ingéré, désignée par la référence `fig-…` de son chunk de description.
+
+    Rien n'est téléchargé ni ré-encodé ici : la figure a été stockée à l'ingestion. Une référence
+    inconnue (inventée par le modèle, ou figure d'un fichier supprimé depuis) retire le bloc.
+    """
+    match = FIGURE_REF_RE.search(block.image_reference or "")
+    if match is None or session_factory is None:
+        return None
+    async with session_factory() as db:
+        return await ingested_file_figure_repository.get_asset_by_ref(db, match.group(0))
 
 
 def _build_web_providers(settings: Settings) -> list[ImageProvider]:

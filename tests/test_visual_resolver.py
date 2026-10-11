@@ -108,6 +108,60 @@ async def test_resolve_visuals_in_sections_ignores_image_block_without_source():
     assert result[0].subsections[0].blocks == []
 
 
+def _pdf_block(reference: str | None) -> ApiContentBlock:
+    return ApiContentBlock(type="image", image_source="pdf", image_reference=reference, image_alt="Schéma du graphe")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", ["fig-0123456789ab", "[fig-0123456789ab]", "Figure fig-0123456789ab (page 3)"])
+async def test_pdf_figure_reference_is_resolved_to_its_stored_asset(monkeypatch, reference):
+    asset = MediaAsset(
+        id=uuid.uuid4(), kind="source", sha256="a" * 64, mime="image/webp", width=640, height=480, bytes=10,
+        storage_path="x", alt_text="Graphe à quatre sommets.", source_filename="cours.pdf", source_page=3,
+    )
+    lookup = AsyncMock(return_value=asset)
+    monkeypatch.setattr(visual_resolver.ingested_file_figure_repository, "get_asset_by_ref", lookup)
+    section = _section_with([_pdf_block(reference)])
+
+    result = await resolve_visuals_in_sections(
+        [section], settings=Settings(), db_session_factory=_FakeSessionFactory()
+    )
+
+    block = result[0].subsections[0].blocks[0]
+    assert block.image.url == f"/media/{asset.id}" and block.image.alt == "Graphe à quatre sommets."
+    assert block.image_caption == "Schéma du graphe"
+    assert lookup.await_args.args[1] == "fig-0123456789ab"
+
+
+@pytest.mark.asyncio
+async def test_unknown_pdf_figure_reference_drops_the_block(monkeypatch):
+    lookup = AsyncMock(return_value=None)
+    monkeypatch.setattr(visual_resolver.ingested_file_figure_repository, "get_asset_by_ref", lookup)
+    section = _section_with([_text_block(), _pdf_block("fig-ffffffffffff")])
+
+    result = await resolve_visuals_in_sections(
+        [section], settings=Settings(), db_session_factory=_FakeSessionFactory()
+    )
+
+    assert [b.type for b in result[0].subsections[0].blocks] == ["text"]
+    lookup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reference", [None, "", "page 3", "fig-123", "figure-0123456789ab", "fig-0123456789AB"])
+async def test_malformed_pdf_figure_reference_never_reaches_the_database(monkeypatch, reference):
+    lookup = AsyncMock()
+    monkeypatch.setattr(visual_resolver.ingested_file_figure_repository, "get_asset_by_ref", lookup)
+    section = _section_with([_pdf_block(reference)])
+
+    result = await resolve_visuals_in_sections(
+        [section], settings=Settings(), db_session_factory=_FakeSessionFactory()
+    )
+
+    assert result[0].subsections[0].blocks == []
+    lookup.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_resolve_block_never_raises_on_resolver_exception(monkeypatch):
     async def boom(block, *, settings, **_kwargs):

@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     pdf_chunk_target_tokens: int = 400
     pdf_chunk_overlap_tokens: int = 50
     pdf_chunk_min_tokens: int = 80
+    # Images d'un PDF envoyées à Gemini à l'import (un seul appel groupé) : au plus
+    # `pdf_vision_max_pages` premières pages, `pdf_vision_max_images_per_page` images par page.
+    pdf_vision_max_pages: int = 5
+    pdf_vision_max_images_per_page: int = 2
     # Embeddings calculés en parallèle (borné) plutôt qu'un par un : un PDF de plusieurs centaines
     # de pages peut produire des centaines de chunks, et les enchaîner séquentiellement (1 aller-retour
     # Ollama chacun) fait facilement dépasser le timeout HTTP du proxy/client avant la fin.
