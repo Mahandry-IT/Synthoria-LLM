@@ -20,7 +20,7 @@ from app.core.config import Settings
 from app.db.models import CoursePlan
 from app.db.schema_sync import ADDED_COLUMNS, DATA_BACKFILLS, sync_added_columns
 from app.repositories import course_plan_repository
-from app.schemas.course_generation import CourseGenerationSchema, CoursePlanSchema, SectionsBatchSchema
+from app.schemas.course_generation import COURSE_GENERATION_GEMINI_SCHEMA, CoursePlanSchema, SectionsBatchSchema
 from app.services.course_plan_generator import generate_course_from_validated_plan, generate_course_plan
 from app.services.course_section_adder import add_course_sections
 from app.services.section_regenerator import regenerate_section
@@ -73,7 +73,7 @@ def _fake_gemini() -> AsyncMock:
         if response_schema is SectionsBatchSchema:
             count = int(re.search(r"Génère exactement (\d+)", raw_answer).group(1))
             return {"sections": [_conform_section(f"s{i}") for i in range(count)]}
-        assert response_schema is CourseGenerationSchema
+        assert response_schema is COURSE_GENERATION_GEMINI_SCHEMA
         return _wrap_up()
 
     client = AsyncMock()
@@ -179,7 +179,7 @@ async def test_from_plan_applies_mode_rules_and_writes_meta_depth():
 
     assert result.meta.depth == "express"
     assert "150 mots" in _prompts(client, SectionsBatchSchema)[0]
-    assert "5 à 6 questions" in _prompts(client, CourseGenerationSchema)[0]
+    assert "5 à 6 questions" in _prompts(client, COURSE_GENERATION_GEMINI_SCHEMA)[0]
 
 
 @pytest.mark.asyncio

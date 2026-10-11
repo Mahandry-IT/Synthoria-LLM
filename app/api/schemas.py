@@ -761,6 +761,29 @@ class AddCourseSectionsRequest(BaseModel):
         return v or None
 
 
+class SectionRegenerationFailure(BaseModel):
+    section_id: str
+    title: str
+    reason: Literal["invalid_response", "quota", "unavailable"]
+
+
+class RegenerateIncompleteSectionsResponse(BaseModel):
+    """Résultat d'une régénération groupée : succès partiel possible, jamais d'écriture partielle
+    d'une section (chaque section régénérée est enregistrée entière, les autres sont inchangées)."""
+
+    regenerated: list[CourseSection] = Field(default_factory=list, description="Sections régénérées et enregistrées.")
+    failed: list[SectionRegenerationFailure] = Field(
+        default_factory=list, description="Sections tentées sans succès : toujours incomplètes, relançables."
+    )
+    remaining_section_ids: list[str] = Field(
+        default_factory=list,
+        description="Sections incomplètes non tentées (arrêt sur quota/indisponibilité, ou plafond par appel atteint).",
+    )
+    stopped_reason: Literal["quota", "unavailable", "limit"] | None = Field(
+        None, description="Pourquoi le traitement s'est arrêté avant la dernière section ; null s'il est allé au bout."
+    )
+
+
 class AddCourseSectionsResponse(BaseModel):
     sections: list[CourseSection]
     next_steps: list[str] = Field(

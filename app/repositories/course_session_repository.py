@@ -1,12 +1,22 @@
 import uuid
 from typing import Any
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import CourseGenerationResponse
 from app.core.text_sanitize import sanitize_json
-from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER, CourseSession
+from app.db.models import (
+    DEFAULT_COURSE_FOLDER,
+    DEFAULT_COURSE_SUBFOLDER,
+    CourseSectionNote,
+    CourseSession,
+    FlashcardReview,
+    FlashcardVariant,
+    QuizAttempt,
+    QuizBankQuestion,
+)
 from app.repositories import folder_casing
 
 
@@ -223,6 +233,54 @@ async def append_sections(
         "sections": [*sections, *new_sections],
         "next_steps": next_steps,
     })
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+def _section_ids_by_title(gemini_response: dict[str, Any]) -> dict[str, str]:
+    """`{titre normalisé: id}` des sections ; un titre en double garde sa première section."""
+    ids: dict[str, str] = {}
+    for section in gemini_response.get("sections") or []:
+        ids.setdefault(str(section.get("title") or "").strip().casefold(), str(section.get("id")))
+    return ids
+
+
+async def replace_course(
+    session: AsyncSession, session_id: uuid.UUID, response: CourseGenerationResponse
+) -> CourseSession | None:
+    """Remplace le contenu d'un cours par `response`, en place (même id, même dossier). None si la
+    session est introuvable.
+
+    Dans la même transaction, tout ce qui dérive de l'ancien contenu est remis à zéro — banque de
+    quiz et tentatives, variantes et révisions de flashcards — et les notes de section suivent leur
+    section par titre (les `id` de section changent quand la structure change) ; une note dont la
+    section n'existe plus est supprimée. Notes vidéo, conversation et podcast ne sont pas touchés.
+    """
+    row = await get_by_id(session, session_id)
+    if row is None:
+        return None
+
+    old_titles = {section_id: title for title, section_id in _section_ids_by_title(row.gemini_response).items()}
+    new_response = response.model_dump(exclude={"session_id", "podcast_job_id"})
+    new_ids = _section_ids_by_title(new_response)
+
+    notes = (
+        await session.execute(select(CourseSectionNote).where(CourseSectionNote.session_id == session_id))
+    ).scalars().all()
+    moved = {
+        new_ids[title]: note.note
+        for note in notes
+        if (title := old_titles.get(note.section_id)) is not None and title in new_ids and note.note
+    }
+    await session.execute(sql_delete(CourseSectionNote).where(CourseSectionNote.session_id == session_id))
+    session.add_all(
+        CourseSectionNote(session_id=session_id, section_id=section_id, note=note) for section_id, note in moved.items()
+    )
+    for model in (QuizAttempt, QuizBankQuestion, FlashcardReview, FlashcardVariant):
+        await session.execute(sql_delete(model).where(model.session_id == session_id))
+
+    row.gemini_response = new_response
     await session.commit()
     await session.refresh(row)
     return row

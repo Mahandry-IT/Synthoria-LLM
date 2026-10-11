@@ -30,6 +30,8 @@ from app.api.schemas import (
     CoursePlanRequest,
     CoursePlanResponse,
     CourseSection,
+    RegenerateIncompleteSectionsResponse,
+    SectionRegenerationFailure,
     DocumentQueryRequest,
     DocumentQueryResponse,
     FileFolderResult,
@@ -70,7 +72,7 @@ from app.core.exceptions import (
     OllamaModelNotFoundError,
     OllamaUnavailableError,
 )
-from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER
+from app.db.models import CourseSession, DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER
 from app.repositories import (
     course_plan_repository,
     course_section_note_repository,
@@ -98,6 +100,7 @@ from app.services.course_section_adder import add_course_sections
 from app.services.gemini_client import GeminiClient
 from app.services.media.visual_resolver import resolve_visuals_in_sections
 from app.services.recall_evaluator import evaluate_recall
+from app.services.course_regenerator import is_incomplete_course, regenerate_course
 from app.services.section_regenerator import regenerate_section
 from app.services.ollama_client import OllamaClient
 from app.services.pdf_pipeline import extract_pdf_chunks
@@ -1170,6 +1173,62 @@ def _limit_regenerate(request: Request, settings: Settings = Depends(get_setting
     )
 
 
+_REGENERATION_IN_PROGRESS_DETAIL = "Une régénération de ce cours est déjà en cours, patientez qu'elle se termine"
+
+
+def _course_regenerations(request: Request) -> set[UUID]:
+    """Cours dont une régénération groupée ou complète est en cours (par processus, en mémoire)."""
+    running = getattr(request.app.state, "course_regenerations", None)
+    if running is None:
+        running = request.app.state.course_regenerations = set()
+    return running
+
+
+def _assert_no_course_regeneration(request: Request, session_id: UUID) -> None:
+    if session_id in _course_regenerations(request):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_REGENERATION_IN_PROGRESS_DETAIL)
+
+
+@contextmanager
+def _exclusive_course_regeneration(request: Request, session_id: UUID) -> Iterator[None]:
+    """Une seule régénération groupée ou complète à la fois par cours : deux exécutions parallèles
+    régénéreraient les mêmes sections deux fois (quota doublé) et s'écraseraient l'une l'autre.
+    409 si une autre est déjà en cours."""
+    _assert_no_course_regeneration(request, session_id)
+    running = _course_regenerations(request)
+    running.add(session_id)
+    try:
+        yield
+    finally:
+        running.discard(session_id)
+
+
+async def _regenerate_and_save_section(
+    request: Request, row: CourseSession, section: dict, gemini_client: GeminiClient, settings: Settings
+) -> CourseSection | None:
+    """Régénère `section` et l'enregistre à la place de l'ancienne (même `id`). None si la session
+    ou la section a disparu entre-temps.
+
+    Rien n'est enregistré en cas d'échec : la section reste telle quelle, donc relançable.
+
+    Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    section_id = str(section.get("id"))
+    regenerated = await regenerate_section(row, section["title"], gemini_client, request.app.state.vector_store, settings)
+    mapped = _map_sections_to_course_sections([regenerated])
+    if not mapped:
+        raise GeminiInvalidResponseError("Section régénérée vide")
+    mapped = await resolve_visuals_in_sections(
+        mapped, settings=settings, db_session_factory=session_factory, gemini_client=gemini_client,
+    )
+    updated = mapped[0].model_copy(update={"id": section_id})
+
+    async with session_factory() as db:
+        saved = await course_session_repository.update_section(db, row.id, section_id, updated.model_dump(mode="json"))
+    return updated if saved is not None else None
+
+
 @router.post(
     "/courses/{session_id}/sections/{section_id}/regenerate",
     response_model=CourseSection,
@@ -1187,7 +1246,9 @@ async def regenerate_course_section(
     404 si la session ou la section n'existe pas ; 409 si la section n'est pas incomplète (seules les
     sections en échec peuvent être régénérées) ; 429 au-delà de `course_regenerate_rate_limit_per_minute`.
     La note éventuelle de l'apprenant sur cette section est conservée (table séparée, non affectée).
+    409 aussi pendant une régénération groupée ou complète du même cours, qui traite déjà cette section.
     """
+    _assert_no_course_regeneration(request, session_id)
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         row = await course_session_repository.get_by_id(db, session_id)
@@ -1205,22 +1266,129 @@ async def regenerate_course_section(
             detail="Cette section n'est pas incomplète : seules les sections en échec peuvent être régénérées",
         )
 
-    vector_store = request.app.state.vector_store
     with _gemini_http_errors():
-        regenerated = await regenerate_section(row, section["title"], gemini_client, vector_store, settings)
-    mapped = _map_sections_to_course_sections([regenerated])
-    if not mapped:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Section régénérée vide")
-    mapped = await resolve_visuals_in_sections(
-        mapped, settings=settings, db_session_factory=session_factory, gemini_client=gemini_client,
-    )
-    updated = mapped[0].model_copy(update={"id": section_id})
-
-    async with session_factory() as db:
-        saved = await course_session_repository.update_section(db, session_id, section_id, updated.model_dump(mode="json"))
-    if saved is None:
+        updated = await _regenerate_and_save_section(request, row, section, gemini_client, settings)
+    if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session ou section introuvable")
     return updated
+
+
+@router.post(
+    "/courses/{session_id}/sections/regenerate-incomplete",
+    response_model=RegenerateIncompleteSectionsResponse,
+    dependencies=[Depends(_limit_regenerate)],
+)
+async def regenerate_incomplete_course_sections(
+    session_id: UUID,
+    request: Request,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
+) -> RegenerateIncompleteSectionsResponse:
+    """Régénère toutes les sections incomplètes d'un cours, une par une (débit Gemini respecté).
+
+    Chaque section réussie est enregistrée aussitôt : un arrêt en cours de route ne perd rien.
+    Le traitement s'arrête dès que le quota est dépassé ou que Gemini est indisponible (les appels
+    suivants échoueraient de même) et après `course_regenerate_incomplete_max_sections` sections ;
+    les sections non tentées sont listées dans `remaining_section_ids`, à relancer par un nouvel appel.
+
+    404 si la session n'existe pas ; 409 si aucune section n'est incomplète ou si une régénération
+    groupée ou complète de ce cours est déjà en cours ; 429/503 si la toute
+    première section échoue sur le quota ou l'indisponibilité de Gemini (rien n'a été fait) ;
+    429 au-delà de `course_regenerate_rate_limit_per_minute`.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+
+    incomplete = [s for s in (row.gemini_response.get("sections") or []) if is_incomplete_section_dict(s)]
+    if not incomplete:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ce cours n'a aucune section incomplète")
+
+    with _exclusive_course_regeneration(request, session_id):
+        return await _regenerate_incomplete_sections(request, row, incomplete, gemini_client, settings)
+
+
+async def _regenerate_incomplete_sections(
+    request: Request, row: CourseSession, incomplete: list[dict], gemini_client: GeminiClient, settings: Settings
+) -> RegenerateIncompleteSectionsResponse:
+    session_id = row.id
+    limit = max(1, settings.course_regenerate_incomplete_max_sections)
+    result = RegenerateIncompleteSectionsResponse()
+    for index, section in enumerate(incomplete[:limit]):
+        section_id, title = str(section.get("id")), str(section.get("title") or "")
+        try:
+            updated = await _regenerate_and_save_section(request, row, section, gemini_client, settings)
+        except (GeminiQuotaExceededError, GeminiUnavailableError) as exc:
+            if not result.regenerated and not result.failed:
+                # Rien n'a été fait : même réponse que la régénération unitaire (Retry-After compris).
+                with _gemini_http_errors():
+                    raise
+            reason = "quota" if isinstance(exc, GeminiQuotaExceededError) else "unavailable"
+            logger.warning("course_regenerate_incomplete_stopped", extra={"session_id": str(session_id), "reason": reason})
+            result.failed.append(SectionRegenerationFailure(section_id=section_id, title=title, reason=reason))
+            result.remaining_section_ids = [str(s.get("id")) for s in incomplete[index + 1 :]]
+            result.stopped_reason = reason
+            return result
+        except GeminiInvalidResponseError:
+            result.failed.append(SectionRegenerationFailure(section_id=section_id, title=title, reason="invalid_response"))
+            continue
+        if updated is not None:  # None : section supprimée entre-temps, rien à signaler
+            result.regenerated.append(updated)
+
+    if len(incomplete) > limit:
+        result.remaining_section_ids = [str(s.get("id")) for s in incomplete[limit:]]
+        result.stopped_reason = "limit"
+    return result
+
+
+@router.post(
+    "/courses/{session_id}/regenerate",
+    response_model=CourseGenerationResponse,
+    dependencies=[Depends(_limit_regenerate)],
+)
+async def regenerate_whole_course(
+    session_id: UUID,
+    request: Request,
+    gemini_client: GeminiClient = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
+) -> CourseGenerationResponse:
+    """Régénère en entier un cours incomplet et le remplace en place (même id, même dossier).
+
+    La structure est conservée (mêmes sections, mêmes titres) ; les notes de section suivent leur
+    section. Le quiz et les flashcards repartent de zéro, leur contenu ayant changé. Rien n'est
+    modifié si la génération échoue.
+
+    404 si la session n'existe pas ; 409 si le cours est complet (ni section incomplète, ni résumé
+    ou quiz manquant) ou si une régénération de ce cours est déjà en cours ; 429/502/503 selon l'erreur Gemini ; 429 au-delà de
+    `course_regenerate_rate_limit_per_minute`.
+    """
+    session_factory: async_sessionmaker = request.app.state.db_session_factory
+    async with session_factory() as db:
+        row = await course_session_repository.get_by_id(db, session_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+    if not is_incomplete_course(row.gemini_response):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ce cours est complet : seul un cours incomplet peut être régénéré en entier",
+        )
+
+    with _exclusive_course_regeneration(request, session_id):
+        with gemini_client.track_calls(), _gemini_http_errors():
+            try:
+                response = await regenerate_course(
+                    row, gemini_client, request.app.state.vector_store, settings, db_session_factory=session_factory
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+        async with session_factory() as db:
+            saved = await course_session_repository.replace_course(db, session_id, response)
+    if saved is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
+    return response.model_copy(update={"session_id": session_id})
 
 
 def _limit_add_sections(request: Request, settings: Settings = Depends(get_settings)) -> None:

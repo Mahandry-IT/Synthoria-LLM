@@ -139,9 +139,35 @@ async def test_repair_loop_respects_section_regenerate_max_repairs(max_repairs, 
     gemini.format_structured.return_value = {"sections": [_incomplete_section()]}
     settings = Settings(gemini_api_key="k", section_regenerate_max_repairs=max_repairs)
 
-    await regenerate_section(_row(mode="question_only"), "Le transformateur", gemini, AsyncMock(), settings)
+    with pytest.raises(GeminiInvalidResponseError):
+        await regenerate_section(_row(mode="question_only"), "Le transformateur", gemini, AsyncMock(), settings)
 
     assert gemini.format_structured.await_count == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_section_still_incomplete_after_repair_is_never_returned():
+    """Régression réelle : une section sans Pourquoi/Quoi/Comment était renvoyée puis enregistrée,
+    remplaçant la section de repli par une section vide et non relançable."""
+    gemini = AsyncMock()
+    gemini.search_grounded.return_value = ("synthèse web", [])
+    gemini.format_structured.return_value = {"sections": [{"type": "development", "title": "T", "challenge": "Défi."}]}
+
+    with pytest.raises(GeminiInvalidResponseError, match="encore incomplète"):
+        await regenerate_section(_row(mode="question_only"), "T", gemini, AsyncMock(), Settings(gemini_api_key="k"))
+
+
+@pytest.mark.asyncio
+async def test_repair_that_fixes_the_section_returns_it():
+    gemini = AsyncMock()
+    gemini.search_grounded.return_value = ("synthèse web", [])
+    gemini.format_structured.side_effect = [{"sections": [_incomplete_section()]}, {"sections": [_good_section()]}]
+
+    section = await regenerate_section(
+        _row(mode="question_only"), "Le transformateur", gemini, AsyncMock(), Settings(gemini_api_key="k")
+    )
+
+    assert [sub.title for sub in section.subsections] == ["Pourquoi", "Quoi", "Comment"]
 
 
 def test_section_regenerate_max_repairs_defaults_to_one():

@@ -138,7 +138,15 @@ class Settings(BaseSettings):
     flashcard_variants_context_max_chars: int = 8000
 
     # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
+    # Bloc GRAPH proposé à Gemini dans les sections de développement. Désactivé par défaut : avec
+    # lui, Flash-Lite renvoie nettement plus souvent des sections sans contenu (constaté en réel),
+    # donc des sections « incomplètes ». Jamais proposé pour les appels « cours entier » (rejetés
+    # par Gemini, voir COURSE_GENERATION_GEMINI_SCHEMA). Le contrat d'API garde le bloc `graph`.
+    course_graph_block_enabled: bool = False
     course_regenerate_rate_limit_per_minute: int = 6
+    # Sections traitées par appel de régénération groupée : borne la durée de la requête et le
+    # nombre d'appels Gemini qu'elle déclenche ; le reste est renvoyé dans `remaining_section_ids`.
+    course_regenerate_incomplete_max_sections: int = 10
     # Tentatives de réparation après la régénération d'une section (chacune = 1 appel Gemini).
     section_regenerate_max_repairs: int = 1
     course_note_max_length: int = 2000

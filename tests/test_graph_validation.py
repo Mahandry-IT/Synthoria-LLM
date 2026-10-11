@@ -76,3 +76,40 @@ def test_invalid_tree_is_rejected(overrides):
 
     with pytest.raises(ValidationError):
         ApiGraph.model_validate({**tree, **overrides})
+
+
+# ─── Schémas envoyés à Gemini ──────────────────────────────────
+
+
+def test_whole_course_gemini_schema_does_not_offer_the_graph_block():
+    """Avec GRAPH, le schéma « cours entier » est rejeté par Gemini (400 INVALID_ARGUMENT, constaté
+    en réel) : il ne doit le proposer sous aucune forme, sinon toute génération directe échoue et
+    un cours généré depuis un plan perd introduction, pièges, résumé et quiz."""
+    import json
+
+    from app.schemas.course_generation import COURSE_GENERATION_GEMINI_SCHEMA, CourseGenerationSchema, SectionsBatchSchema
+
+    defs = COURSE_GENERATION_GEMINI_SCHEMA["$defs"]
+    assert "graph" not in defs["ContentBlock"]["properties"]
+    assert "graph" not in defs["BlockType"]["enum"]
+    assert not [name for name in defs if name.startswith("Graph")]
+    assert "#/$defs/Graph" not in json.dumps(COURSE_GENERATION_GEMINI_SCHEMA)  # aucune référence orpheline
+    # Seul GRAPH est retiré : le reste du schéma est celui de CourseGenerationSchema.
+    full = CourseGenerationSchema.model_json_schema()
+    assert COURSE_GENERATION_GEMINI_SCHEMA["properties"] == full["properties"]
+    assert set(full["$defs"]) - set(defs) == {"GraphData", "GraphNode", "GraphEdge", "GraphStep", "GraphLayout"}
+    # Les sections de développement, elles, continuent de le proposer.
+    assert "GraphData" in SectionsBatchSchema.model_json_schema()["$defs"]
+
+
+def test_strip_graph_block_never_mutates_the_schema_and_ignores_schemas_without_it():
+    from app.schemas.course_generation import SectionsBatchSchema, VideoRankingSchema, strip_graph_block
+
+    original = SectionsBatchSchema.model_json_schema()
+    stripped = strip_graph_block(original)
+
+    assert "GraphData" in original["$defs"] and "graph" in original["$defs"]["ContentBlock"]["properties"]
+    assert "GraphData" not in stripped["$defs"]
+    unrelated = VideoRankingSchema.model_json_schema()
+    assert strip_graph_block(unrelated) is unrelated
+    assert strip_graph_block({}) == {}

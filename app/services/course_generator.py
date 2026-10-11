@@ -25,6 +25,7 @@ from app.core.exceptions import (
     GeminiUnavailableError,
 )
 from app.schemas.course_generation import (
+    COURSE_GENERATION_GEMINI_SCHEMA,
     BlockType,
     CoverageCompletionSchema,
     CourseGenerationSchema,
@@ -327,14 +328,17 @@ def is_incomplete_section_dict(section: dict[str, Any]) -> bool:
     Ne fait jamais confiance au seul champ `incomplete` stocké : une session persistée avant
     l'existence de ce champ (ou de tout futur format de repli) ne l'aurait jamais eu calculé, alors
     que son contenu est bien le texte de repli. Toujours recalculé depuis le contenu, à la lecture.
+
+    Une section sans aucun contenu est aussi incomplète : c'est ce que laissait une régénération
+    ratée avant qu'elle ne refuse d'enregistrer une section invalide (`section_regenerator`).
     """
     if section.get("comment", "").strip() == INCOMPLETE_SECTION_NOTICE:
         return True
-    return any(
-        b.get("text") == INCOMPLETE_SECTION_NOTICE
-        for sub in section.get("subsections") or []
-        for b in sub.get("blocks") or []
-    )
+    blocks = [b for sub in section.get("subsections") or [] for b in sub.get("blocks") or []]
+    if any(b.get("text") == INCOMPLETE_SECTION_NOTICE for b in blocks):
+        return True
+    # Section sans aucun contenu (ni blocs, ni texte legacy) : rien à lire, donc à régénérer.
+    return not blocks and not any((section.get(key) or "").strip() for key in ("quoi", "pourquoi", "comment"))
 
 
 def _map_sections_to_course_sections(
@@ -710,7 +714,7 @@ async def _validate_and_map_with_retry(
             retried = await gemini_client.format_structured(
                 raw_answer=retry_prompt,
                 system_instruction=system_instruction,
-                response_schema=CourseGenerationSchema,
+                response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
             )
             return _validate_and_map(retried, mode)
         except Exception:
@@ -1079,7 +1083,7 @@ async def generate_course_from_question(
         structured = await gemini_client.format_structured(
             raw_answer=prompt,
             system_instruction=system_instruction,
-            response_schema=CourseGenerationSchema,
+            response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
         )
         validated = await _validate_and_map_with_retry(
             structured, mode, gemini_client, system_instruction, prompt,
@@ -1123,7 +1127,7 @@ async def generate_course_from_question(
     structured = await gemini_client.format_structured(
         raw_answer=formatting_prompt,
         system_instruction=system_instruction,
-        response_schema=CourseGenerationSchema,
+        response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
     )
     validated = await _validate_and_map_with_retry(
         structured, mode, gemini_client, system_instruction, formatting_prompt,
