@@ -353,7 +353,7 @@ def _structural_gaps(section: Section) -> list[str]:
 
 def _section_text(section: Section) -> str:
     """Concatène tout le texte exploitable d'une section (blocs texte, tableaux, formules, légendes,
-    diagrammes, graphiques) — utilisé pour la vérification déterministe de couverture (repli quand
+    diagrammes, graphiques, graphes) — utilisé pour la vérification déterministe de couverture (repli quand
     `covered_subtopics` n'a pas été rempli par le modèle)."""
     parts: list[str] = []
     for sub in section.subsections:
@@ -376,6 +376,10 @@ def _section_text(section: Section) -> str:
             if b.chart:
                 parts.append(b.chart.caption)
                 parts.extend(b.chart.labels)
+            if b.graph:
+                parts.append(b.graph.caption)
+                parts.extend(n.label for n in b.graph.nodes)
+                parts.extend(s.caption for s in b.graph.steps)
     return " ".join(parts)
 
 

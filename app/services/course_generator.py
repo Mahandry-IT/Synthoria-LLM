@@ -25,6 +25,7 @@ from app.core.exceptions import (
     GeminiUnavailableError,
 )
 from app.schemas.course_generation import (
+    BlockType,
     CoverageCompletionSchema,
     CourseGenerationSchema,
     DirectAnswer,
@@ -259,6 +260,9 @@ def _block_to_text(block: Any) -> str:
 
 def _map_block(block: Any) -> ApiContentBlock | None:
     """ContentBlock Gemini → bloc d'API. None si le bloc est vide ou dépasse les limites de rendu."""
+    if block.type is BlockType.GRAPH and block.graph is None:
+        logger.warning("course_block_dropped", extra={"type": block.type.value})
+        return None
     data = block.model_dump(mode="json", exclude_none=True)
     data["type"] = block.type.value
     if block.formula:
