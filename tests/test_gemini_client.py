@@ -156,6 +156,39 @@ async def test_format_structured_parses_json():
     assert result == {"summary": "ok"}
 
 
+def _sent_schema(fake_client: MagicMock) -> dict:
+    return fake_client.models.generate_content.call_args.kwargs["config"].response_json_schema
+
+
+@pytest.mark.asyncio
+async def test_format_structured_hides_the_graph_block_from_section_schemas_by_default():
+    """Régression réelle : avec le bloc GRAPH dans le schéma, Flash-Lite renvoyait le plus souvent
+    des sections sans aucun contenu, donc des sections « incomplètes »."""
+    from app.schemas.course_generation import SectionsBatchSchema
+
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"sections": []}'))
+    client = GeminiClient(_settings(), client=fake_client)
+
+    await client.format_structured("raw", response_schema=SectionsBatchSchema, system_instruction="system")
+
+    sent = _sent_schema(fake_client)
+    assert "GraphData" not in sent["$defs"] and "graph" not in sent["$defs"]["ContentBlock"]["properties"]
+    assert "graph" not in sent["$defs"]["BlockType"]["enum"]
+    assert "table" in sent["$defs"]["ContentBlock"]["properties"]  # le reste du schéma est intact
+
+
+@pytest.mark.asyncio
+async def test_format_structured_offers_the_graph_block_when_enabled():
+    from app.schemas.course_generation import SectionsBatchSchema
+
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text='{"sections": []}'))
+    client = GeminiClient(_settings(course_graph_block_enabled=True), client=fake_client)
+
+    await client.format_structured("raw", response_schema=SectionsBatchSchema, system_instruction="system")
+
+    assert "GraphData" in _sent_schema(fake_client)["$defs"]
+
+
 @pytest.mark.asyncio
 async def test_format_structured_invalid_json_raises():
     response = SimpleNamespace(text="not json")

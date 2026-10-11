@@ -306,6 +306,7 @@ Un bloc `graph` décrit une structure de données en **données pures** : le ser
 - **Garanties serveur** (`ApiGraph`, `app/api/schemas.py`) : identifiants uniques, arêtes et étapes ne référençant que des éléments existants, bornes respectées (≤ 20 nœuds, 40 arêtes, 12 étapes), et pour `tree` une seule racine, un seul parent par nœud, aucun cycle. Un graphe incohérent est retiré du cours, jamais « réparé ».
 - **Libellés non fiables** : `label` et `caption` viennent du modèle ; le client les affiche comme du texte, jamais comme du HTML.
 - Les cours enregistrés avant l'ajout de ce bloc n'en contiennent pas : le champ `graph` est facultatif.
+- **Désactivé par défaut** (`COURSE_GRAPH_BLOCK_ENABLED=false`) : le bloc n'est alors proposé à Gemini dans aucun appel, donc aucun cours n'en contient. Constat en réel sur Flash-Lite : avec ce bloc dans le schéma des sections, le modèle renvoie le plus souvent une section sans contenu (3 essais sur 3, contre 1 sur 3 sans), qui devient une section « incomplète ». À n'activer que pour expérimenter, de préférence avec un modèle plus capable. Il n'est jamais proposé pour les appels « cours entier » (génération directe, clôture), que Gemini rejette avec lui (`400 INVALID_ARGUMENT`).
 
 ### Supports visuels
 

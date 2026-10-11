@@ -100,3 +100,16 @@ def test_whole_course_gemini_schema_does_not_offer_the_graph_block():
     assert set(full["$defs"]) - set(defs) == {"GraphData", "GraphNode", "GraphEdge", "GraphStep", "GraphLayout"}
     # Les sections de développement, elles, continuent de le proposer.
     assert "GraphData" in SectionsBatchSchema.model_json_schema()["$defs"]
+
+
+def test_strip_graph_block_never_mutates_the_schema_and_ignores_schemas_without_it():
+    from app.schemas.course_generation import SectionsBatchSchema, VideoRankingSchema, strip_graph_block
+
+    original = SectionsBatchSchema.model_json_schema()
+    stripped = strip_graph_block(original)
+
+    assert "GraphData" in original["$defs"] and "graph" in original["$defs"]["ContentBlock"]["properties"]
+    assert "GraphData" not in stripped["$defs"]
+    unrelated = VideoRankingSchema.model_json_schema()
+    assert strip_graph_block(unrelated) is unrelated
+    assert strip_graph_block({}) == {}

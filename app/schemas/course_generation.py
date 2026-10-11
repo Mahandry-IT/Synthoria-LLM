@@ -758,20 +758,35 @@ class CourseGenerationSchema(BaseModel):
         return self
 
 
-def _json_schema_without_graph(model: type[BaseModel]) -> dict:
-    """JSON schema de `model` où le bloc GRAPH n'existe pas (ni le champ, ni le type, ni ses modèles)."""
-    schema = model.model_json_schema()
-    defs = schema["$defs"]
-    del defs["ContentBlock"]["properties"]["graph"]
-    defs["BlockType"]["enum"] = [value for value in defs["BlockType"]["enum"] if value != BlockType.GRAPH.value]
-    for name in ("GraphData", "GraphNode", "GraphEdge", "GraphStep", "GraphLayout"):
-        del defs[name]
-    return schema
+_GRAPH_DEFS = ("GraphData", "GraphNode", "GraphEdge", "GraphStep", "GraphLayout")
 
 
-# Schéma envoyé à Gemini pour les appels « cours entier » (génération directe, conclusion d'un cours
-# depuis un plan). Avec le bloc GRAPH, `CourseGenerationSchema` dépasse la complexité que Gemini
-# accepte : l'appel est rejeté (400 INVALID_ARGUMENT) avant toute génération. Le bloc GRAPH reste
-# proposé par `SectionsBatchSchema` (sections de développement), plus petit. La réponse se valide
-# toujours avec `CourseGenerationSchema`, dont le champ `graph` est facultatif.
-COURSE_GENERATION_GEMINI_SCHEMA: dict = _json_schema_without_graph(CourseGenerationSchema)
+def strip_graph_block(schema: dict) -> dict:
+    """Copie de `schema` (JSON schema d'un modèle de ce module) où le bloc GRAPH n'existe pas : ni
+    le champ, ni le type de bloc, ni ses modèles. Renvoie `schema` tel quel s'il ne le contient pas.
+
+    La réponse reste validable par les modèles Pydantic d'origine : leur champ `graph` est facultatif.
+    """
+    defs = schema.get("$defs") or {}
+    if "GraphData" not in defs:
+        return schema
+    content_block = defs["ContentBlock"]
+    block_type = defs["BlockType"]
+    return {
+        **schema,
+        "$defs": {
+            **{name: value for name, value in defs.items() if name not in _GRAPH_DEFS},
+            "ContentBlock": {
+                **content_block,
+                "properties": {k: v for k, v in content_block["properties"].items() if k != "graph"},
+            },
+            "BlockType": {**block_type, "enum": [v for v in block_type["enum"] if v != BlockType.GRAPH.value]},
+        },
+    }
+
+
+# Schéma envoyé à Gemini pour les appels « cours entier » (génération directe, clôture d'un cours
+# depuis un plan), toujours sans le bloc GRAPH : avec lui, `CourseGenerationSchema` dépasse la
+# complexité que Gemini accepte et l'appel est rejeté (400 INVALID_ARGUMENT) avant toute génération.
+# Pour les schémas de sections, plus petits, voir `Settings.course_graph_block_enabled`.
+COURSE_GENERATION_GEMINI_SCHEMA: dict = strip_graph_block(CourseGenerationSchema.model_json_schema())
