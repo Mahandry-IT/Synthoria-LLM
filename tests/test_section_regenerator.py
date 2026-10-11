@@ -47,7 +47,7 @@ async def test_question_only_mode_uses_search_grounded_not_the_vector_store():
     gemini.search_grounded.return_value = ("synthèse web", [{"type": "web", "reference": "https://x"}])
     gemini.format_structured.return_value = {"sections": [_good_section("Le transformateur")]}
     vector_store = AsyncMock()
-    settings = Settings(gemini_api_key="k")
+    settings = Settings(gemini_api_key="k", gemini_use_search_grounding=True)
 
     result = await regenerate_section(_row(mode="question_only"), "Le transformateur", gemini, vector_store, settings)
 

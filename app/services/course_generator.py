@@ -57,6 +57,10 @@ INCOMPLETE_SECTION_NOTICE = (
     "⚠️ Section incomplète : la génération de son contenu a échoué (erreur temporaire). "
     "Relancez la génération du cours pour l'obtenir."
 )
+# Contexte d'un cours sans source (ni fichier, ni recherche web) : le modèle répond de mémoire.
+NO_SOURCE_CONTEXT = (
+    "Aucun contexte source fourni : s'appuyer sur les connaissances générales et signaler toute incertitude."
+)
 
 
 def _load_instruction(filename: str, fallback: str) -> str:
@@ -111,8 +115,14 @@ async def session_context_block(
 ) -> str:
     """Contexte source pour une opération sur une session de cours déjà persistée (régénération
     de section, ajout de contenu) : même origine que la génération initiale (RAG fichiers ou
-    recherche web), reconstituée à la demande plutôt que figée en base."""
+    recherche web), reconstituée à la demande plutôt que figée en base.
+
+    Sans grounding (`GEMINI_USE_SEARCH_GROUNDING=false`), un cours `question_only` n'a aucune
+    source, comme à sa génération : sur un palier sans quota de recherche, l'outil google_search
+    renvoie 429 même quand le quota du modèle est intact."""
     if mode == "question_only":
+        if not settings.gemini_use_search_grounding:
+            return NO_SOURCE_CONTEXT
         raw_answer, web_sources = await gemini_client.search_grounded(
             prompt=f"Question de l'utilisateur : {question}",
             system_instruction=_get_teacher_instructions(),

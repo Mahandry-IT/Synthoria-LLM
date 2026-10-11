@@ -10,6 +10,7 @@ from app.core.exceptions import (
 )
 from app.schemas.course_generation import QuizDifficulty, QuizQuestion
 from app.services.course_generator import (
+    NO_SOURCE_CONTEXT,
     _is_quiz_difficulty_error,
     _map_sections_to_course_sections,
     _rebalance_quiz_difficulty,
@@ -17,6 +18,7 @@ from app.services.course_generator import (
     _validate_and_map_with_retry,
     compute_quiz_points,
     generate_course_from_question,
+    session_context_block,
 )
 
 VALID_STRUCTURED_ANSWER_FILE = {
@@ -1130,3 +1132,24 @@ def test_quiz_mostly_hard_is_valid_without_rebalance():
     result = _validate_and_map(structured, "file_question")
 
     assert [q.difficulty for q in result.quiz].count("facile") == 2
+
+
+@pytest.mark.asyncio
+async def test_session_context_block_skips_web_search_when_grounding_disabled(settings_no_grounding):
+    gemini = AsyncMock()
+
+    context = await session_context_block("Q", "question_only", None, AsyncMock(), gemini, settings_no_grounding)
+
+    assert context == NO_SOURCE_CONTEXT
+    gemini.search_grounded.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_session_context_block_uses_web_search_when_grounding_enabled(settings):
+    gemini = AsyncMock()
+    gemini.search_grounded.return_value = ("synthèse", [{"uri": "https://example.org"}])
+
+    context = await session_context_block("Q", "question_only", None, AsyncMock(), gemini, settings)
+
+    assert "synthèse" in context
+    gemini.search_grounded.assert_awaited_once()
