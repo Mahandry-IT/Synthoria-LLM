@@ -292,3 +292,131 @@ def test_history_recomputes_incomplete_for_a_session_predating_the_field(monkeyp
     body = env.client.get(f"/courses/history/{env.row.id}").json()
 
     assert body["gemini_response"]["sections"][0]["incomplete"] is True
+
+
+# ─── POST .../sections/regenerate-incomplete ──────────────────
+
+
+def _bulk_url(session_id) -> str:
+    return f"/courses/{session_id}/sections/regenerate-incomplete"
+
+
+def _incomplete(section_id: str) -> dict:
+    return {**INCOMPLETE, "id": section_id, "title": f"Notion {section_id}"}
+
+
+def _bulk_env(env, outcomes: list, section_ids: list[str] | None = None):
+    """`outcomes` : un résultat par section incomplète, dans l'ordre (exception à lever, ou None = succès)."""
+    section_ids = section_ids or [str(i) for i in range(len(outcomes))]
+    env.row.gemini_response = {"sections": [*(_incomplete(i) for i in section_ids), dict(HEALTHY, id="99")]}
+    pending = list(outcomes)
+
+    async def regenerate(row, title, *_args):
+        outcome = pending.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return _good_regenerated_section(title)
+
+    regenerate_mock = AsyncMock(side_effect=regenerate)
+    update_section = AsyncMock(return_value=env.row)
+    env.monkeypatch.setattr(routes, "regenerate_section", regenerate_mock)
+    env.monkeypatch.setattr(routes.course_session_repository, "update_section", update_section)
+    return regenerate_mock, update_section
+
+
+def test_bulk_regenerates_every_incomplete_section_and_only_those(env):
+    regenerate, update_section = _bulk_env(env, [None, None])
+
+    res = env.client.post(_bulk_url(env.row.id))
+
+    body = res.json()
+    assert res.status_code == 200
+    assert [s["id"] for s in body["regenerated"]] == ["0", "1"]
+    assert body["failed"] == [] and body["remaining_section_ids"] == [] and body["stopped_reason"] is None
+    assert [call.args[2] for call in update_section.await_args_list] == ["0", "1"]  # la section saine n'est pas touchée
+
+
+def test_bulk_keeps_going_after_an_invalid_section(env):
+    regenerate, update_section = _bulk_env(env, [GeminiInvalidResponseError("encore incomplète"), None])
+
+    body = env.client.post(_bulk_url(env.row.id)).json()
+
+    assert [s["id"] for s in body["regenerated"]] == ["1"]
+    assert body["failed"] == [{"section_id": "0", "title": "Notion 0", "reason": "invalid_response"}]
+    assert body["stopped_reason"] is None
+    assert update_section.await_count == 1  # la section en échec n'est jamais réécrite
+
+
+def test_bulk_stops_at_the_first_quota_error_and_reports_what_is_left(env):
+    from app.core.exceptions import GeminiQuotaExceededError
+
+    regenerate, _ = _bulk_env(env, [None, GeminiQuotaExceededError("quota"), None, None])
+
+    res = env.client.post(_bulk_url(env.row.id))
+
+    body = res.json()
+    assert res.status_code == 200
+    assert [s["id"] for s in body["regenerated"]] == ["0"]
+    assert body["failed"] == [{"section_id": "1", "title": "Notion 1", "reason": "quota"}]
+    assert body["remaining_section_ids"] == ["2", "3"] and body["stopped_reason"] == "quota"
+    assert regenerate.await_count == 2  # aucun appel après l'erreur de quota
+
+
+def test_bulk_stops_when_gemini_becomes_unavailable(env):
+    _bulk_env(env, [None, GeminiUnavailableError("down"), None])
+
+    body = env.client.post(_bulk_url(env.row.id)).json()
+
+    assert body["stopped_reason"] == "unavailable" and body["remaining_section_ids"] == ["2"]
+
+
+def test_bulk_with_nothing_done_reports_the_gemini_error_as_http(env):
+    from app.core.exceptions import GeminiQuotaExceededError
+
+    _, update_section = _bulk_env(env, [GeminiQuotaExceededError("quota"), None])
+
+    res = env.client.post(_bulk_url(env.row.id))
+
+    assert res.status_code == 429 and "Retry-After" in res.headers
+    update_section.assert_not_awaited()
+
+    _bulk_env(env, [GeminiUnavailableError("down")])
+    assert env.client.post(_bulk_url(env.row.id)).status_code == 503
+
+
+def test_bulk_is_capped_per_call(env):
+    from app.core.config import Settings
+
+    regenerate, _ = _bulk_env(env, [None, None, None])
+    env.app.dependency_overrides[routes.get_settings] = lambda: Settings(
+        gemini_api_key="k", course_regenerate_incomplete_max_sections=2
+    )
+
+    body = env.client.post(_bulk_url(env.row.id)).json()
+
+    assert len(body["regenerated"]) == 2 and regenerate.await_count == 2
+    assert body["remaining_section_ids"] == ["2"] and body["stopped_reason"] == "limit"
+
+
+def test_bulk_without_incomplete_section_is_409(env):
+    env.row.gemini_response = {"sections": [dict(HEALTHY)]}
+
+    assert env.client.post(_bulk_url(env.row.id)).status_code == 409
+
+
+def test_bulk_unknown_session_is_404(env):
+    env.monkeypatch.setattr(routes.course_session_repository, "get_by_id", AsyncMock(return_value=None))
+
+    assert env.client.post(_bulk_url(uuid.uuid4())).status_code == 404
+
+
+def test_bulk_shares_the_regenerate_rate_limit(env):
+    from app.core.config import Settings
+
+    _bulk_env(env, [None] * 3, section_ids=["0", "1", "2"])
+    env.app.dependency_overrides[routes.get_settings] = lambda: Settings(
+        gemini_api_key="k", course_regenerate_rate_limit_per_minute=1, course_regenerate_incomplete_max_sections=1
+    )
+
+    assert env.client.post(_bulk_url(env.row.id)).status_code == 200
+    assert env.client.post(_bulk_url(env.row.id)).status_code == 429

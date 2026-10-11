@@ -139,6 +139,9 @@ class Settings(BaseSettings):
 
     # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
     course_regenerate_rate_limit_per_minute: int = 6
+    # Sections traitées par appel de régénération groupée : borne la durée de la requête et le
+    # nombre d'appels Gemini qu'elle déclenche ; le reste est renvoyé dans `remaining_section_ids`.
+    course_regenerate_incomplete_max_sections: int = 10
     # Tentatives de réparation après la régénération d'une section (chacune = 1 appel Gemini).
     section_regenerate_max_repairs: int = 1
     course_note_max_length: int = 2000
