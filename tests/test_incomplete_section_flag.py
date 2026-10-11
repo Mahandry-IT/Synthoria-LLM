@@ -107,5 +107,19 @@ def test_dict_ignores_a_stale_stored_incomplete_flag_and_trusts_the_content():
     assert is_incomplete_section_dict(healthy_but_flagged) is False
 
 
-def test_dict_handles_missing_subsections_and_blocks_gracefully():
-    assert is_incomplete_section_dict({"id": "0", "title": "T"}) is False
+def test_dict_without_any_content_is_incomplete():
+    """Régression réelle : une régénération ratée enregistrait une section avec un défi mais aucun
+    contenu, affichée vide et impossible à relancer."""
+    assert is_incomplete_section_dict({"id": "0", "title": "T"}) is True
+    emptied = {
+        "id": "6", "title": "DFS", "quoi": "", "pourquoi": "", "comment": "", "incomplete": False,
+        "challenge": "Imagine un labyrinthe.", "subsections": [], "check_questions": [],
+    }
+    assert is_incomplete_section_dict(emptied) is True
+    assert is_incomplete_section_dict({**emptied, "subsections": [{"title": "Quoi", "blocks": []}]}) is True
+
+
+def test_dict_with_only_typed_blocks_is_complete():
+    section = {"id": "0", "title": "T", "comment": "", "subsections": [{"title": "", "blocks": [{"type": "graph"}]}]}
+
+    assert is_incomplete_section_dict(section) is False

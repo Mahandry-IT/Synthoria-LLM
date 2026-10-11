@@ -1,11 +1,12 @@
 """Régénère le contenu d'UNE section « incomplète » d'un cours déjà persisté.
 
 Contrairement à la génération complète du cours (best-effort, replis silencieux), cette
-régénération ciblée lève toujours en cas d'échec du premier appel : l'apprenant doit savoir que sa
-tentative n'a pas abouti plutôt que de se voir renvoyer silencieusement l'ancienne section
-incomplète. La section obtenue passe ensuite par la même validation que la génération depuis un
+régénération ciblée lève toujours en cas d'échec : l'apprenant doit savoir que sa tentative n'a
+pas abouti plutôt que de se voir renvoyer silencieusement l'ancienne section incomplète, ou pire
+une section vide. La section obtenue passe par la même validation que la génération depuis un
 plan (sous-sections, ratio non textuel, budget du mode) et une réparation bornée par
-`section_regenerate_max_repairs` (1 par défaut, contre 2 pour la génération complète).
+`section_regenerate_max_repairs` (1 par défaut, contre 2 pour la génération complète) ; si un
+problème bloquant subsiste, rien n'est renvoyé.
 """
 
 import logging
@@ -50,7 +51,10 @@ async def _repair(
     max_repairs: int,
 ) -> Section:
     """Boucle de validation bornée (`max_repairs`) : garde la meilleure version (score pondéré) ;
-    un échec Gemini pendant la réparation conserve la meilleure version obtenue."""
+    un échec Gemini pendant la réparation conserve la meilleure version obtenue.
+
+    Lève `GeminiInvalidResponseError` si la meilleure version garde un problème bloquant (sous-section
+    vide) : l'appelant ne doit alors rien enregistrer, la section d'origine reste relançable."""
     best, best_issues = section, section_issues(section, None, profile)
     for attempt in range(max_repairs):
         if not best_issues:
@@ -74,8 +78,13 @@ async def _repair(
             best, best_issues = candidate, candidate_issues
 
     if best_issues.blocking:
+        # Jamais renvoyée : enregistrée telle quelle, elle remplacerait la section de repli par une
+        # section sans contenu, qui ne serait plus reconnue comme incomplète ni donc relançable.
         logger.warning("course_section_regenerate_incomplete", extra={"section": section.title, "issues": best_issues.all})
-    elif best_issues.soft:
+        raise GeminiInvalidResponseError(
+            "Section régénérée encore incomplète : " + " ; ".join(best_issues.blocking)
+        )
+    if best_issues.soft:
         logger.warning(
             "course_section_budget_exceeded",
             extra={"section": section.title, "depth": profile.name, "issues": list(best_issues.soft)},
@@ -95,7 +104,8 @@ async def regenerate_section(
     Le mode du cours (`meta.depth` de la session, absent = approfondi) fixe les règles de forme
     injectées dans le prompt et vérifiées ensuite (`section_issues`, réparation bornée).
 
-    Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError.
+    Lève: GeminiUnavailableError, GeminiQuotaExceededError, GeminiInvalidResponseError (réponse
+    invalide, ou section encore incomplète après réparation).
     """
     system_instruction = _get_teacher_instructions()
     profile = get_profile(depth_of_session(getattr(row, "gemini_response", None)))

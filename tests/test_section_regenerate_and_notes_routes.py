@@ -128,6 +128,35 @@ def test_regenerate_invalid_output_is_502(env):
     assert env.client.post(_regen_url(env.row.id)).status_code == 502
 
 
+def test_failed_regeneration_never_overwrites_the_section(env):
+    """La section reste telle quelle (donc toujours relançable) quand la régénération échoue."""
+    env.monkeypatch.setattr(
+        routes, "regenerate_section", AsyncMock(side_effect=GeminiInvalidResponseError("encore incomplète"))
+    )
+    update_section = AsyncMock()
+    env.monkeypatch.setattr(routes.course_session_repository, "update_section", update_section)
+
+    res = env.client.post(_regen_url(env.row.id))
+
+    assert res.status_code == 502
+    update_section.assert_not_awaited()
+
+
+def test_section_left_empty_by_an_old_failed_regeneration_can_be_regenerated(env):
+    env.row.gemini_response["sections"][0] = {
+        "id": "0", "title": "Notion vidée", "incomplete": False, "quoi": "", "pourquoi": "", "comment": "",
+        "challenge": "Un défi.", "subsections": [], "note": "", "worked_example": _WORKED_EXAMPLE,
+    }
+    env.monkeypatch.setattr(
+        routes, "regenerate_section", AsyncMock(return_value=_good_regenerated_section("Notion vidée"))
+    )
+    env.monkeypatch.setattr(routes.course_session_repository, "update_section", AsyncMock(return_value=env.row))
+
+    res = env.client.post(_regen_url(env.row.id))
+
+    assert res.status_code == 200 and res.json()["subsections"]
+
+
 def test_regenerate_section_vanishing_before_save_is_404(env):
     """Course course modifié entre la vérification et la sauvegarde (concurrence) : 404, pas une 500."""
     env.monkeypatch.setattr(routes, "regenerate_section", AsyncMock(return_value=_good_regenerated_section("x")))
