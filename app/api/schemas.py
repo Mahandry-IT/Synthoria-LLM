@@ -343,6 +343,13 @@ class CourseVideo(BaseModel):
     category: str | None = Field(None, description="Catégorie pédagogique (V2 : classement Gemini).")
     level: str | None = Field(None, description="Niveau estimé (V2 : classement Gemini).")
     relevance_reason: str | None = Field(None, description="Pourquoi cette vidéo a été retenue (V2).")
+    section_id: str | None = Field(
+        None,
+        description=(
+            "`id` de la section que cette vidéo illustre le mieux (à afficher dans cette section) ; "
+            "null = vidéo générale du cours, ou section inconnue/supprimée."
+        ),
+    )
     note: str = Field(
         "", description="Note libre de l'apprenant sur cette vidéo (pense-bête, idées) ; jamais générée par le modèle."
     )

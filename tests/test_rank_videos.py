@@ -189,6 +189,66 @@ async def test_invalid_schema_from_gemini_keeps_v1_candidates():
 
 
 @pytest.mark.asyncio
+async def test_section_index_is_mapped_to_section_id():
+    gemini = _gemini()
+    gemini.format_structured.return_value = {"items": [
+        {**_item(0), "section_index": 1}, {**_item(1, category="methode"), "section_index": None},
+    ]}
+    candidates = [_video("a1111111111"), _video("a2222222222")]
+
+    result = await rank_videos(
+        candidates, "T", "S", ["Intro", "Graphes"], gemini, _settings(), section_ids=["10", "11"]
+    )
+
+    by_id = {v.video_id: v for v in result}
+    assert by_id["a1111111111"].section_id == "11"
+    assert by_id["a2222222222"].section_id is None
+    prompt = gemini.format_structured.await_args.kwargs["raw_answer"]
+    assert "<sections>\n0. Intro\n1. Graphes\n</sections>" in prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("section_index", [-1, 2, 99])
+async def test_out_of_bounds_section_index_leaves_video_unattached(section_index):
+    gemini = _gemini()
+    gemini.format_structured.return_value = {"items": [{**_item(0), "section_index": section_index}, _item(1)]}
+    candidates = [_video("a1111111111"), _video("a2222222222")]
+
+    result = await rank_videos(candidates, "T", "S", ["A", "B"], gemini, _settings(), section_ids=["s1", "s2"])
+
+    assert len(result) == 2 and all(v.section_id is None for v in result)
+
+
+@pytest.mark.asyncio
+async def test_without_section_ids_no_video_is_attached():
+    gemini = _gemini()
+    gemini.format_structured.return_value = {"items": [{**_item(0), "section_index": 0}, _item(1)]}
+    candidates = [_video("a1111111111"), _video("a2222222222")]
+
+    result = await rank_videos(candidates, "T", "S", ["A"], gemini, _settings())
+
+    assert all(v.section_id is None for v in result)
+
+
+@pytest.mark.asyncio
+async def test_section_cap_keeps_best_scores_attached_and_the_rest_at_course_level():
+    gemini = _gemini()
+    gemini.format_structured.return_value = {"items": [
+        {**_item(0, score=50), "section_index": 0},
+        {**_item(1, score=90), "section_index": 0},
+        {**_item(2, score=70), "section_index": 0},
+    ]}
+    candidates = [_video("a1111111111"), _video("a2222222222"), _video("a3333333333")]
+
+    result = await rank_videos(
+        candidates, "T", "S", ["A"], gemini, _settings(course_videos_max_per_section=2), section_ids=["s1"]
+    )
+
+    by_id = {v.video_id: v.section_id for v in result}
+    assert by_id == {"a2222222222": "s1", "a3333333333": "s1", "a1111111111": None}
+
+
+@pytest.mark.asyncio
 async def test_prompt_marks_candidates_as_untrusted_data():
     gemini = _gemini()
     gemini.format_structured.return_value = {"items": []}

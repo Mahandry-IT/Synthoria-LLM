@@ -92,7 +92,34 @@ async def test_attach_videos_falls_back_to_web_search_without_a_youtube_api_key(
     result = await attach_verified_videos(response, settings, gemini)
 
     assert [v.video_id for v in result.videos] == [VID]
+    assert result.videos[0].section_id is None  # repli sans classement : vidéo générale
     gemini.search_grounded.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_attach_videos_links_ranked_videos_to_their_section(monkeypatch):
+    settings = Settings(gemini_api_key="k", course_videos_enabled=True, youtube_api_key="yt")
+    response = _map_schema_to_response(_schema([
+        {"type": "development", "title": "A", "blocks": [{"type": "text", "text": "x"}]},
+        {"type": "development", "title": "B", "blocks": [{"type": "text", "text": "y"}]},
+    ]))
+    other = "BBBBBBBBBBB"
+
+    async def fake_find(*_args, **_kwargs):
+        return [youtube.candidate_video(f"https://youtu.be/{vid}") for vid in (VID, other)]
+
+    monkeypatch.setattr("app.services.course_videos.find_course_videos", fake_find)
+    gemini = AsyncMock()
+    gemini.is_degraded.return_value = False
+    gemini.format_structured.return_value = {"items": [
+        {"candidate_index": 0, "category": "cours", "level": "debutant", "relevance_score": 90,
+         "reason": "Clair.", "section_index": 1},
+        {"candidate_index": 1, "category": "methode", "level": "debutant", "relevance_score": 80, "reason": "Utile."},
+    ]}
+
+    result = await attach_verified_videos(response, settings, gemini)
+
+    assert {v.video_id: v.section_id for v in result.videos} == {VID: response.sections[1].id, other: None}
 
 
 @pytest.mark.asyncio

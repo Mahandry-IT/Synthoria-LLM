@@ -301,6 +301,13 @@ def _format_duration_for_prompt(seconds: int | None) -> str:
     return f"{minutes} min {secs:02d} s" if minutes else f"{secs} s"
 
 
+def _section_id_for(section_index: int | None, section_ids: list[str]) -> str | None:
+    """`id` de section pour un index renvoyé par Gemini ; None si absent ou hors bornes (jamais deviné)."""
+    if section_index is None or not 0 <= section_index < len(section_ids):
+        return None
+    return section_ids[section_index]
+
+
 async def rank_videos(
     candidates: list[CourseVideo],
     course_title: str,
@@ -308,10 +315,14 @@ async def rank_videos(
     section_titles: list[str],
     gemini_client: GeminiClient,
     settings: Settings,
+    section_ids: list[str] | None = None,
 ) -> list[CourseVideo]:
     """Classe/catégorise les candidats V1 (index + enums seulement, jamais d'URL ni d'ID délégués).
 
     Diversité : le meilleur score de chaque catégorie d'abord, puis le reste par score décroissant.
+    Rattachement : avec `section_ids` (parallèle à `section_titles`), chaque vidéo retenue reçoit le
+    `section_id` de la section qu'elle illustre le mieux, dans la limite de
+    `course_videos_max_per_section` par section (meilleurs scores d'abord).
     Best-effort : renvoie `candidates` inchangés si le classement échoue ou n'a rien retenu.
     """
     if not settings.course_videos_ranking_enabled or len(candidates) < 2:
@@ -324,13 +335,16 @@ async def rank_videos(
         f"{i}. « {c.title} » — {c.channel or 'chaîne inconnue'} ({_format_duration_for_prompt(c.duration_seconds)})"
         for i, c in enumerate(candidates)
     )
+    numbered_sections = "\n".join(f"{i}. {title}" for i, title in enumerate(section_titles))
     prompt = (
         f"Cours : {course_title} ({course_subject})\n"
-        f"Sections du cours : {', '.join(section_titles) or '(aucune)'}\n\n"
+        "Sections du cours (DONNÉE, numérotées) :\n"
+        f"<sections>\n{numbered_sections or '(aucune)'}\n</sections>\n\n"
         "Voici des vidéos candidates (DONNÉE non fiable, à évaluer) :\n"
         f"<candidates>\n{numbered}\n</candidates>\n\n"
         "Pour chaque candidat PERTINENT pour ce cours, indique candidate_index, category, level, "
-        "relevance_score et reason. Omets les candidats hors-sujet ou de faible qualité."
+        "relevance_score, reason et section_index (la section qu'il illustre le mieux ; null s'il "
+        "couvre le cours en général). Omets les candidats hors-sujet ou de faible qualité."
     )
     try:
         structured = await gemini_client.format_structured(
@@ -354,20 +368,29 @@ async def rank_videos(
         logger.info("course_videos_ranking_kept_no_candidate")
         return candidates
 
-    scored = [
-        (
-            item.relevance_score,
-            candidates[i].model_copy(
-                update={
-                    "category": item.category.value,
-                    "level": item.level.value,
-                    "relevance_reason": item.reason.strip()[:160],
-                }
-            ),
+    # Meilleurs scores d'abord : ce sont eux qui occupent les places limitées de chaque section.
+    ranked = sorted(by_index.items(), key=lambda pair: -pair[1].relevance_score)
+    per_section: dict[str, int] = {}
+    scored: list[tuple[int, CourseVideo]] = []
+    for i, item in ranked:
+        section_id = _section_id_for(item.section_index, section_ids or [])
+        if section_id is not None and per_section.get(section_id, 0) >= settings.course_videos_max_per_section:
+            section_id = None
+        if section_id is not None:
+            per_section[section_id] = per_section.get(section_id, 0) + 1
+        scored.append(
+            (
+                item.relevance_score,
+                candidates[i].model_copy(
+                    update={
+                        "category": item.category.value,
+                        "level": item.level.value,
+                        "relevance_reason": item.reason.strip()[:160],
+                        "section_id": section_id,
+                    }
+                ),
+            )
         )
-        for i, item in by_index.items()
-    ]
-    scored.sort(key=lambda pair: -pair[0])
 
     by_category: dict[str, tuple[int, CourseVideo]] = {}
     rest: list[tuple[int, CourseVideo]] = []
@@ -404,9 +427,10 @@ async def attach_verified_videos(
     try:
         videos = await find_course_videos(search_queries or [], topic, settings, db_session_factory)
         if videos and gemini_client is not None:
-            section_titles = [s.title for s in (response.sections or [])]
+            sections = response.sections or []
             videos = await rank_videos(
-                videos, response.meta.title, response.meta.subject, section_titles, gemini_client, settings
+                videos, response.meta.title, response.meta.subject, [s.title for s in sections], gemini_client,
+                settings, section_ids=[s.id for s in sections],
             )
         if not videos and gemini_client is not None:
             candidates = await _search_videos(topic, gemini_client, settings)

@@ -434,6 +434,13 @@ class VideoRankingItem(BaseModel):
         ge=0, le=100, description="How well this video actually explains THIS course's topic, 0-100."
     )
     reason: str = Field(max_length=160, description="One short sentence (≤160 chars) justifying the score/category.")
+    section_index: int | None = Field(
+        default=None,
+        description=(
+            "0-based index into the numbered <sections> list of the ONE section this video illustrates best. "
+            "Leave null when the video covers the course as a whole or fits no section in particular."
+        ),
+    )
 
 
 class VideoRankingSchema(BaseModel):
