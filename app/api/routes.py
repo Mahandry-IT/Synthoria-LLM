@@ -1173,6 +1173,36 @@ def _limit_regenerate(request: Request, settings: Settings = Depends(get_setting
     )
 
 
+_REGENERATION_IN_PROGRESS_DETAIL = "Une régénération de ce cours est déjà en cours, patientez qu'elle se termine"
+
+
+def _course_regenerations(request: Request) -> set[UUID]:
+    """Cours dont une régénération groupée ou complète est en cours (par processus, en mémoire)."""
+    running = getattr(request.app.state, "course_regenerations", None)
+    if running is None:
+        running = request.app.state.course_regenerations = set()
+    return running
+
+
+def _assert_no_course_regeneration(request: Request, session_id: UUID) -> None:
+    if session_id in _course_regenerations(request):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_REGENERATION_IN_PROGRESS_DETAIL)
+
+
+@contextmanager
+def _exclusive_course_regeneration(request: Request, session_id: UUID) -> Iterator[None]:
+    """Une seule régénération groupée ou complète à la fois par cours : deux exécutions parallèles
+    régénéreraient les mêmes sections deux fois (quota doublé) et s'écraseraient l'une l'autre.
+    409 si une autre est déjà en cours."""
+    _assert_no_course_regeneration(request, session_id)
+    running = _course_regenerations(request)
+    running.add(session_id)
+    try:
+        yield
+    finally:
+        running.discard(session_id)
+
+
 async def _regenerate_and_save_section(
     request: Request, row: CourseSession, section: dict, gemini_client: GeminiClient, settings: Settings
 ) -> CourseSection | None:
@@ -1216,7 +1246,9 @@ async def regenerate_course_section(
     404 si la session ou la section n'existe pas ; 409 si la section n'est pas incomplète (seules les
     sections en échec peuvent être régénérées) ; 429 au-delà de `course_regenerate_rate_limit_per_minute`.
     La note éventuelle de l'apprenant sur cette section est conservée (table séparée, non affectée).
+    409 aussi pendant une régénération groupée ou complète du même cours, qui traite déjà cette section.
     """
+    _assert_no_course_regeneration(request, session_id)
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     async with session_factory() as db:
         row = await course_session_repository.get_by_id(db, session_id)
@@ -1259,7 +1291,8 @@ async def regenerate_incomplete_course_sections(
     suivants échoueraient de même) et après `course_regenerate_incomplete_max_sections` sections ;
     les sections non tentées sont listées dans `remaining_section_ids`, à relancer par un nouvel appel.
 
-    404 si la session n'existe pas ; 409 si aucune section n'est incomplète ; 429/503 si la toute
+    404 si la session n'existe pas ; 409 si aucune section n'est incomplète ou si une régénération
+    groupée ou complète de ce cours est déjà en cours ; 429/503 si la toute
     première section échoue sur le quota ou l'indisponibilité de Gemini (rien n'a été fait) ;
     429 au-delà de `course_regenerate_rate_limit_per_minute`.
     """
@@ -1273,6 +1306,14 @@ async def regenerate_incomplete_course_sections(
     if not incomplete:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ce cours n'a aucune section incomplète")
 
+    with _exclusive_course_regeneration(request, session_id):
+        return await _regenerate_incomplete_sections(request, row, incomplete, gemini_client, settings)
+
+
+async def _regenerate_incomplete_sections(
+    request: Request, row: CourseSession, incomplete: list[dict], gemini_client: GeminiClient, settings: Settings
+) -> RegenerateIncompleteSectionsResponse:
+    session_id = row.id
     limit = max(1, settings.course_regenerate_incomplete_max_sections)
     result = RegenerateIncompleteSectionsResponse()
     for index, section in enumerate(incomplete[:limit]):
@@ -1320,7 +1361,7 @@ async def regenerate_whole_course(
     modifié si la génération échoue.
 
     404 si la session n'existe pas ; 409 si le cours est complet (ni section incomplète, ni résumé
-    ou quiz manquant) ; 429/502/503 selon l'erreur Gemini ; 429 au-delà de
+    ou quiz manquant) ou si une régénération de ce cours est déjà en cours ; 429/502/503 selon l'erreur Gemini ; 429 au-delà de
     `course_regenerate_rate_limit_per_minute`.
     """
     session_factory: async_sessionmaker = request.app.state.db_session_factory
@@ -1334,16 +1375,17 @@ async def regenerate_whole_course(
             detail="Ce cours est complet : seul un cours incomplet peut être régénéré en entier",
         )
 
-    with gemini_client.track_calls(), _gemini_http_errors():
-        try:
-            response = await regenerate_course(
-                row, gemini_client, request.app.state.vector_store, settings, db_session_factory=session_factory
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    with _exclusive_course_regeneration(request, session_id):
+        with gemini_client.track_calls(), _gemini_http_errors():
+            try:
+                response = await regenerate_course(
+                    row, gemini_client, request.app.state.vector_store, settings, db_session_factory=session_factory
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
-    async with session_factory() as db:
-        saved = await course_session_repository.replace_course(db, session_id, response)
+        async with session_factory() as db:
+            saved = await course_session_repository.replace_course(db, session_id, response)
     if saved is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session introuvable")
     return response.model_copy(update={"session_id": session_id})

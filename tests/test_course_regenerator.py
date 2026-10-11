@@ -273,3 +273,21 @@ def test_route_shares_the_regenerate_rate_limit(env):
     env.monkeypatch.setattr(routes, "regenerate_course", AsyncMock(side_effect=GeminiUnavailableError("down")))
 
     assert [env.client.post(_url(env.row.id)).status_code for _ in range(2)] == [503, 429]
+
+
+def test_route_refuses_a_second_regeneration_of_the_same_course(env):
+    regenerate = AsyncMock()
+    env.monkeypatch.setattr(routes, "regenerate_course", regenerate)
+    env.app.state.course_regenerations = {env.row.id}
+
+    res = env.client.post(_url(env.row.id))
+
+    assert res.status_code == 409 and "déjà en cours" in res.json()["detail"]
+    regenerate.assert_not_awaited()
+
+
+def test_route_releases_the_course_lock_when_generation_fails(env):
+    env.monkeypatch.setattr(routes, "regenerate_course", AsyncMock(side_effect=GeminiUnavailableError("down")))
+
+    assert env.client.post(_url(env.row.id)).status_code == 503
+    assert env.app.state.course_regenerations == set()

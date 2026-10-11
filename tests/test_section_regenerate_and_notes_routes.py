@@ -420,3 +420,38 @@ def test_bulk_shares_the_regenerate_rate_limit(env):
 
     assert env.client.post(_bulk_url(env.row.id)).status_code == 200
     assert env.client.post(_bulk_url(env.row.id)).status_code == 429
+
+
+# ─── Une seule régénération groupée ou complète à la fois par cours ───
+
+
+def test_section_and_bulk_regeneration_are_refused_while_the_course_is_being_regenerated(env):
+    """Régression réelle : deux régénérations groupées lancées en parallèle refaisaient les mêmes
+    sections (quota doublé), et le bouton par section répondait « pas incomplète » sur une section
+    que la régénération groupée venait de réparer."""
+    regenerate, _ = _bulk_env(env, [None])
+    env.app.state.course_regenerations = {env.row.id}
+
+    bulk = env.client.post(_bulk_url(env.row.id))
+    single = env.client.post(_regen_url(env.row.id))
+
+    assert bulk.status_code == 409 and single.status_code == 409
+    assert "déjà en cours" in bulk.json()["detail"] and "déjà en cours" in single.json()["detail"]
+    regenerate.assert_not_awaited()
+
+
+def test_course_lock_is_released_after_success_and_after_failure(env):
+    _bulk_env(env, [None])
+    assert env.client.post(_bulk_url(env.row.id)).status_code == 200
+    assert env.app.state.course_regenerations == set()
+
+    _bulk_env(env, [GeminiUnavailableError("down")])
+    assert env.client.post(_bulk_url(env.row.id)).status_code == 503
+    assert env.app.state.course_regenerations == set()
+
+
+def test_another_course_is_not_blocked(env):
+    _bulk_env(env, [None])
+    env.app.state.course_regenerations = {uuid.uuid4()}
+
+    assert env.client.post(_bulk_url(env.row.id)).status_code == 200
