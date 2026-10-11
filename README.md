@@ -173,7 +173,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 
 ## Format du cours (pédagogie active)
 
-- **Blocs typés** : chaque section expose `subsections[].blocks[]` (`text`, `definition`, `list`, `table`, `formula`, `code`, `worked_example`, `callout`, `pitfall`, `diagram` Mermaid, `chart`). `quoi/pourquoi/comment/tables` sont **dépréciés** (historique, podcast) et seront retirés dans une version ultérieure. Les diagrammes (≤ 4000 caractères) et graphiques (≤ 12 libellés, 4 séries) sont bornés.
+- **Blocs typés** : chaque section expose `subsections[].blocks[]` (`text`, `definition`, `list`, `table`, `formula`, `code`, `worked_example`, `callout`, `pitfall`, `diagram` Mermaid, `chart`, `graph`). `quoi/pourquoi/comment/tables` sont **dépréciés** (historique, podcast) et seront retirés dans une version ultérieure. Les diagrammes (≤ 4000 caractères), graphiques (≤ 12 libellés, 4 séries) et graphes (≤ 20 nœuds, 40 arêtes, 12 étapes) sont bornés.
 - **Réponse directe** : `answer` = `summary` + `key_points` + `blocks`, distincte de l'introduction (garde-fou de similarité, `COURSE_ANSWER_INTRO_SIMILARITY_MAX`). L'ancien format `quoi/pourquoi/comment/worked_example` reste lisible.
 - **Cycle par section** (développement) : `challenge` (+ `challenge_key_points`, 2-4 idées attendues, analysées par `POST .../challenge`) → Pourquoi → Quoi → Comment → `faded_example` (À toi) → `check_questions` (Vérifie, feedback par choix) → `recall_prompt` (reformulation). Nombre de sections, taille des sections et du quiz : selon le mode (voir [Modes de cours](#modes-de-cours)).
 - **Quiz final** : majorité de questions normale/difficile (`COURSE_QUIZ_MIN_HARD_SHARE`, 0.6), `section_refs` pour les questions mêlant plusieurs sections.
@@ -269,6 +269,37 @@ Créer la clé : [Google Cloud Console](https://console.cloud.google.com/apis/cr
 **Nombre de vidéos** : `COURSE_VIDEOS_MIN` (5) et `COURSE_VIDEOS_MAX` (10) donnent une **cible**, jamais une garantie — YouTube peut renvoyer moins de résultats pertinents. `COURSE_VIDEOS_MIN` sert aussi au repli groundé (« Trouve entre 5 et 10 vidéos… ») ; `COURSE_VIDEOS_MAX` borne l'affichage final dans tous les cas.
 
 **Classement pédagogique (optionnel)** : si `COURSE_VIDEOS_RANKING_ENABLED=true` (défaut) et qu'une clé Data API a trouvé ≥ 2 candidats, un appel Flash-Lite supplémentaire (`rank_videos`) catégorise chaque vidéo (`category` : cours / exercices_corriges / intuition / demonstration / methode, `level` : debutant / intermediaire / avance, `relevance_score` 0-100) à partir d'un vivier plus large que `COURSE_VIDEOS_MAX` (+5 candidats). Gemini ne reçoit et ne renvoie que des index numérotés et des enums — jamais d'URL ni de texte libre non borné — donc un titre ou une description de vidéo malveillante ne peut pas injecter d'instruction. Les candidats sous `YOUTUBE_RANKING_MIN_SCORE` (40 par défaut) sont écartés ; la sélection finale privilégie la diversité (meilleur score de chaque catégorie d'abord). Best-effort : en cas d'échec, l'ordre V1 est conservé. Ce classement ajoute 1 appel Gemini par cours (dans la fenêtre de `GEMINI_RPM_LIMIT`) ; désactiver `COURSE_VIDEOS_RANKING_ENABLED` si le quota est trop juste.
+
+### Bloc `graph` (graphe, arbre, pas-à-pas)
+
+Un bloc `graph` décrit une structure de données en **données pures** : le serveur ne fournit ni coordonnées, ni tailles, ni couleurs. La disposition, l'animation et le style reviennent entièrement au client (Synthoria Studio).
+
+```json
+{
+  "type": "graph",
+  "graph": {
+    "layout": "graph",
+    "directed": false,
+    "caption": "Plus court chemin de A à C",
+    "nodes": [{"id": "A", "label": "A"}, {"id": "B", "label": "B"}, {"id": "C", "label": "C"}],
+    "edges": [
+      {"id": "e1", "source": "A", "target": "B", "label": "2"},
+      {"id": "e2", "source": "B", "target": "C", "label": "3"},
+      {"id": "e3", "source": "A", "target": "C", "label": "7"}
+    ],
+    "steps": [
+      {"caption": "On part de A.", "highlight_nodes": ["A"], "highlight_edges": []},
+      {"caption": "Passer par B coûte 5, moins que l'arête directe (7).", "highlight_nodes": ["A", "B", "C"], "highlight_edges": ["e1", "e2"]}
+    ]
+  }
+}
+```
+
+- `layout` : `graph` (graphe, réseau, automate), `tree` (arbre enraciné, arêtes parent → enfant), `layered` (dépendances dessinées par niveaux). C'est une indication de disposition, le client choisit l'algorithme.
+- `steps` vide : schéma statique. Sinon, un pas-à-pas : chaque étape porte un texte et les `id` des nœuds et arêtes à mettre en avant à ce moment-là.
+- **Garanties serveur** (`ApiGraph`, `app/api/schemas.py`) : identifiants uniques, arêtes et étapes ne référençant que des éléments existants, bornes respectées (≤ 20 nœuds, 40 arêtes, 12 étapes), et pour `tree` une seule racine, un seul parent par nœud, aucun cycle. Un graphe incohérent est retiré du cours, jamais « réparé ».
+- **Libellés non fiables** : `label` et `caption` viennent du modèle ; le client les affiche comme du texte, jamais comme du HTML.
+- Les cours enregistrés avant l'ajout de ce bloc n'en contiennent pas : le champ `graph` est facultatif.
 
 ### Supports visuels
 

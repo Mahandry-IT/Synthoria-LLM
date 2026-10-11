@@ -156,6 +156,14 @@ class CourseTable(BaseModel):
 DIAGRAM_SOURCE_MAX = 4000
 CHART_LABELS_MAX = 12
 CHART_SERIES_MAX = 4
+GRAPH_NODES_MAX = 20
+GRAPH_EDGES_MAX = 40
+GRAPH_STEPS_MAX = 12
+GRAPH_ID_MAX = 16
+GRAPH_NODE_LABEL_MAX = 80
+GRAPH_EDGE_LABEL_MAX = 40
+GRAPH_CAPTION_MAX = 200
+GRAPH_STEP_CAPTION_MAX = 400
 
 
 class ApiDiagram(BaseModel):
@@ -174,6 +182,78 @@ class ApiChart(BaseModel):
     caption: str = ""
     labels: list[str] = Field(..., min_length=1, max_length=CHART_LABELS_MAX)
     series: list[ApiChartSeries] = Field(..., min_length=1, max_length=CHART_SERIES_MAX)
+
+
+class ApiGraphNode(BaseModel):
+    id: str = Field(..., min_length=1, max_length=GRAPH_ID_MAX)
+    label: str = Field(..., max_length=GRAPH_NODE_LABEL_MAX)
+
+
+class ApiGraphEdge(BaseModel):
+    id: str = Field(..., min_length=1, max_length=GRAPH_ID_MAX)
+    source: str
+    target: str
+    label: str | None = Field(default=None, max_length=GRAPH_EDGE_LABEL_MAX)
+
+
+class ApiGraphStep(BaseModel):
+    caption: str = Field(..., min_length=1, max_length=GRAPH_STEP_CAPTION_MAX)
+    highlight_nodes: list[str] = Field(default_factory=list)
+    highlight_edges: list[str] = Field(default_factory=list)
+
+
+class ApiGraph(BaseModel):
+    """Graphe en données (nœuds, arêtes, étapes facultatives) : disposition, animation et style
+    reviennent entièrement au client. `steps` vide = schéma statique ; sinon un pas-à-pas dont
+    chaque étape met en avant des nœuds/arêtes. Les libellés sont du texte non fiable (LLM), à
+    échapper à l'affichage."""
+
+    layout: Literal["graph", "tree", "layered"]
+    directed: bool
+    caption: str = Field(default="", max_length=GRAPH_CAPTION_MAX)
+    nodes: list[ApiGraphNode] = Field(..., min_length=2, max_length=GRAPH_NODES_MAX)
+    edges: list[ApiGraphEdge] = Field(..., min_length=1, max_length=GRAPH_EDGES_MAX)
+    steps: list[ApiGraphStep] = Field(default_factory=list, max_length=GRAPH_STEPS_MAX)
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> "ApiGraph":
+        """Un graphe incohérent serait faux pédagogiquement : il est rejeté, jamais « réparé »."""
+        node_ids = [n.id for n in self.nodes]
+        edge_ids = [e.id for e in self.edges]
+        if len(set(node_ids)) != len(node_ids) or len(set(edge_ids)) != len(edge_ids):
+            raise ValueError("identifiants de nœuds ou d'arêtes en double")
+        known_nodes, known_edges = set(node_ids), set(edge_ids)
+        if any(e.source not in known_nodes or e.target not in known_nodes for e in self.edges):
+            raise ValueError("arête vers un nœud inconnu")
+        for step in self.steps:
+            if not known_nodes.issuperset(step.highlight_nodes) or not known_edges.issuperset(step.highlight_edges):
+                raise ValueError("étape référençant un nœud ou une arête inconnus")
+        if self.layout == "tree":
+            self._check_tree(node_ids)
+        return self
+
+    def _check_tree(self, node_ids: list[str]) -> None:
+        """Arbre enraciné : arêtes parent → enfant, un seul parent par nœud, une seule racine,
+        tout nœud atteignable depuis elle (ce qui exclut aussi tout cycle)."""
+        if not self.directed:
+            raise ValueError("un arbre est orienté (parent → enfant)")
+        children: dict[str, list[str]] = {}
+        parents: set[str] = set()
+        for edge in self.edges:
+            if edge.target in parents:
+                raise ValueError("nœud d'arbre à plusieurs parents")
+            parents.add(edge.target)
+            children.setdefault(edge.source, []).append(edge.target)
+        roots = [node_id for node_id in node_ids if node_id not in parents]
+        if len(roots) != 1:
+            raise ValueError("un arbre a exactement une racine")
+        reached, stack = set(), roots[:]
+        while stack:
+            current = stack.pop()
+            reached.add(current)
+            stack.extend(children.get(current, []))
+        if len(reached) != len(node_ids):
+            raise ValueError("arbre non connexe")
 
 
 class ApiFormula(BaseModel):
@@ -218,7 +298,7 @@ class ApiContentBlock(BaseModel):
 
     type: Literal[
         "text", "definition", "list", "table", "formula", "code", "worked_example",
-        "callout", "image", "pitfall", "diagram", "chart",
+        "callout", "image", "pitfall", "diagram", "chart", "graph",
     ]
     text: str | None = None
     callout_variant: Literal["note", "warning", "tip"] | None = None
@@ -234,6 +314,7 @@ class ApiContentBlock(BaseModel):
     pitfall: ApiPitfall | None = None
     diagram: ApiDiagram | None = None
     chart: ApiChart | None = None
+    graph: ApiGraph | None = None
 
     # Intention Gemini portée jusqu'au résolveur (app/services/media/visual_resolver.py), jamais
     # exposée aux clients de l'API : ni URL ni identifiant externe, juste de quoi résoudre le

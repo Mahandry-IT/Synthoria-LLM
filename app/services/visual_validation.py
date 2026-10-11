@@ -70,7 +70,7 @@ def visual_issues(section: Section, profile: DepthProfile | None = None) -> list
     issues: list[str] = []
     non_textual = sum(1 for b in blocks if b.type not in _NOT_A_VISUAL_GUARANTEE)
     if not non_textual:
-        issues.append("aucun bloc visuel (TABLE, LIST, DIAGRAM, CHART, FORMULA...)")
+        issues.append("aucun bloc visuel (TABLE, LIST, DIAGRAM, GRAPH, CHART, FORMULA...)")
     elif profile is not None and non_textual / len(blocks) < profile.non_text_ratio:
         issues.append(
             f"{non_textual} bloc(s) non textuel(s) sur {len(blocks)} : au moins "

@@ -101,7 +101,7 @@ def render_rules(profile: DepthProfile) -> str:
     prompts de génération, de réparation, de régénération et d'ajout de sections."""
     return (
         f"--- Règles du mode « {profile.name} » pour chaque section DEVELOPMENT ---\n"
-        f"- Au moins {profile.non_text_ratio:.0%} des blocs sont non textuels (TABLE, LIST, DIAGRAM, CHART, "
+        f"- Au moins {profile.non_text_ratio:.0%} des blocs sont non textuels (TABLE, LIST, DIAGRAM, GRAPH, CHART, "
         "FORMULA, CODE, WORKED_EXAMPLE...) : TEXT, DEFINITION et CALLOUT sont textuels.\n"
         f"- Au plus {profile.max_prose_words} mots de prose par section (TEXT, DEFINITION, CALLOUT, éléments "
         "de LIST et exemple travaillé) ; tableaux, formules, code, schémas et graphiques ne comptent pas dans "

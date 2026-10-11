@@ -69,6 +69,21 @@ def _chart_text(chart: dict) -> str:
     return "\n".join(lines)
 
 
+def _graph_text(graph: dict) -> str:
+    """Graphe en texte : une ligne par arête (libellés des nœuds), puis les étapes du pas-à-pas."""
+    labels = {_s(_dict(n).get("id")): _s(_dict(n).get("label")) for n in _items(graph.get("nodes"))}
+    arrow = "→" if graph.get("directed") else "—"
+    lines = [f"Graphe : {_s(graph.get('caption'))}"]
+    for edge in _items(graph.get("edges")):
+        edge = _dict(edge)
+        source, target = _s(edge.get("source")), _s(edge.get("target"))
+        weight = f" ({_s(edge.get('label'))})" if _s(edge.get("label")) else ""
+        lines.append(f"{labels.get(source) or source} {arrow} {labels.get(target) or target}{weight}")
+    for i, step in enumerate(_items(graph.get("steps")), start=1):
+        lines.append(f"Étape {i} : {_s(_dict(step).get('caption'))}")
+    return "\n".join(lines)
+
+
 def block_text(block: dict) -> str:
     """Texte d'un bloc de contenu, quel que soit son type (vide si rien de lisible)."""
     block = _dict(block)
@@ -94,6 +109,8 @@ def block_text(block: dict) -> str:
         parts.append(f"Schéma : {_s(block['diagram']['caption'])}")
     if block.get("chart"):
         parts.append(_chart_text(_dict(block["chart"])))
+    if block.get("graph"):
+        parts.append(_graph_text(_dict(block["graph"])))
     return "\n".join(p for p in parts if p)
 
 
