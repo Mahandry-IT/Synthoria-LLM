@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiUnavailableError
 from app.schemas.course_generation import (
     CoursePlanSchema,
+    COURSE_GENERATION_GEMINI_SCHEMA,
     CourseGenerationSchema,
     MoreSectionsSchema,
     PlannedSection,
@@ -239,7 +240,7 @@ def _fake_gemini(fail_batches: set[int] | None = None, fail_wrap_up: bool = Fals
                 raise GeminiUnavailableError("indisponible")
             count = int(re.search(r"Génère exactement (\d+)", raw_answer).group(1))
             return {"sections": [_dev_section(f"brut-{state['batch']}-{i}") for i in range(count)]}
-        assert response_schema is CourseGenerationSchema
+        assert response_schema is COURSE_GENERATION_GEMINI_SCHEMA
         if fail_wrap_up:
             raise GeminiUnavailableError("indisponible")
         return _wrap_up_structured()

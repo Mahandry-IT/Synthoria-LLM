@@ -34,6 +34,7 @@ from app.db.models import CoursePlan
 from app.schemas.course_generation import (
     BlockType,
     ContentBlock,
+    COURSE_GENERATION_GEMINI_SCHEMA,
     CourseGenerationSchema,
     CoursePlanSchema,
     MoreSectionsSchema,
@@ -623,7 +624,7 @@ async def _generate_wrap_up(
         structured = await gemini_client.format_structured(
             raw_answer=prompt,
             system_instruction=_get_teacher_instructions(),
-            response_schema=CourseGenerationSchema,
+            response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
         )
         structured = _coerce_known_format(dict(structured), mode)
         # Champs dérivés du plan/contexte : écrasés côté code plutôt que confiés au modèle.

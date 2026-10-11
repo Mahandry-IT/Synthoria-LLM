@@ -25,6 +25,7 @@ from app.core.exceptions import (
     GeminiUnavailableError,
 )
 from app.schemas.course_generation import (
+    COURSE_GENERATION_GEMINI_SCHEMA,
     BlockType,
     CoverageCompletionSchema,
     CourseGenerationSchema,
@@ -710,7 +711,7 @@ async def _validate_and_map_with_retry(
             retried = await gemini_client.format_structured(
                 raw_answer=retry_prompt,
                 system_instruction=system_instruction,
-                response_schema=CourseGenerationSchema,
+                response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
             )
             return _validate_and_map(retried, mode)
         except Exception:
@@ -1079,7 +1080,7 @@ async def generate_course_from_question(
         structured = await gemini_client.format_structured(
             raw_answer=prompt,
             system_instruction=system_instruction,
-            response_schema=CourseGenerationSchema,
+            response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
         )
         validated = await _validate_and_map_with_retry(
             structured, mode, gemini_client, system_instruction, prompt,
@@ -1123,7 +1124,7 @@ async def generate_course_from_question(
     structured = await gemini_client.format_structured(
         raw_answer=formatting_prompt,
         system_instruction=system_instruction,
-        response_schema=CourseGenerationSchema,
+        response_schema=COURSE_GENERATION_GEMINI_SCHEMA,
     )
     validated = await _validate_and_map_with_retry(
         structured, mode, gemini_client, system_instruction, formatting_prompt,
