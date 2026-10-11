@@ -62,7 +62,6 @@ class ImageSource(str, Enum):
 
     PDF = "pdf"
     WEB = "web"
-    GENERATED = "generated"
 
 
 class CalloutVariant(str, Enum):
@@ -199,8 +198,7 @@ class ContentBlock(BaseModel):
         description=(
             "Set for IMAGE — where the visual comes from. 'pdf' only if a matching figure was "
             "actually seen in the provided source document(s) (use image_reference to point at it). "
-            "'web' for a real-world photo/illustration to look up (use image_query). 'generated' for "
-            "a diagram/illustration that must be created because no suitable existing image exists. "
+            "'web' for a real-world photo/illustration to look up (use image_query). "
             "Never invent a URL or filename — resolution happens server-side."
         ),
     )

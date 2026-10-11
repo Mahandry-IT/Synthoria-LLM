@@ -4,10 +4,12 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from app.api.schemas import ApiContentBlock, CourseGenerationResponse, CourseMeta, CourseSection, CourseSubsection
 from app.core.config import Settings
 from app.db.models import MediaAsset
+from app.schemas.course_generation import ContentBlock, ImageSource
 from app.services.media import visual_resolver
 from app.services.media.providers import WebImageCandidate
 from app.services.media.storage import NormalizedImage, UnsupportedImageError
@@ -77,6 +79,23 @@ async def test_resolve_visuals_in_sections_drops_unknown_source():
         [section], settings=Settings(), db_session_factory=_FakeSessionFactory()
     )
     assert result[0].subsections[0].blocks == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_visuals_in_sections_drops_legacy_generated_source():
+    """`generated` n'est plus une source : un bloc qui la porterait encore est retiré, jamais planté."""
+    section = _section_with([_text_block(), _image_block(source="generated")])
+    result = await resolve_visuals_in_sections(
+        [section], settings=Settings(), db_session_factory=_FakeSessionFactory()
+    )
+    assert [b.type for b in result[0].subsections[0].blocks] == ["text"]
+
+
+def test_image_source_schema_only_offers_resolvable_sources():
+    """Le schéma envoyé à Gemini ne propose que des sources qu'un résolveur sait traiter."""
+    assert {source.value for source in ImageSource} == set(visual_resolver._RESOLVERS)
+    with pytest.raises(ValidationError):
+        ContentBlock(type="image", image_source="generated")
 
 
 @pytest.mark.asyncio

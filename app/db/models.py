@@ -238,7 +238,7 @@ class MediaAsset(Base):
     __tablename__ = "media_assets"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # source | web | generated
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # source | web
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     mime: Mapped[str] = mapped_column(String(50), nullable=False)
     width: Mapped[int] = mapped_column(Integer, nullable=False)
