@@ -17,4 +17,7 @@ def _no_youtube_lookup(monkeypatch):
     dans le `.env` local du poste qui l'exécute (sinon appel réseau réel à YouTube Data API).
     """
     monkeypatch.setenv("COURSE_VIDEOS_ENABLED", "false")
+    # Idem pour l'appel Gemini dédié aux graphes (1 de plus par cours) : activé explicitement par
+    # les tests qui l'exercent (tests/test_course_graphs.py).
+    monkeypatch.setenv("COURSE_GRAPHS_ENABLED", "false")
     monkeypatch.setenv("YOUTUBE_API_KEY", "")

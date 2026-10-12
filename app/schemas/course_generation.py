@@ -758,17 +758,32 @@ class CourseGenerationSchema(BaseModel):
         return self
 
 
+class SectionGraph(BaseModel):
+    section_index: int = Field(description="0-based index into the numbered <sections> list given in the prompt.")
+    graph: GraphData
+
+
+class CourseGraphsSchema(BaseModel):
+    """Graphes d'un cours, générés à part des sections (voir `app.services.course_graphs`)."""
+
+    graphs: list[SectionGraph] = Field(
+        default_factory=list,
+        description="At most one graph per section. Empty if no section is about a graph, a tree or an algorithm on one.",
+    )
+
+
 _GRAPH_DEFS = ("GraphData", "GraphNode", "GraphEdge", "GraphStep", "GraphLayout")
 
 
 def strip_graph_block(schema: dict) -> dict:
     """Copie de `schema` (JSON schema d'un modèle de ce module) où le bloc GRAPH n'existe pas : ni
-    le champ, ni le type de bloc, ni ses modèles. Renvoie `schema` tel quel s'il ne le contient pas.
+    le champ, ni le type de bloc, ni ses modèles. Renvoie `schema` tel quel s'il ne propose pas de
+    blocs de contenu (ex. `CourseGraphsSchema`, dont les graphes sont l'objet même).
 
     La réponse reste validable par les modèles Pydantic d'origine : leur champ `graph` est facultatif.
     """
     defs = schema.get("$defs") or {}
-    if "GraphData" not in defs:
+    if "GraphData" not in defs or "ContentBlock" not in defs:
         return schema
     content_block = defs["ContentBlock"]
     block_type = defs["BlockType"]

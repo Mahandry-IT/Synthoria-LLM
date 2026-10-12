@@ -143,6 +143,9 @@ class Settings(BaseSettings):
     # donc des sections « incomplètes ». Jamais proposé pour les appels « cours entier » (rejetés
     # par Gemini, voir COURSE_GENERATION_GEMINI_SCHEMA). Le contrat d'API garde le bloc `graph`.
     course_graph_block_enabled: bool = False
+    # Graphes générés à part des sections, par 1 appel Gemini de plus par cours (course_graphs.py).
+    course_graphs_enabled: bool = True
+    course_graphs_max: int = 3
     course_regenerate_rate_limit_per_minute: int = 6
     # Sections traitées par appel de régénération groupée : borne la durée de la requête et le
     # nombre d'appels Gemini qu'elle déclenche ; le reste est renvoyé dans `remaining_section_ids`.
