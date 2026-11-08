@@ -47,7 +47,6 @@ from app.schemas.course_generation import (
     SourceType,
     Subsection,
 )
-from app.services.course_graphs import attach_graphs
 from app.services.course_depth import (
     LEGACY_DEPTH,
     DepthProfile,
@@ -396,10 +395,6 @@ def _section_text(section: Section) -> str:
             if b.chart:
                 parts.append(b.chart.caption)
                 parts.extend(b.chart.labels)
-            if b.graph:
-                parts.append(b.graph.caption)
-                parts.extend(n.label for n in b.graph.nodes)
-                parts.extend(s.caption for s in b.graph.steps)
     return " ".join(parts)
 
 
@@ -846,7 +841,7 @@ async def generate_course_from_validated_plan(
     with_visuals = await resolve_visuals(
         with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
     )
-    return await attach_graphs(with_visuals, settings=settings, gemini_client=gemini_client)
+    return with_visuals
 
 
 # ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────

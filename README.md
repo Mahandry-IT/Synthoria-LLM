@@ -175,7 +175,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 
 ## Format du cours (pédagogie active)
 
-- **Blocs typés** : chaque section expose `subsections[].blocks[]` (`text`, `definition`, `list`, `table`, `formula`, `code`, `worked_example`, `callout`, `pitfall`, `diagram` Mermaid, `chart`, `graph`). `quoi/pourquoi/comment/tables` sont **dépréciés** (historique, podcast) et seront retirés dans une version ultérieure. Les diagrammes (≤ 4000 caractères), graphiques (≤ 12 libellés, 4 séries) et graphes (≤ 20 nœuds, 40 arêtes, 12 étapes) sont bornés.
+- **Blocs typés** : chaque section expose `subsections[].blocks[]` (`text`, `definition`, `list`, `table`, `formula`, `code`, `worked_example`, `callout`, `pitfall`, `diagram` Mermaid, `chart`). `quoi/pourquoi/comment/tables` sont **dépréciés** (historique, podcast) et seront retirés dans une version ultérieure. Les diagrammes (≤ 4000 caractères), graphiques (≤ 12 libellés, 4 séries) et graphes (≤ 20 nœuds, 40 arêtes, 12 étapes) sont bornés.
 - **Réponse directe** : `answer` = `summary` + `key_points` + `blocks`, distincte de l'introduction (garde-fou de similarité, `COURSE_ANSWER_INTRO_SIMILARITY_MAX`). L'ancien format `quoi/pourquoi/comment/worked_example` reste lisible.
 - **Cycle par section** (développement) : `challenge` (+ `challenge_key_points`, 2-4 idées attendues, analysées par `POST .../challenge`) → Pourquoi → Quoi → Comment → `faded_example` (À toi) → `check_questions` (Vérifie, feedback par choix) → `recall_prompt` (reformulation). Nombre de sections, taille des sections et du quiz : selon le mode (voir [Modes de cours](#modes-de-cours)).
 - **Quiz final** : majorité de questions normale/difficile (`COURSE_QUIZ_MIN_HARD_SHARE`, 0.6), `section_refs` pour les questions mêlant plusieurs sections.
@@ -276,39 +276,6 @@ Créer la clé : [Google Cloud Console](https://console.cloud.google.com/apis/cr
 
 **Vidéos par section** : ce même appel de classement (aucun appel ni requête YouTube en plus) indique, pour chaque vidéo retenue, la section qu'elle illustre le mieux. La vidéo porte alors `section_id` (l'`id` de la section) ; le client l'affiche dans cette section. `section_id: null` désigne une vidéo générale, à afficher au niveau du cours — c'est aussi le cas sans classement (repli V1, mode dégradé, recherche groundée), pour les cours enregistrés avant cet ajout, au-delà de `COURSE_VIDEOS_MAX_PER_SECTION` (2 par défaut) vidéos pour une même section, et le client doit traiter de même un `section_id` qui ne correspond à aucune section. La liste `videos` reste au niveau du cours : seul ce champ est ajouté.
 
-### Bloc `graph` (graphe, arbre, pas-à-pas)
-
-Un bloc `graph` décrit une structure de données en **données pures** : le serveur ne fournit ni coordonnées, ni tailles, ni couleurs. La disposition, l'animation et le style reviennent entièrement au client (Synthoria Studio).
-
-```json
-{
-  "type": "graph",
-  "graph": {
-    "layout": "graph",
-    "directed": false,
-    "caption": "Plus court chemin de A à C",
-    "nodes": [{"id": "A", "label": "A"}, {"id": "B", "label": "B"}, {"id": "C", "label": "C"}],
-    "edges": [
-      {"id": "e1", "source": "A", "target": "B", "label": "2"},
-      {"id": "e2", "source": "B", "target": "C", "label": "3"},
-      {"id": "e3", "source": "A", "target": "C", "label": "7"}
-    ],
-    "steps": [
-      {"caption": "On part de A.", "highlight_nodes": ["A"], "highlight_edges": []},
-      {"caption": "Passer par B coûte 5, moins que l'arête directe (7).", "highlight_nodes": ["A", "B", "C"], "highlight_edges": ["e1", "e2"]}
-    ]
-  }
-}
-```
-
-- `layout` : `graph` (graphe, réseau, automate), `tree` (arbre enraciné, arêtes parent → enfant), `layered` (dépendances dessinées par niveaux). C'est une indication de disposition, le client choisit l'algorithme.
-- `steps` vide : schéma statique. Sinon, un pas-à-pas : chaque étape porte un texte et les `id` des nœuds et arêtes à mettre en avant à ce moment-là.
-- **Garanties serveur** (`ApiGraph`, `app/api/schemas.py`) : identifiants uniques, arêtes et étapes ne référençant que des éléments existants, bornes respectées (≤ 20 nœuds, 40 arêtes, 12 étapes), et pour `tree` une seule racine, un seul parent par nœud, aucun cycle. Un graphe incohérent est retiré du cours, jamais « réparé ».
-- **Libellés non fiables** : `label` et `caption` viennent du modèle ; le client les affiche comme du texte, jamais comme du HTML.
-- Les cours enregistrés avant l'ajout de ce bloc n'en contiennent pas : le champ `graph` est facultatif.
-- **Génération à part des sections** (`COURSE_GRAPHS_ENABLED=true`, défaut) : une fois les sections rédigées, **un seul appel Gemini de plus par cours** (`app/services/course_graphs.py`) reçoit un extrait de chaque section de développement, choisit celles dont l'objet est une structure de données ou un algorithme sur un graphe, et renvoie au plus `COURSE_GRAPHS_MAX` graphes (3, un par section). Le schéma de cet appel ne contient que les graphes, ce que Gemini traite sans difficulté (constaté en réel : graphes valides en quelques secondes). Chaque graphe est validé puis ajouté à la fin de la sous-section « Comment » de sa section ; un graphe incohérent est écarté sans toucher aux autres. Best-effort : en cas d'échec, de quota épuisé ou de mode dégradé, le cours est livré sans graphe. Concerne la génération d'un cours (directe, depuis un plan, régénération complète), pas la régénération ni l'ajout d'une section isolée.
-- **Dans le schéma des sections : désactivé par défaut** (`COURSE_GRAPH_BLOCK_ENABLED=false`) : le bloc n'est alors proposé à Gemini dans aucun appel, donc aucun cours n'en contient. Constat en réel sur Flash-Lite : avec ce bloc dans le schéma des sections, le modèle renvoie le plus souvent une section sans contenu (3 essais sur 3, contre 1 sur 3 sans), qui devient une section « incomplète ». À n'activer que pour expérimenter, de préférence avec un modèle plus capable. Il n'est jamais proposé pour les appels « cours entier » (génération directe, clôture), que Gemini rejette avec lui (`400 INVALID_ARGUMENT`).
-
 ### Supports visuels
 
 Comme pour les vidéos, Gemini ne produit jamais d'URL ni de nom de fichier d'image (il en invente régulièrement) : un bloc `image` porte seulement une **intention** — `image_source` (`pdf` / `web`), `image_query` (recherche web) ou `image_reference` (figure d'un PDF source), `image_alt` — résolue déterministiquement côté serveur (`app/services/media/visual_resolver.py`).
@@ -318,7 +285,7 @@ Comme pour les vidéos, Gemini ne produit jamais d'URL ni de nom de fichier d'im
 - **Déduplication** : les images sont indexées par sha256 du contenu ré-encodé ; deux blocs qui résolvent vers la même image (même figure PDF réutilisée, même image web) partagent une seule ligne.
 - **Attribution** : les images sous licence CC BY / CC BY-SA affichent obligatoirement leur auteur et leur licence ; un bloc sans licence connue n'est pas retenu.
 
-Lot 1 (fondations) pose le schéma, le stockage et le routage. Aucune image n'est générée par IA : un schéma relève des blocs `diagram`/`chart`/`graph`.
+Lot 1 (fondations) pose le schéma, le stockage et le routage. Aucune image n'est générée par IA : un schéma relève des blocs `diagram`/`chart`.
 
 **Lot 2 — figures des PDF ingérés, actif** :
 - **À l'ingestion** : les images jugées informatives par Gemini (appel groupé existant, `describe_images` — aucun appel supplémentaire) sont ré-encodées et stockées comme toute autre image (`media_assets`, `kind = "source"`), puis reliées à leur fichier (table `ingested_file_figures`, migration `021_add_ingested_file_figures`). Chaque figure reçoit une référence courte `fig-…`, dérivée de son contenu, inscrite dans son chunk de description : `Figure fig-0123456789ab (page 3) : …`.

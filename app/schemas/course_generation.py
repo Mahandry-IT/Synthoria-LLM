@@ -55,7 +55,6 @@ class BlockType(str, Enum):
     PITFALL = "pitfall"
     DIAGRAM = "diagram"
     CHART = "chart"
-    GRAPH = "graph"
 
 
 class ImageSource(str, Enum):
@@ -129,50 +128,6 @@ class ChartData(BaseModel):
     caption: str = Field(default="", description="Short title of the chart, with the unit.")
     labels: list[str] = Field(description="Category labels (x axis / slices), max 12.")
     series: list[ChartSeries] = Field(description="1 to 4 series (exactly 1 for a pie).")
-
-
-class GraphLayout(str, Enum):
-    GRAPH = "graph"
-    TREE = "tree"
-    LAYERED = "layered"
-
-
-class GraphNode(BaseModel):
-    id: str = Field(description="Short unique identifier (e.g. 'A', 'n1'), referenced by edges and steps.")
-    label: str = Field(description="Short text displayed in the node (a name or a value).")
-
-
-class GraphEdge(BaseModel):
-    id: str = Field(description="Short unique identifier (e.g. 'e1'), referenced by steps.")
-    source: str = Field(description="`id` of the start node (the parent, for a tree).")
-    target: str = Field(description="`id` of the end node (the child, for a tree).")
-    label: str | None = Field(default=None, description="Weight or short label of the edge, if any.")
-
-
-class GraphStep(BaseModel):
-    caption: str = Field(description="One or two sentences explaining what happens at this step.")
-    highlight_nodes: list[str] = Field(default_factory=list, description="`id` of the nodes to highlight at this step.")
-    highlight_edges: list[str] = Field(default_factory=list, description="`id` of the edges to highlight at this step.")
-
-
-class GraphData(BaseModel):
-    layout: GraphLayout = Field(
-        description=(
-            "graph for a general graph, network or automaton; tree for a rooted tree (edges go from "
-            "parent to child, exactly one root); layered for dependencies or precedence drawn in levels."
-        )
-    )
-    directed: bool = Field(description="True if edges have a direction (always true for a tree).")
-    caption: str = Field(default="", description="Short title of the graph.")
-    nodes: list[GraphNode] = Field(description="2 to 20 nodes. Never give coordinates, sizes or colors.")
-    edges: list[GraphEdge] = Field(description="1 to 40 edges, each between two existing node ids.")
-    steps: list[GraphStep] = Field(
-        default_factory=list,
-        description=(
-            "Optional step-by-step walkthrough (max 12), e.g. a traversal or a shortest-path run. "
-            "Leave empty for a static graph."
-        ),
-    )
 
 
 class FormulaData(BaseModel):
@@ -255,10 +210,6 @@ class ContentBlock(BaseModel):
     image_alt: str | None = Field(default=None, description="Set for IMAGE — short accessible alt text describing the image content, independent of the caption.")
     diagram: DiagramData | None = Field(default=None, description="Set for DIAGRAM — flows, sequences, hierarchies, cycles.")
     chart: ChartData | None = Field(default=None, description="Set for CHART — only for real numeric data, never invented figures.")
-    graph: GraphData | None = Field(
-        default=None,
-        description="Set for GRAPH — a data structure (graph, tree, network, automaton) given as nodes and edges, drawn by the client.",
-    )
     pitfall: PitfallData | None = Field(default=None, description="Set for PITFALL — always fill all 3 sub-fields, never leave why_it_happens/how_to_avoid blank.")
 
 
@@ -758,50 +709,5 @@ class CourseGenerationSchema(BaseModel):
         return self
 
 
-class SectionGraph(BaseModel):
-    section_index: int = Field(description="0-based index into the numbered <sections> list given in the prompt.")
-    graph: GraphData
-
-
-class CourseGraphsSchema(BaseModel):
-    """Graphes d'un cours, générés à part des sections (voir `app.services.course_graphs`)."""
-
-    graphs: list[SectionGraph] = Field(
-        default_factory=list,
-        description="At most one graph per section. Empty if no section is about a graph, a tree or an algorithm on one.",
-    )
-
-
-_GRAPH_DEFS = ("GraphData", "GraphNode", "GraphEdge", "GraphStep", "GraphLayout")
-
-
-def strip_graph_block(schema: dict) -> dict:
-    """Copie de `schema` (JSON schema d'un modèle de ce module) où le bloc GRAPH n'existe pas : ni
-    le champ, ni le type de bloc, ni ses modèles. Renvoie `schema` tel quel s'il ne propose pas de
-    blocs de contenu (ex. `CourseGraphsSchema`, dont les graphes sont l'objet même).
-
-    La réponse reste validable par les modèles Pydantic d'origine : leur champ `graph` est facultatif.
-    """
-    defs = schema.get("$defs") or {}
-    if "GraphData" not in defs or "ContentBlock" not in defs:
-        return schema
-    content_block = defs["ContentBlock"]
-    block_type = defs["BlockType"]
-    return {
-        **schema,
-        "$defs": {
-            **{name: value for name, value in defs.items() if name not in _GRAPH_DEFS},
-            "ContentBlock": {
-                **content_block,
-                "properties": {k: v for k, v in content_block["properties"].items() if k != "graph"},
-            },
-            "BlockType": {**block_type, "enum": [v for v in block_type["enum"] if v != BlockType.GRAPH.value]},
-        },
-    }
-
-
-# Schéma envoyé à Gemini pour les appels « cours entier » (génération directe, clôture d'un cours
-# depuis un plan), toujours sans le bloc GRAPH : avec lui, `CourseGenerationSchema` dépasse la
-# complexité que Gemini accepte et l'appel est rejeté (400 INVALID_ARGUMENT) avant toute génération.
-# Pour les schémas de sections, plus petits, voir `Settings.course_graph_block_enabled`.
-COURSE_GENERATION_GEMINI_SCHEMA: dict = strip_graph_block(CourseGenerationSchema.model_json_schema())
+# Schéma envoyé à Gemini pour les appels « cours entier » (génération directe, clôture depuis un plan).
+COURSE_GENERATION_GEMINI_SCHEMA: dict = CourseGenerationSchema.model_json_schema()
