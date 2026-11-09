@@ -67,6 +67,8 @@ async def _repair(
             f"{base_prompt}\n\n"
             "Une première version de cette section avait les problèmes suivants, à corriger :\n"
             + "\n".join(f"- {issue}" for issue in best_issues.all)
+            + "\nRéponds avec la section COMPLÈTE : `subsections` contient les trois sous-sections "
+            "Pourquoi, Quoi et Comment, chacune avec au moins un bloc."
         )
         try:
             candidate = await _generate_one(prompt, section.title, system_instruction, gemini_client)
