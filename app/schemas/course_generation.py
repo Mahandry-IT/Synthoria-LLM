@@ -489,6 +489,42 @@ class SectionsBatchSchema(BaseModel):
         )
     )
 
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Schéma envoyé à Gemini : les champs de contenu d'une section DEVELOPMENT y sont obligatoires.
+
+        Côté Pydantic ils ont tous un défaut (la même classe `Section` sert aussi l'introduction et la
+        clôture, qui n'ont pas de sous-sections), donc le JSON Schema les déclare facultatifs et
+        Flash-Lite renvoie parfois une section réduite à `type` et `title` : sous-sections vides,
+        section « incomplète », régénération qui échoue. Ici seulement (lots de sections et
+        régénération), on exige les sous-sections (3, chacune avec au moins un bloc) et le reste du
+        cycle pédagogique. La validation Pydantic reste inchangée.
+        """
+        return _require_development_content(super().model_json_schema(*args, **kwargs))
+
+
+# Champs d'une section DEVELOPMENT que Gemini doit toujours renvoyer (`covered_subtopics` reste
+# facultatif : il n'a de sens que pour une génération depuis un plan).
+_DEVELOPMENT_REQUIRED_FIELDS = (
+    "subsections", "challenge", "challenge_key_points", "faded_example", "check_questions", "recall_prompt",
+)
+
+
+def _require_development_content(schema: dict[str, Any]) -> dict[str, Any]:
+    defs = schema.get("$defs", {})
+    section = defs.get("Section")
+    if section is not None:
+        section["required"] = [*section.get("required", []), *(
+            f for f in _DEVELOPMENT_REQUIRED_FIELDS if f not in section.get("required", [])
+        )]
+        subsections = section.get("properties", {}).get("subsections")
+        if subsections is not None:
+            subsections["minItems"] = 3
+    blocks = defs.get("Subsection", {}).get("properties", {}).get("blocks")
+    if blocks is not None:
+        blocks["minItems"] = 1
+    return schema
+
 
 class PlanMeta(BaseModel):
     title: str = Field(description="Titre du cours.")
