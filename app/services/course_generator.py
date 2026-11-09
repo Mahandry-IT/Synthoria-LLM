@@ -33,6 +33,7 @@ from app.schemas.course_generation import (
     QuizDifficulty,
     Section,
 )
+from app.services.course_widgets import attach_widgets
 from app.services.course_depth import LEGACY_DEPTH, get_profile, render_course_rules
 from app.services.course_videos import _search_videos, attach_verified_videos  # noqa: F401 — rétrocompat (imports historiques)
 from app.services.gemini_client import GeminiClient
@@ -1097,7 +1098,7 @@ async def generate_course_from_question(
         with_visuals = await resolve_visuals(
             with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
         )
-        return with_visuals
+        return await attach_widgets(with_visuals, settings=settings, gemini_client=gemini_client)
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -1142,4 +1143,4 @@ async def generate_course_from_question(
     with_visuals = await resolve_visuals(
         with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
     )
-    return with_visuals
+    return await attach_widgets(with_visuals, settings=settings, gemini_client=gemini_client)

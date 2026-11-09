@@ -306,6 +306,15 @@ Lot 1 (fondations) pose le schéma, le stockage et le routage. Aucune image n'es
 **Créer les identifiants Openverse** (optionnel) : [api.openverse.org/v1/auth_tokens/register](https://api.openverse.org/v1/auth_tokens/register/) → remplir le formulaire (nom, description, email) → `client_id` et `client_secret` renvoyés immédiatement, à copier dans `OPENVERSE_CLIENT_ID`/`OPENVERSE_CLIENT_SECRET`. Augmente le quota de requêtes par rapport à l'accès anonyme ; sans identifiants, le résolveur fonctionne quand même (Wikimedia Commons seul, ou Openverse en quota anonyme).
 
 
+### Widgets interactifs
+
+Un bloc `widget` (`{title, description, html, height_hint}`) porte un visuel interactif autonome (graphe, simulation, tableau triable...) : un **fragment de body** HTML/CSS/JS que le client affiche dans une iframe sandboxée. Il n'est jamais demandé dans les sections : un appel Gemini dédié par cours (`app/services/course_widgets.py`, best-effort) choisit au plus `COURSE_WIDGETS_MAX` sections (3) et insère un widget à la fin de leur sous-section « Comment ». Désactivé par défaut (`COURSE_WIDGETS_ENABLED=false`) : 1 appel Gemini de plus par cours.
+
+- `title` ≤ 120 caractères, `description` ≤ 500 (texte alternatif, aussi lu par le chatbot, le podcast et les flashcards), `html` ≤ `COURSE_WIDGET_MAX_CHARS` (20000), `height_hint` facultatif entre 160 et 720.
+- Thème : le client injecte les variables CSS `--w-bg`, `--w-fg`, `--w-muted`, `--w-accent`, `--w-border`, `--w-surface` ; le prompt impose de n'utiliser que celles-ci. La hauteur est mesurée côté client.
+- Filtre serveur (`ApiWidget`, en plus de la sandbox et de la CSP du client, qui restent le vrai rempart) : un widget dont le HTML contient une balise structurelle ou d'imbrication (`html`, `head`, `body`, `meta`, `base`, `iframe`, `object`, `embed`, `link`, `form`), un `<script src>`, une URL `http(s)://` ou `//hôte` (hors espaces de noms SVG/XLink/XHTML du w3.org), `@import`, un accès réseau (`fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, `import()`), `window.parent`/`window.top`, un stockage navigateur, `eval`, `new Function`, `javascript:`, `postMessage` ou `srcdoc` est écarté seul, sans emporter les autres. Les journaux ne contiennent que la taille et le motif, jamais le HTML.
+- Le texte lu par le chatbot, le podcast et les flashcards est « titre — description » (`lesson_context.block_text`), jamais le HTML.
+
 ## Développement local (sans Docker)
 
 ```bash

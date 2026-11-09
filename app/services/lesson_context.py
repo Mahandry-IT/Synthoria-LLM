@@ -94,6 +94,10 @@ def block_text(block: dict) -> str:
         parts.append(f"Schéma : {_s(block['diagram']['caption'])}")
     if block.get("chart"):
         parts.append(_chart_text(_dict(block["chart"])))
+    if block.get("widget"):
+        # Jamais le HTML : titre et texte alternatif suffisent au chatbot, au podcast et aux cartes.
+        widget = _dict(block["widget"])
+        parts.append(" — ".join(t for t in (_s(widget.get("title")), _s(widget.get("description"))) if t))
     return "\n".join(p for p in parts if p)
 
 
