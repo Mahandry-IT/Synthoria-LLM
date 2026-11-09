@@ -73,6 +73,16 @@ def test_residual_graph_block_from_saved_course_is_ignored():
     assert block_text({"type": "graph", "graph": graph, "text": "Reste."}) == "Reste."
 
 
+def test_widget_block_renders_title_and_description_but_never_the_html():
+    widget = {"title": "Tri interactif", "description": "Trie un tableau pas à pas.", "html": "<script>secret()</script>"}
+
+    text = block_text({"type": "widget", "widget": widget})
+
+    assert text == "Tri interactif — Trie un tableau pas à pas."
+    assert "script" not in text and "secret" not in text
+    assert block_text({"type": "widget", "widget": {"html": "<p>x</p>"}}) == ""
+
+
 # --- Sélection des sections pertinentes (chat : on n'envoie plus le cours entier) ---
 
 SELECT_COURSE = {

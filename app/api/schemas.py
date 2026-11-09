@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Annotated, Any, Generic, Literal, TypeVar, get_args
 from uuid import UUID
@@ -213,12 +214,69 @@ class ApiImage(BaseModel):
     attribution: ApiImageAttribution | None = None
 
 
+WIDGET_TITLE_MAX = 120
+WIDGET_DESCRIPTION_MAX = 500
+WIDGET_HEIGHT_MIN = 160
+WIDGET_HEIGHT_MAX = 720
+
+# Espaces de noms XML standards : indispensables à `createElementNS` / `xmlns` d'un SVG construit en JS,
+# sans effet réseau. Retirés avant la recherche d'URL.
+_XML_NAMESPACES_RE = re.compile(r"http://www\.w3\.org/(?:2000/svg|1999/xlink|1999/xhtml)", re.I)
+# (libellé, motif) : défense en profondeur ; le vrai rempart est l'iframe sandboxée + CSP côté client.
+_WIDGET_FORBIDDEN: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (label, re.compile(pattern, re.I))
+    for label, pattern in (
+        ("balise interdite", r"<\s*/?\s*(?:html|head|body|meta|base|iframe|object|embed|link|form)\b"),
+        ("script externe", r"<\s*script\b[^>]*\bsrc\b"),
+        ("URL absolue", r"https?://"),
+        ("URL relative au protocole", r"""["'(=]\s*//[\w.\-]"""),
+        ("@import", r"@import"),
+        ("requête réseau", r"\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|\bimport\s*\("),
+        ("accès au parent", r"\b(?:window|self|globalThis)\s*\.\s*(?:parent|top)\b|(?<![\w$.\-])(?:parent|top)\.[A-Za-z_$]"),
+        ("stockage navigateur", r"document\s*\.\s*cookie|localStorage|sessionStorage|indexedDB"),
+        ("exécution dynamique", r"\beval\s*\(|\bnew\s+Function\b|javascript\s*:"),
+        ("postMessage / srcdoc", r"postMessage|srcdoc"),
+    )
+)
+
+
+def widget_html_problem(html: str) -> str | None:
+    """Libellé du premier motif interdit trouvé dans `html` (None si le fragment est acceptable)."""
+    if len(html) > get_settings().course_widget_max_chars:
+        return "taille maximale dépassée"
+    scanned = _XML_NAMESPACES_RE.sub("", html)
+    for label, pattern in _WIDGET_FORBIDDEN:
+        if pattern.search(scanned):
+            return label
+    return None
+
+
+class ApiWidget(BaseModel):
+    """Visuel interactif autonome (fragment de body : HTML, `<style>`, `<script>` inline), affiché par le
+    client dans une iframe sandboxée. `description` est le texte alternatif, aussi lu par le chatbot et
+    le podcast. Le filtre de `html` s'applique partout où le modèle est validé."""
+
+    title: str = Field(min_length=1, max_length=WIDGET_TITLE_MAX)
+    description: str = Field(min_length=1, max_length=WIDGET_DESCRIPTION_MAX)
+    html: str = Field(min_length=1)
+    height_hint: int | None = Field(default=None, ge=WIDGET_HEIGHT_MIN, le=WIDGET_HEIGHT_MAX)
+
+    @field_validator("html")
+    @classmethod
+    def _html_is_safe(cls, value: str) -> str:
+        problem = widget_html_problem(value)
+        if problem:
+            # Jamais le HTML dans le message : il finirait dans les logs et les réponses d'erreur.
+            raise ValueError(f"widget html refusé : {problem}")
+        return value
+
+
 class ApiContentBlock(BaseModel):
     """Bloc de contenu typé (contrat par blocs). Seuls les champs correspondant à `type` sont renseignés."""
 
     type: Literal[
         "text", "definition", "list", "table", "formula", "code", "worked_example",
-        "callout", "image", "pitfall", "diagram", "chart",
+        "callout", "image", "pitfall", "diagram", "chart", "widget",
     ]
     text: str | None = None
     callout_variant: Literal["note", "warning", "tip"] | None = None
@@ -234,6 +292,7 @@ class ApiContentBlock(BaseModel):
     pitfall: ApiPitfall | None = None
     diagram: ApiDiagram | None = None
     chart: ApiChart | None = None
+    widget: ApiWidget | None = None
 
     # Intention Gemini portée jusqu'au résolveur (app/services/media/visual_resolver.py), jamais
     # exposée aux clients de l'API : ni URL ni identifiant externe, juste de quoi résoudre le

@@ -47,6 +47,7 @@ from app.schemas.course_generation import (
     SourceType,
     Subsection,
 )
+from app.services.course_widgets import attach_widgets
 from app.services.course_depth import (
     LEGACY_DEPTH,
     DepthProfile,
@@ -841,7 +842,7 @@ async def generate_course_from_validated_plan(
     with_visuals = await resolve_visuals(
         with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
     )
-    return with_visuals
+    return await attach_widgets(with_visuals, settings=settings, gemini_client=gemini_client)
 
 
 # ─── Assistance IA sur le plan : compléter une section / ajouter des sections ────

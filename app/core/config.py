@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     flashcard_variants_context_max_chars: int = 8000
 
     # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
+    # Widgets interactifs (HTML/CSS/JS autonome, bloc `widget`) générés à part des sections : 1 appel
+    # Gemini de plus par cours (course_widgets.py). Désactivé par défaut tant que l'essai de
+    # faisabilité (JSON valide avec du HTML dans une chaîne, troncature) n'est pas concluant.
+    course_widgets_enabled: bool = False
+    course_widgets_max: int = 3
+    course_widget_max_chars: int = 20000
     course_regenerate_rate_limit_per_minute: int = 6
     # Sections traitées par appel de régénération groupée : borne la durée de la requête et le
     # nombre d'appels Gemini qu'elle déclenche ; le reste est renvoyé dans `remaining_section_ids`.
