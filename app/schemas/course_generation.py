@@ -107,7 +107,9 @@ class DiagramData(BaseModel):
         description=(
             "Valid Mermaid source ONLY (flowchart TD / sequenceDiagram / ...), max ~15 nodes, short labels, "
             "no HTML, no click handlers, no styling directives. Example: "
-            "'flowchart TD; A[Entrée] --> B{Test}; B -->|oui| C[Résultat]; B -->|non| A' (one statement per line)."
+            "'flowchart TD; A[Entrée] --> B{Test}; B -->|oui| C[Résultat]; B -->|non| A' (one statement per line). "
+            "Any label containing parentheses, brackets, quotes or a colon MUST be wrapped in double quotes, "
+            "e.g. D[\"Évaluation f(s1)\"] and never D[Évaluation f(s1)] (the diagram would not render)."
         )
     )
 
