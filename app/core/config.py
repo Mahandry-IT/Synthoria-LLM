@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     gemini_chain_generation: list[str] = []  # format_structured : lite d'abord (moins cher)
     gemini_chain_light: list[str] = []  # reformulate_query/describe_images/rank_images : lite d'abord
     gemini_chain_search: list[str] = []  # search_grounded (grounding) : flash d'abord
+    gemini_chain_widgets: list[str] = []  # widgets de cours (format_structured) : flash d'abord (code plus riche)
     gemini_max_retries: int = 3
     gemini_timeout_seconds: float = 30.0
     # Marge sous la limite Google (ex. 15 RPM sur gemini-*-flash-lite au palier gratuit) : les
@@ -138,11 +139,14 @@ class Settings(BaseSettings):
     flashcard_variants_context_max_chars: int = 8000
 
     # Régénération d'une section incomplète, et notes libres de l'apprenant sur chaque section
-    # Widgets interactifs (HTML/CSS/JS autonome, bloc `widget`) générés à part des sections : 1 appel
-    # Gemini de plus par cours (course_widgets.py). Désactivé par défaut tant que l'essai de
-    # faisabilité (JSON valide avec du HTML dans une chaîne, troncature) n'est pas concluant.
-    course_widgets_enabled: bool = False
-    course_widgets_max: int = 3
+    # Widgets interactifs (HTML/CSS/JS autonome, bloc `widget`) générés à part des sections, UN appel
+    # Gemini par section (course_widgets.py) : au plus `course_widgets_max` widgets, `course_widgets_max_calls`
+    # appels (réécritures comprises) et `course_widgets_budget_seconds` secondes par cours. Activé par défaut ;
+    # `COURSE_WIDGETS_ENABLED=false` le coupe.
+    course_widgets_enabled: bool = True
+    course_widgets_max: int = 6
+    course_widgets_max_calls: int = 9
+    course_widgets_budget_seconds: int = 150
     course_widget_max_chars: int = 20000
     course_regenerate_rate_limit_per_minute: int = 6
     # Sections traitées par appel de régénération groupée : borne la durée de la requête et le
@@ -235,6 +239,8 @@ class Settings(BaseSettings):
             self.gemini_chain_light = [self.gemini_model_flash_lite, self.gemini_model_flash]
         if not self.gemini_chain_search:
             self.gemini_chain_search = [self.gemini_model_flash, self.gemini_model_flash_lite]
+        if not self.gemini_chain_widgets:
+            self.gemini_chain_widgets = [self.gemini_model_flash, self.gemini_model_flash_lite]
         return self
 
 

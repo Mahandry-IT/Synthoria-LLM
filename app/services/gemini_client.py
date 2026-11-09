@@ -664,7 +664,12 @@ class GeminiClient:
         return query
 
     async def format_structured(
-        self, raw_answer: str, system_instruction: str, *, response_schema: Any | None = None
+        self,
+        raw_answer: str,
+        system_instruction: str,
+        *,
+        response_schema: Any | None = None,
+        chain: list[str] | None = None,
     ) -> dict:
         """
         Reformate une réponse brute en JSON structuré strict (sans google_search).
@@ -676,6 +681,7 @@ class GeminiClient:
         modèle suivant si le courant est en quota ou indisponible (`_call_with_model_cascade`).
         Un 400 (schema trop complexe) sur le lite est aussi couvert : `_call_with_retry` le classe
         en `GeminiUnavailableError`, que le cascade rattrape comme n'importe quel autre échec.
+        `chain` remplace `gemini_chain_generation` pour cet appel (ex. widgets : flash d'abord).
         """
         self._ensure_configured()
         if response_schema is None:
@@ -697,7 +703,7 @@ class GeminiClient:
             )
 
         response = await self._call_with_model_cascade(
-            _run, self._settings.gemini_chain_generation, method="format_structured",
+            _run, chain or self._settings.gemini_chain_generation, method="format_structured",
             contents=raw_answer, system_instruction=system_instruction,
         )
 

@@ -748,7 +748,6 @@ class CourseGenerationSchema(BaseModel):
 
 
 class SectionWidget(BaseModel):
-    section_index: int = Field(description="Index (from 0) of the section in the numbered list that was given.")
     title: str = Field(description="Short title of the widget (French, 120 characters max).")
     description: str = Field(
         description="Alternative text (French, 500 characters max): what the widget shows and lets the learner do."
@@ -756,13 +755,13 @@ class SectionWidget(BaseModel):
     html: str = Field(description="Self-contained body fragment: HTML elements, inline <style> and <script>.")
 
 
-class WidgetsSchema(BaseModel):
-    """Widgets interactifs d'un cours, générés à part des sections (voir `app.services.course_widgets`).
+class SectionWidgetResult(BaseModel):
+    """Réponse unitaire pour UNE section (voir `app.services.course_widgets`).
     Le bloc `widget` n'est volontairement pas dans `BlockType` : il n'est jamais demandé dans les sections."""
 
-    widgets: list[SectionWidget] = Field(
-        default_factory=list,
-        description="At most one widget per section. Empty if no section benefits from an interactive visual.",
+    widget: SectionWidget | None = Field(
+        default=None,
+        description="The interactive widget for this section; omit or null if the section has no manipulable mechanism or data.",
     )
 
 
