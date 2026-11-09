@@ -120,6 +120,6 @@ def test_dict_without_any_content_is_incomplete():
 
 
 def test_dict_with_only_typed_blocks_is_complete():
-    section = {"id": "0", "title": "T", "comment": "", "subsections": [{"title": "", "blocks": [{"type": "graph"}]}]}
+    section = {"id": "0", "title": "T", "comment": "", "subsections": [{"title": "", "blocks": [{"type": "chart"}]}]}
 
     assert is_incomplete_section_dict(section) is False

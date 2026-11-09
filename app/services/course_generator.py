@@ -33,7 +33,6 @@ from app.schemas.course_generation import (
     QuizDifficulty,
     Section,
 )
-from app.services.course_graphs import attach_graphs
 from app.services.course_depth import LEGACY_DEPTH, get_profile, render_course_rules
 from app.services.course_videos import _search_videos, attach_verified_videos  # noqa: F401 — rétrocompat (imports historiques)
 from app.services.gemini_client import GeminiClient
@@ -262,9 +261,6 @@ def _block_to_text(block: Any) -> str:
 
 def _map_block(block: Any) -> ApiContentBlock | None:
     """ContentBlock Gemini → bloc d'API. None si le bloc est vide ou dépasse les limites de rendu."""
-    if block.type is BlockType.GRAPH and block.graph is None:
-        logger.warning("course_block_dropped", extra={"type": block.type.value})
-        return None
     data = block.model_dump(mode="json", exclude_none=True)
     data["type"] = block.type.value
     if block.formula:
@@ -1101,7 +1097,7 @@ async def generate_course_from_question(
         with_visuals = await resolve_visuals(
             with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
         )
-        return await attach_graphs(with_visuals, settings=settings, gemini_client=gemini_client)
+        return with_visuals
 
     # --- Mode 2 appels (search grounding + reformatage) ---
     if is_question_only:
@@ -1146,4 +1142,4 @@ async def generate_course_from_question(
     with_visuals = await resolve_visuals(
         with_videos, settings=settings, db_session_factory=db_session_factory, gemini_client=gemini_client,
     )
-    return await attach_graphs(with_visuals, settings=settings, gemini_client=gemini_client)
+    return with_visuals

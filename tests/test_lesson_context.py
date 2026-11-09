@@ -65,18 +65,12 @@ def test_tolerates_missing_or_malformed_fields():
     )
 
 
-def test_graph_block_is_rendered_as_edges_and_steps():
-    graph = {
-        "directed": True, "caption": "Parcours",
-        "nodes": [{"id": "A", "label": "Départ"}, {"id": "B", "label": "Arrivée"}],
-        "edges": [{"id": "e1", "source": "A", "target": "B", "label": "5"}, {"id": "e2", "source": "B", "target": "X"}],
-        "steps": [{"caption": "On avance.", "highlight_nodes": ["B"]}],
-    }
+def test_residual_graph_block_from_saved_course_is_ignored():
+    """Les cours enregistrés avant la suppression du bloc `graph` en contiennent : lecture sans erreur."""
+    graph = {"directed": True, "caption": "Parcours", "nodes": [{"id": "A", "label": "Départ"}], "edges": [None]}
 
-    assert block_text({"type": "graph", "graph": graph}) == (
-        "Graphe : Parcours\nDépart → Arrivée (5)\nArrivée → X\nÉtape 1 : On avance."
-    )
-    assert block_text({"type": "graph", "graph": {"nodes": None, "edges": [None]}})  # jamais d'exception
+    assert block_text({"type": "graph", "graph": graph}) == ""
+    assert block_text({"type": "graph", "graph": graph, "text": "Reste."}) == "Reste."
 
 
 # --- Sélection des sections pertinentes (chat : on n'envoie plus le cours entier) ---

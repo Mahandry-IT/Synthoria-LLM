@@ -13,7 +13,6 @@ from google.genai import types
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import Settings
-from app.schemas.course_generation import strip_graph_block
 from app.core.exceptions import (
     GeminiDailyQuotaExceededError,
     GeminiInvalidResponseError,
@@ -684,8 +683,6 @@ class GeminiClient:
         json_schema = (
             response_schema.model_json_schema() if hasattr(response_schema, "model_json_schema") else response_schema
         )
-        if not self._settings.course_graph_block_enabled:
-            json_schema = strip_graph_block(json_schema)
         clean_schema = _strip_additional_properties(json_schema)
 
         def _run(model: str) -> Any:

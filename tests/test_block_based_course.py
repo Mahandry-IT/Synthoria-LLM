@@ -23,12 +23,7 @@ ALL_BLOCKS = [
     {"type": "diagram", "diagram": {"kind": "flowchart", "caption": "flux", "mermaid": "flowchart TD; A-->B"}},
     {"type": "chart", "chart": {"kind": "bar", "caption": "ventes", "labels": ["a", "b"],
                                 "series": [{"name": "n", "values": [1, 2]}]}},
-    {"type": "graph", "graph": {
-        "layout": "graph", "directed": False, "caption": "réseau",
-        "nodes": [{"id": "A", "label": "A"}, {"id": "B", "label": "B"}],
-        "edges": [{"id": "e1", "source": "A", "target": "B", "label": "4"}],
-        "steps": [{"caption": "On part de A.", "highlight_nodes": ["A"], "highlight_edges": ["e1"]}],
-    }},
+
 ]
 
 
@@ -41,28 +36,9 @@ def test_map_blocks_keeps_every_type_in_order():
     by_type = {b.type: b for b in mapped}
     assert by_type["diagram"].diagram.mermaid == "flowchart TD; A-->B"
     assert by_type["chart"].chart.series[0].values == [1, 2]
-    assert by_type["graph"].graph.edges[0].label == "4"
-    assert by_type["graph"].graph.steps[0].highlight_edges == ["e1"]
     assert by_type["formula"].formula.latex == "E=mc^2"
     assert by_type["worked_example"].worked_example.steps == ["1", "2"]
     assert by_type["callout"].callout_variant == "warning"
-
-
-def test_graph_block_without_data_or_inconsistent_is_dropped():
-    empty = {"type": "graph"}
-    orphan_edge = {"type": "graph", "graph": {
-        "layout": "graph", "directed": True,
-        "nodes": [{"id": "A", "label": "A"}, {"id": "B", "label": "B"}],
-        "edges": [{"id": "e1", "source": "A", "target": "Z"}],
-    }}
-
-    mapped = _map_blocks(_section([empty, orphan_edge, {"type": "text", "text": "Reste."}]).subsections[0].blocks)
-
-    assert [b.type for b in mapped] == ["text"]
-
-
-def test_graph_block_counts_as_visual():
-    assert visual_issues(_section([ALL_BLOCKS[-1], {"type": "text", "text": "Une phrase."}])) == []
 
 
 def test_oversized_diagram_is_dropped_and_chart_truncated():
@@ -101,7 +77,7 @@ def test_legacy_section_without_subsections_still_valid():
 
 def test_visual_issues():
     assert visual_issues(_section([{"type": "text", "text": "Une phrase."}])) == [
-        "aucun bloc visuel (TABLE, LIST, DIAGRAM, GRAPH, CHART, FORMULA...)"
+        "aucun bloc visuel (TABLE, LIST, DIAGRAM, CHART, FORMULA...)"
     ]
     long_text = {"type": "text", "text": "Un. Deux. Trois. Quatre."}
     visual = {"type": "list", "list_items": ["a"], "list_ordered": False}
@@ -147,7 +123,7 @@ def test_visual_issues_callout_and_definition_are_textual():
     definition = {"type": "definition", "text": "Terme : sens."}
 
     issues = visual_issues(_section([callout, definition]))
-    assert issues == ["aucun bloc visuel (TABLE, LIST, DIAGRAM, GRAPH, CHART, FORMULA...)"]
+    assert issues == ["aucun bloc visuel (TABLE, LIST, DIAGRAM, CHART, FORMULA...)"]
 
 
 def test_visual_issues_image_still_counts_as_non_textual_in_ratio():
@@ -189,3 +165,13 @@ def test_prose_word_count_includes_lists_and_worked_examples_but_not_tables_or_f
     ]
     # 2 + 3 + 2 + 3 + (2 + 3 + 2) = 17 ; tableau, formule et code ignorés.
     assert prose_word_count(_section(blocks)) == 17
+
+
+def test_saved_course_with_residual_graph_block_is_still_readable():
+    from app.api.schemas import CourseSubsection
+
+    sub = CourseSubsection.model_validate({"title": "T", "blocks": [
+        {"type": "graph", "graph": {"nodes": []}}, {"type": "text", "text": "Reste."},
+    ]})
+
+    assert [b.type for b in sub.blocks] == ["text"]
