@@ -262,6 +262,9 @@ def _block_to_text(block: Any) -> str:
 
 def _map_block(block: Any) -> ApiContentBlock | None:
     """ContentBlock Gemini → bloc d'API. None si le bloc est vide ou dépasse les limites de rendu."""
+    if not block.has_payload():
+        logger.warning("course_block_dropped", extra={"type": block.type.value, "reason": "contenu absent"})
+        return None
     data = block.model_dump(mode="json", exclude_none=True)
     data["type"] = block.type.value
     if block.formula:
@@ -320,6 +323,36 @@ def is_incomplete_section(section: Section) -> bool:
     return any(b.text == INCOMPLETE_SECTION_NOTICE for sub in section.subsections for b in sub.blocks)
 
 
+_DEV_SUBSECTION_TITLES = {"pourquoi", "quoi", "comment"}
+
+
+def _dict_block_has_payload(block: dict[str, Any]) -> bool:
+    """Équivalent de `ContentBlock.has_payload` sur un bloc d'API sérialisé (JSONB persisté)."""
+    kind = block.get("type")
+    if kind in ("text", "definition", "callout"):
+        return bool(str(block.get("text") or "").strip())
+    if kind == "list":
+        return any(str(i).strip() for i in block.get("list_items") or [])
+    if kind == "table":
+        table = block.get("table") or {}
+        return bool(table.get("headers") and table.get("rows"))
+    if kind == "formula":
+        return bool((block.get("formula") or {}).get("latex"))
+    if kind == "code":
+        return bool(str(block.get("code") or "").strip())
+    if kind == "worked_example":
+        example = block.get("worked_example") or {}
+        return bool(example.get("statement") or example.get("steps"))
+    if kind == "pitfall":
+        return bool((block.get("pitfall") or {}).get("description"))
+    if kind == "diagram":
+        return bool((block.get("diagram") or {}).get("mermaid"))
+    if kind == "chart":
+        chart = block.get("chart") or {}
+        return bool(chart.get("labels") and chart.get("series"))
+    return True
+
+
 def is_incomplete_section_dict(section: dict[str, Any]) -> bool:
     """Équivalent de `is_incomplete_section` sur une `CourseSection` déjà sérialisée (JSONB persisté).
 
@@ -335,6 +368,13 @@ def is_incomplete_section_dict(section: dict[str, Any]) -> bool:
     blocks = [b for sub in section.get("subsections") or [] for b in sub.get("blocks") or []]
     if any(b.get("text") == INCOMPLETE_SECTION_NOTICE for b in blocks):
         return True
+    # Sous-section Pourquoi/Quoi/Comment sans aucun bloc exploitable (ex. `table` sans tableau) : un trou
+    # visible pour l'apprenant, que seule une régénération comble.
+    for sub in section.get("subsections") or []:
+        if str(sub.get("title", "")).strip().casefold() in _DEV_SUBSECTION_TITLES and not any(
+            _dict_block_has_payload(b) for b in sub.get("blocks") or []
+        ):
+            return True
     # Section sans aucun contenu (ni blocs, ni texte legacy) : rien à lire, donc à régénérer.
     return not blocks and not any((section.get(key) or "").strip() for key in ("quoi", "pourquoi", "comment"))
 

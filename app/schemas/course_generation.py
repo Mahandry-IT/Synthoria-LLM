@@ -214,6 +214,33 @@ class ContentBlock(BaseModel):
     chart: ChartData | None = Field(default=None, description="Set for CHART — only for real numeric data, never invented figures.")
     pitfall: PitfallData | None = Field(default=None, description="Set for PITFALL — always fill all 3 sub-fields, never leave why_it_happens/how_to_avoid blank.")
 
+    def has_payload(self) -> bool:
+        """Vrai si le bloc porte réellement le contenu que son `type` annonce.
+
+        Tous les champs de contenu sont facultatifs dans le schéma envoyé à Gemini : le modèle renvoie
+        parfois `{"type": "table"}` sans `table` (ou `list` sans `list_items`). Un tel bloc compte pour
+        rien : il ne doit ni masquer une sous-section vide ni être livré tel quel au client."""
+        kind = self.type
+        if kind in (BlockType.TEXT, BlockType.DEFINITION, BlockType.CALLOUT):
+            return bool((self.text or "").strip())
+        if kind is BlockType.LIST:
+            return any(item.strip() for item in self.list_items or [])
+        if kind is BlockType.TABLE:
+            return bool(self.table and self.table.headers and self.table.rows)
+        if kind is BlockType.FORMULA:
+            return bool(self.formula and self.formula.latex.strip())
+        if kind is BlockType.CODE:
+            return bool((self.code or "").strip())
+        if kind is BlockType.WORKED_EXAMPLE:
+            return bool(self.worked_example and (self.worked_example.statement.strip() or self.worked_example.steps))
+        if kind is BlockType.PITFALL:
+            return bool(self.pitfall and self.pitfall.description.strip())
+        if kind is BlockType.DIAGRAM:
+            return bool(self.diagram and self.diagram.mermaid.strip())
+        if kind is BlockType.CHART:
+            return bool(self.chart and self.chart.labels and self.chart.series)
+        return True  # IMAGE (résolue côté serveur) et types sans charge utile propre
+
 
 class Subsection(BaseModel):
     title: str = Field(

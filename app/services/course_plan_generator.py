@@ -259,7 +259,9 @@ def _chunked(items: list[ApiPlannedSection], size: int) -> list[list[ApiPlannedS
 
 
 def _has_content(section: Section) -> bool:
-    return bool(section.blocks) or any(sub.blocks for sub in section.subsections)
+    return any(b.has_payload() for b in section.blocks) or any(
+        b.has_payload() for sub in section.subsections for b in sub.blocks
+    )
 
 
 def _incomplete_section(planned: ApiPlannedSection) -> Section:
@@ -367,7 +369,7 @@ def _structural_gaps(section: Section) -> list[str]:
     """Sous-sections Pourquoi/Quoi/Comment sans aucun bloc — jamais détecté avant : `_has_content`
     n'exige qu'un bloc *quelque part* dans la section, pas dans chacune des trois sous-sections
     exigées par les instructions."""
-    with_blocks = {sub.title for sub in section.subsections if sub.blocks}
+    with_blocks = {sub.title for sub in section.subsections if any(b.has_payload() for b in sub.blocks)}
     return [name for name in _DEVELOPMENT_SUBSECTIONS if name not in with_blocks]
 
 
