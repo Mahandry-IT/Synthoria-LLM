@@ -1,4 +1,4 @@
-from app.api.schemas import CourseSection
+from app.api.schemas import ApiChart, CourseSection
 from app.schemas.course_generation import Section
 from app.services.course_generator import _map_blocks, _map_sections_to_course_sections
 from app.services.visual_validation import visual_issues
@@ -175,3 +175,48 @@ def test_saved_course_with_residual_graph_block_is_still_readable():
     ]})
 
     assert [b.type for b in sub.blocks] == ["text"]
+
+
+def _chart_block(labels, steps, n_series=1):
+    chart = {"kind": "line", "labels": labels,
+             "series": [{"name": f"s{i}", "values": [1.0] * len(labels)} for i in range(n_series)]}
+    if steps is not None:
+        chart["steps"] = steps
+    return {"type": "chart", "chart": chart}
+
+
+def _map_chart(labels, steps, n_series=1):
+    return _map_blocks(_section([_chart_block(labels, steps, n_series)]).subsections[0].blocks)[0].chart
+
+
+def test_chart_steps_default_to_empty_for_legacy_chart():
+    assert _map_chart(["a", "b"], None).steps == []
+    assert ApiChart.model_validate({"kind": "bar", "labels": ["a"], "series": [{"name": "s", "values": [1]}]}).steps == []
+
+
+def test_chart_step_out_of_range_and_duplicate_indices_are_removed():
+    steps = [{"caption": "x", "highlight_labels": [0, 0, 5, -1, 1], "highlight_series": [0, 3]}]
+    step = _map_chart(["a", "b"], steps).steps[0]
+    assert step.highlight_labels == [0, 1] and step.highlight_series == [0]
+
+
+def test_chart_step_without_caption_is_removed_without_failing_chart():
+    steps = [{"caption": "  ", "highlight_labels": [0]}, {"caption": "ok"}]
+    chart = _map_chart(["a", "b"], steps)
+    assert [s.caption for s in chart.steps] == ["ok"]
+
+
+def test_chart_steps_truncated_to_eight():
+    steps = [{"caption": f"e{i}"} for i in range(12)]
+    assert len(_map_chart(["a"], steps).steps) == 8
+
+
+def test_chart_step_indices_validated_after_label_truncation():
+    labels = [str(i) for i in range(20)]
+    steps = [{"caption": "x", "highlight_labels": [3, 15]}]
+    assert _map_chart(labels, steps).steps[0].highlight_labels == [3]
+
+
+def test_chart_step_indices_validated_after_series_truncation():
+    steps = [{"caption": "x", "highlight_series": [1, 5]}]
+    assert _map_chart(["a"], steps, n_series=6).steps[0].highlight_series == [1]

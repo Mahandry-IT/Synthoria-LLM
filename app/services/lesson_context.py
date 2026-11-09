@@ -66,6 +66,10 @@ def _chart_text(chart: dict) -> str:
         series = _dict(series)
         values = ", ".join(f"{label}={value}" for label, value in zip(labels, _items(series.get("values"))))
         lines.append(f"{_s(series.get('name'))} : {values}")
+    for i, step in enumerate(_items(chart.get("steps")), start=1):
+        caption = _s(_dict(step).get("caption"))
+        if caption:
+            lines.append(f"Étape {i} : {caption}")
     return "\n".join(lines)
 
 

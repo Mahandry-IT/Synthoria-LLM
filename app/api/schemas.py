@@ -157,6 +157,8 @@ class CourseTable(BaseModel):
 DIAGRAM_SOURCE_MAX = 4000
 CHART_LABELS_MAX = 12
 CHART_SERIES_MAX = 4
+CHART_STEPS_MAX = 8
+CHART_STEP_CAPTION_MAX = 240
 
 
 class ApiDiagram(BaseModel):
@@ -170,11 +172,66 @@ class ApiChartSeries(BaseModel):
     values: list[float] = Field(..., max_length=CHART_LABELS_MAX)
 
 
+class ApiChartStep(BaseModel):
+    caption: str = Field(..., min_length=1, max_length=CHART_STEP_CAPTION_MAX)
+    highlight_labels: list[int] = Field(default_factory=list)
+    highlight_series: list[int] = Field(default_factory=list)
+
+
+def _clean_indices(raw: object, size: int) -> list[int]:
+    """Indices valides (0 <= i < size), sans doublon, ordre conservé ; le reste est ignoré."""
+    if not isinstance(raw, list):
+        return []
+    seen: list[int] = []
+    for i in raw:
+        if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < size and i not in seen:
+            seen.append(i)
+    return seen
+
+
+def _clean_chart_steps(raw: object, n_labels: int, n_series: int) -> list[dict]:
+    """Tolérant : étape sans légende retirée, indices hors bornes retirés, tronqué à CHART_STEPS_MAX."""
+    if not isinstance(raw, list):
+        return []
+    steps: list[dict] = []
+    for item in raw:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        if not isinstance(item, dict):
+            continue
+        caption = item.get("caption")
+        caption = caption.strip()[:CHART_STEP_CAPTION_MAX].strip() if isinstance(caption, str) else ""
+        if not caption:
+            continue
+        steps.append({
+            "caption": caption,
+            "highlight_labels": _clean_indices(item.get("highlight_labels"), n_labels),
+            "highlight_series": _clean_indices(item.get("highlight_series"), n_series),
+        })
+        if len(steps) == CHART_STEPS_MAX:
+            break
+    return steps
+
+
 class ApiChart(BaseModel):
     kind: Literal["bar", "line", "pie"]
     caption: str = ""
     labels: list[str] = Field(..., min_length=1, max_length=CHART_LABELS_MAX)
     series: list[ApiChartSeries] = Field(..., min_length=1, max_length=CHART_SERIES_MAX)
+    steps: list[ApiChartStep] = Field(default_factory=list, max_length=CHART_STEPS_MAX)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sanitize_steps(cls, data: object) -> object:
+        # Appliqué sur tous les chemins (génération, relecture) : une étape invalide ne fait jamais échouer le graphique.
+        if isinstance(data, dict) and "steps" in data:
+            labels, series = data.get("labels"), data.get("series")
+            data = {**data, "steps": _clean_chart_steps(
+                data["steps"],
+                len(labels) if isinstance(labels, list) else 0,
+                len(series) if isinstance(series, list) else 0,
+            )}
+        return data
 
 
 class ApiFormula(BaseModel):

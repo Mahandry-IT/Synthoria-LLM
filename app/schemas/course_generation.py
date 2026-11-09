@@ -125,11 +125,24 @@ class ChartSeries(BaseModel):
     values: list[float] = Field(description="One numeric value per label, same order and same length as `labels`.")
 
 
+class ChartStep(BaseModel):
+    caption: str = Field(description="One sentence explaining this step (max 240 characters), plain text: no LaTeX, no Markdown.")
+    highlight_labels: list[int] = Field(default_factory=list, description="0-based indices in `labels` to emphasise at this step.")
+    highlight_series: list[int] = Field(default_factory=list, description="0-based indices in `series` to emphasise at this step.")
+
+
 class ChartData(BaseModel):
     kind: ChartKind = Field(description="bar to compare, line for an evolution, pie for shares of a whole.")
     caption: str = Field(default="", description="Short title of the chart, with the unit.")
     labels: list[str] = Field(description="Category labels (x axis / slices), max 12.")
     series: list[ChartSeries] = Field(description="1 to 4 series (exactly 1 for a pie).")
+    steps: list[ChartStep] = Field(
+        default_factory=list,
+        description=(
+            "Step-by-step walkthrough, ONLY when the chart tells a progression to follow (before/after, point-by-point "
+            "comparison, commented evolution); otherwise leave empty. 2 to 6 steps, one idea per step."
+        ),
+    )
 
 
 class FormulaData(BaseModel):
