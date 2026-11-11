@@ -281,6 +281,7 @@ def _map_block(block: Any) -> ApiContentBlock | None:
         data["chart"]["series"] = [
             {"name": s.name, "values": s.values[:n]} for s in block.chart.series[:CHART_SERIES_MAX]
         ]
+        # `steps` reste dans data["chart"] : ApiChart nettoie les indices sur les labels/séries déjà tronqués.
     try:
         return ApiContentBlock.model_validate(data)
     except ValidationError:

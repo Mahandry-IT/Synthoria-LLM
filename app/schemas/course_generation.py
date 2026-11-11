@@ -126,11 +126,24 @@ class ChartSeries(BaseModel):
     values: list[float] = Field(description="One numeric value per label, same order and same length as `labels`.")
 
 
+class ChartStep(BaseModel):
+    caption: str = Field(description="One sentence explaining this step (max 240 characters), plain text: no LaTeX, no Markdown.")
+    highlight_labels: list[int] = Field(default_factory=list, description="0-based indices in `labels` to emphasise at this step.")
+    highlight_series: list[int] = Field(default_factory=list, description="0-based indices in `series` to emphasise at this step.")
+
+
 class ChartData(BaseModel):
     kind: ChartKind = Field(description="bar to compare, line for an evolution, pie for shares of a whole.")
     caption: str = Field(default="", description="Short title of the chart, with the unit.")
     labels: list[str] = Field(description="Category labels (x axis / slices), max 12.")
     series: list[ChartSeries] = Field(description="1 to 4 series (exactly 1 for a pie).")
+    steps: list[ChartStep] = Field(
+        default_factory=list,
+        description=(
+            "Step-by-step walkthrough, ONLY when the chart tells a progression to follow (before/after, point-by-point "
+            "comparison, commented evolution); otherwise leave empty. 2 to 6 steps, one idea per step."
+        ),
+    )
 
 
 class FormulaData(BaseModel):
@@ -824,7 +837,6 @@ class CourseGenerationSchema(BaseModel):
 
 
 class SectionWidget(BaseModel):
-    section_index: int = Field(description="Index (from 0) of the section in the numbered list that was given.")
     title: str = Field(description="Short title of the widget (French, 120 characters max).")
     description: str = Field(
         description="Alternative text (French, 500 characters max): what the widget shows and lets the learner do."
@@ -832,13 +844,13 @@ class SectionWidget(BaseModel):
     html: str = Field(description="Self-contained body fragment: HTML elements, inline <style> and <script>.")
 
 
-class WidgetsSchema(BaseModel):
-    """Widgets interactifs d'un cours, générés à part des sections (voir `app.services.course_widgets`).
+class SectionWidgetResult(BaseModel):
+    """Réponse unitaire pour UNE section (voir `app.services.course_widgets`).
     Le bloc `widget` n'est volontairement pas dans `BlockType` : il n'est jamais demandé dans les sections."""
 
-    widgets: list[SectionWidget] = Field(
-        default_factory=list,
-        description="At most one widget per section. Empty if no section benefits from an interactive visual.",
+    widget: SectionWidget | None = Field(
+        default=None,
+        description="The interactive widget for this section; omit or null if the section has no manipulable mechanism or data.",
     )
 
 

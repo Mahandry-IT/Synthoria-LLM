@@ -159,3 +159,9 @@ def test_select_respects_the_character_budget():
     ]}
 
     assert len(select_lesson_context(big, "transformateur", max_chars=1500)) <= 1500 + 60
+
+
+def test_chart_step_captions_are_included():
+    text = block_text({"type": "chart", "chart": {"caption": "V", "labels": ["a"], "series": [{"name": "s", "values": [1]}],
+                                                  "steps": [{"caption": "Début"}, {"caption": ""}, {"caption": "Fin"}]}})
+    assert text == "Graphique : V\ns : a=1\nÉtape 1 : Début\nÉtape 3 : Fin"

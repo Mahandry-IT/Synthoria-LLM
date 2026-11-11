@@ -157,6 +157,19 @@ async def test_format_structured_parses_json():
 
 
 @pytest.mark.asyncio
+async def test_format_structured_uses_given_chain_else_generation_chain():
+    settings = _settings(gemini_model_flash="flash-full", gemini_model_flash_lite="flash-lite")
+    fake_client = _fake_genai_client(generate_content_return_value=SimpleNamespace(text="{}"))
+    client = GeminiClient(settings, client=fake_client)
+
+    await client.format_structured("raw", response_schema={}, system_instruction="s", chain=["custom-model"])
+    assert fake_client.models.generate_content.call_args.kwargs["model"] == "custom-model"
+
+    await client.format_structured("raw", response_schema={}, system_instruction="s")
+    assert fake_client.models.generate_content.call_args.kwargs["model"] == "flash-lite"  # inchangé
+
+
+@pytest.mark.asyncio
 async def test_format_structured_invalid_json_raises():
     response = SimpleNamespace(text="not json")
     fake_client = _fake_genai_client(generate_content_return_value=response)
