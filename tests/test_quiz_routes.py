@@ -100,7 +100,8 @@ def test_submit_returns_score_status_and_results(env, monkeypatch):
     res = env.client.post(f"/courses/{SID}/quiz/attempts/{AID}/submit", json={"answers": [[0]]})
 
     assert res.status_code == 200
-    assert res.json() == {"score": 20.0, "max_score": 20.0, "status": "completed", "results": [result]}
+    expected = {"kind": "choice", "expected_value": None, "unit": None, "subjects": [], "correct_matches": [], **result}
+    assert res.json() == {"score": 20.0, "max_score": 20.0, "status": "completed", "results": [expected]}
     assert submit.await_args.kwargs == {"aborted": False, "abort_reason": None}
 
 
@@ -129,7 +130,7 @@ def test_submit_error_mapping(env, monkeypatch, error, code):
     assert env.client.post(f"/courses/{SID}/quiz/attempts/{AID}/submit", json={"answers": [[0]]}).status_code == code
 
 
-@pytest.mark.parametrize("body", [{}, {"answers": [[-1]]}, {"answers": [["x"]]}, {"answers": [], "abort_reason": "x" * 201}])
+@pytest.mark.parametrize("body", [{}, {"answers": [["x"]]}, {"answers": [], "abort_reason": "x" * 201}])
 def test_submit_body_validation_is_422(env, body):
     assert env.client.post(f"/courses/{SID}/quiz/attempts/{AID}/submit", json=body).status_code == 422
 
@@ -153,3 +154,20 @@ def test_history_lists_attempts(env, monkeypatch):
 def test_history_unknown_session_is_404(env, monkeypatch):
     monkeypatch.setattr(quiz_bank, "list_attempts", AsyncMock(side_effect=quiz_bank.QuizSessionNotFound()))
     assert env.client.get(f"/courses/{SID}/quiz/attempts").status_code == 404
+
+
+def test_submit_accepts_numeric_and_matching_answers(env, monkeypatch):
+    submit = AsyncMock(return_value=SubmittedAttempt(score=0.0, max_score=20.0, status="completed", results=[]))
+    monkeypatch.setattr(quiz_bank, "submit_attempt", submit)
+
+    res = env.client.post(
+        f"/courses/{SID}/quiz/attempts/{AID}/submit", json={"answers": [[0], [], [0.3333], [1, None, 0]]}
+    )
+
+    assert res.status_code == 200
+    assert submit.await_args.args[3] == [[0], [], [0.3333], [1, None, 0]]
+
+
+def test_submit_rejects_non_numeric_answer_items(env):
+    res = env.client.post(f"/courses/{SID}/quiz/attempts/{AID}/submit", json={"answers": [["abc"]]})
+    assert res.status_code == 422

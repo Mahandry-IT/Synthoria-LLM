@@ -30,9 +30,12 @@ class QuizAttemptStartResponse(BaseModel):
 
 
 class QuizAttemptSubmitRequest(BaseModel):
-    answers: list[Annotated[list[Annotated[int, Field(ge=0)]], Field(max_length=_MAX_CHOICES)]] = Field(
+    answers: list[Annotated[list[int | float | None], Field(max_length=_MAX_CHOICES)]] = Field(
         max_length=_MAX_QUESTIONS,
-        description="Indices 0-based choisis, une liste par question dans l'ordre de la tentative ([] = sans réponse).",
+        description=(
+            "Une liste par question, dans l'ordre de la tentative. choice : indices 0-based choisis ([] = sans "
+            "réponse) ; numeric : [] ou [valeur] ; matching : un élément par sujet (indice d'option ou null)."
+        ),
     )
     aborted: bool = False
     abort_reason: str | None = Field(None, max_length=_MAX_ABORT_REASON)
@@ -40,8 +43,13 @@ class QuizAttemptSubmitRequest(BaseModel):
 
 class QuizQuestionResult(BaseModel):
     question: str
-    answer: list[int]
-    correct_option_indices: list[int]
+    kind: Literal["choice", "numeric", "matching"] = "choice"
+    answer: list[int | float | None] = Field(description="Réponse telle que soumise.")
+    correct_option_indices: list[int] = Field(default_factory=list)
+    expected_value: float | None = None
+    unit: str | None = None
+    subjects: list[str] = Field(default_factory=list)
+    correct_matches: list[int] = Field(default_factory=list)
     is_correct: bool
     points: float
     points_earned: float

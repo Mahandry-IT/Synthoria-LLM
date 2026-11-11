@@ -1,3 +1,4 @@
+import math
 import re
 from datetime import datetime
 from typing import Annotated, Any, Generic, Literal, TypeVar, get_args
@@ -409,7 +410,20 @@ class QuizQuestion(BaseModel):
     """
 
     question: str
-    options: list[str] = Field(..., min_length=2)
+    kind: Literal["choice", "numeric", "matching"] = Field(
+        default="choice", description="Type de question ; absent dans les anciens quiz = choice."
+    )
+    options: list[str] = Field(
+        default_factory=list,
+        description="choice : options (>= 2). numeric : []. matching : options à associer, autant que de sujets.",
+    )
+    expected_value: float | None = Field(default=None, description="numeric : valeur attendue (null avant correction).")
+    unit: str | None = Field(default=None, description="numeric : unité facultative.")
+    subjects: list[str] = Field(default_factory=list, description="matching : sujets à associer aux options.")
+    correct_matches: list[int] = Field(
+        default_factory=list,
+        description="matching : indice d'option attendu par sujet (vide avant correction).",
+    )
     correct_option_indices: list[int] = Field(default=[], min_length=0, description="Indices 0-based des bonnes réponses (1 = unique, >1 = QCM multiple)")
     difficulty: Literal["facile", "normale", "difficile"] = "normale"
     points: float = Field(default=1.0, ge=0.0, description="Points alloués à cette question (calculé côté serveur, borne sup ~2.0 pour N≥10)")
@@ -430,6 +444,21 @@ class QuizQuestion(BaseModel):
                 idx = values.pop("correct_option_index")
                 values["correct_option_indices"] = [idx] if isinstance(idx, int) else idx
         return values
+
+    @model_validator(mode="after")
+    def _check_kind(self) -> "QuizQuestion":
+        """Cohérence par type, tolérante à la lecture (les réponses sont vides côté public)."""
+        if self.kind == "choice" and len(self.options) < 2:
+            raise ValueError("une question choice demande au moins 2 options")
+        if self.kind == "numeric" and self.expected_value is not None and not math.isfinite(self.expected_value):
+            raise ValueError("expected_value doit être fini")
+        if self.kind == "matching":
+            n = len(self.subjects)
+            if n != len(self.options) or n < 3:
+                raise ValueError("matching : autant de sujets que d'options, au moins 3")
+            if self.correct_matches and sorted(self.correct_matches) != list(range(n)):
+                raise ValueError("correct_matches doit être une permutation des indices d'options")
+        return self
 
     @field_validator("correct_option_indices")
     @classmethod

@@ -32,6 +32,7 @@ from app.schemas.course_generation import (
     DirectAnswer,
     QuizDifficulty,
     Section,
+    quiz_question_issue,
 )
 from app.services.course_widgets import attach_widgets
 from app.services.course_depth import LEGACY_DEPTH, get_profile, render_course_rules
@@ -547,12 +548,30 @@ def _intro_text(schema: CourseGenerationSchema) -> str:
     )
 
 
+def valid_quiz_questions(questions: list[Any]) -> list[Any]:
+    """Écarte une à une les questions numeric/matching incohérentes (jamais le quiz entier)."""
+    kept = []
+    for q in questions:
+        issue = quiz_question_issue(q)
+        if issue:
+            logger.warning("quiz_question_dropped", extra={"reason": issue, "kind": q.kind.value})
+        else:
+            kept.append(q)
+    return kept
+
+
 def _map_quiz_question(q: Any, points: float = 1.0) -> dict[str, Any]:
     """QuizQuestion Gemini → dict d'API (quiz final et `check_questions` de section)."""
+    kind = q.kind.value
     return {
         "question": q.question,
+        "kind": kind,
         "options": q.choices,
-        "correct_option_indices": q.correct_indices,
+        "correct_option_indices": q.correct_indices if kind == "choice" else [],
+        "expected_value": q.expected_value if kind == "numeric" else None,
+        "unit": q.unit if kind == "numeric" else None,
+        "subjects": q.subjects if kind == "matching" else [],
+        "correct_matches": q.correct_matches if kind == "matching" else [],
         "difficulty": q.difficulty.value,
         "points": points,
         "explanation": q.explanation,
@@ -618,8 +637,9 @@ def _map_schema_to_response(schema: CourseGenerationSchema) -> CourseGenerationR
     }
 
     # Calculer les points du quiz (déterministe, source de vérité côté serveur)
-    quiz_points = compute_quiz_points(schema.quiz) if schema.quiz else []
-    quiz_items = [_map_quiz_question(q, pts) for q, pts in zip(schema.quiz, quiz_points)]
+    valid_quiz = valid_quiz_questions(schema.quiz)
+    quiz_points = compute_quiz_points(valid_quiz) if valid_quiz else []
+    quiz_items = [_map_quiz_question(q, pts) for q, pts in zip(valid_quiz, quiz_points)]
 
     flashcards = flashcards_from_course({"sections": [s.model_dump(mode="json") for s in api_sections]})
 

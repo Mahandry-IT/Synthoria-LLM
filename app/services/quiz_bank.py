@@ -8,11 +8,13 @@
 - **Recharge** : quand moins de N questions n'ont jamais été servies, une tâche de fond fait
   1 appel Gemini pour N nouvelles questions. La tentative en cours ne l'attend jamais ; en cas
   d'échec, le tirage retombe sur les moins servies (répétition possible).
-- **Soumission** : correction par égalité exacte des ensembles d'indices ; une tentative
+- **Soumission** : correction tout ou rien selon le type (choix : ensembles d'indices ; numérique :
+  RG-2 ; appariement : toutes les paires exactes) ; une tentative
   interrompue (triche) est enregistrée `aborted`, sans note.
 """
 
 import logging
+import math
 import random
 import re
 import uuid
@@ -30,7 +32,7 @@ from app.core.config import Settings
 from app.core.exceptions import GeminiServiceError
 from app.db.models import QuizAttempt
 from app.repositories import course_session_repository, quiz_repository
-from app.schemas.course_generation import QuizDifficulty, QuizQuestion
+from app.schemas.course_generation import QuizDifficulty, QuizQuestion, quiz_question_issue
 from app.services.course_depth import depth_of_session, get_profile
 from app.services.course_generator import _map_quiz_question, compute_quiz_points
 from app.services.gemini_client import GeminiClient
@@ -39,6 +41,8 @@ from app.services.lesson_context import build_lesson_context
 logger = logging.getLogger(__name__)
 
 QUIZ_MAX_SCORE = 20.0
+NUMERIC_TOLERANCE = 0.0001
+Answer = list[int | float | None]
 STATUS_IN_PROGRESS = "in_progress"
 STATUS_COMPLETED = "completed"
 STATUS_ABORTED = "aborted"
@@ -105,9 +109,18 @@ def original_quiz(gemini_response: dict | None) -> list[dict[str, Any]]:
             question = ApiQuizQuestion.model_validate(raw)
         except ValidationError:
             continue
-        if question.correct_option_indices:
+        if _has_answer_key(question):
             questions.append(question.model_dump(mode="json"))
     return questions
+
+
+def _has_answer_key(question: ApiQuizQuestion) -> bool:
+    """Une question stockée n'est exploitable que si sa correction l'est (selon son type)."""
+    if question.kind == "numeric":
+        return question.expected_value is not None
+    if question.kind == "matching":
+        return sorted(question.correct_matches) == list(range(len(question.subjects)))
+    return bool(question.correct_option_indices)
 
 
 def compute_points(payloads: list[dict]) -> list[float]:
@@ -152,36 +165,95 @@ def public_question(payload: dict, points: float) -> dict[str, Any]:
         **payload,
         "points": points,
         "correct_option_indices": [],
+        "expected_value": None,
+        "correct_matches": [],
         "explanation": "",
         "explanation_per_choice": [],
     }
 
 
-def validate_answers(answers: list[list[int]], payloads: list[dict], *, partial: bool) -> None:
-    """Lève `InvalidQuizAnswers` si le nombre de réponses ou un indice est incohérent.
-    `partial` (tentative interrompue) : moins de réponses que de questions est accepté."""
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_one(position: int, answer: Answer, payload: dict) -> None:
+    kind = payload.get("kind") or "choice"
+    where = f"Question {position}"
+    if kind == "numeric":
+        if len(answer) > 1:
+            raise InvalidQuizAnswers(f"{where} : une seule valeur attendue")
+        if answer and (
+            isinstance(answer[0], bool) or not isinstance(answer[0], (int, float)) or not math.isfinite(answer[0])
+        ):
+            raise InvalidQuizAnswers(f"{where} : nombre invalide ou non fini")
+        return
+    if kind == "matching":
+        n_options = len(payload.get("options") or [])
+        if len(answer) != len(payload.get("subjects") or []):
+            raise InvalidQuizAnswers(f"{where} : une réponse (ou null) par sujet attendue")
+        given = [a for a in answer if a is not None]
+        if any(not _is_int(a) or not 0 <= a < n_options for a in given):
+            raise InvalidQuizAnswers(f"{where} : indice de réponse hors bornes")
+        if len(given) != len(set(given)):
+            raise InvalidQuizAnswers(f"{where} : option utilisée plusieurs fois")
+        return
+    if any(not _is_int(a) for a in answer):
+        raise InvalidQuizAnswers(f"{where} : indices entiers attendus")
+    if len(answer) != len(set(answer)):
+        raise InvalidQuizAnswers(f"{where} : réponse en double")
+    if any(not 0 <= idx < len(payload.get("options") or []) for idx in answer):
+        raise InvalidQuizAnswers(f"{where} : indice de réponse hors bornes")
+
+
+def validate_answers(answers: list[Answer], payloads: list[dict], *, partial: bool) -> None:
+    """Lève `InvalidQuizAnswers` si le nombre de réponses ou le format d'une réponse (selon le type
+    de question) est incohérent. `partial` (tentative interrompue) : moins de réponses que de
+    questions est accepté."""
     if len(answers) > len(payloads) or (not partial and len(answers) != len(payloads)):
         raise InvalidQuizAnswers(f"{len(payloads)} réponses attendues, {len(answers)} reçues")
     for position, (answer, payload) in enumerate(zip(answers, payloads), start=1):
-        options = payload.get("options") or []
-        if len(answer) != len(set(answer)):
-            raise InvalidQuizAnswers(f"Question {position} : réponse en double")
-        if any(not 0 <= idx < len(options) for idx in answer):
-            raise InvalidQuizAnswers(f"Question {position} : indice de réponse hors bornes")
+        _validate_one(position, answer, payload)
 
 
-def grade(payloads: list[dict], answers: list[list[int]]) -> tuple[float, list[dict[str, Any]]]:
-    """Note /20 : somme des points des questions dont l'ensemble d'indices est exactement le bon."""
+def numeric_is_correct(expected: float | None, answer: Answer) -> bool:
+    """RG-2 : attendu entier → égalité stricte ; sinon écart <= 0,0001. Vide ou non fini = faux."""
+    if expected is None or len(answer) != 1:
+        return False
+    value = answer[0]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return False
+    if float(expected).is_integer():
+        return value == expected
+    return abs(value - expected) <= NUMERIC_TOLERANCE + 1e-12
+
+
+def _is_correct(payload: dict, answer: Answer) -> bool:
+    kind = payload.get("kind") or "choice"
+    if kind == "numeric":
+        return numeric_is_correct(payload.get("expected_value"), answer)
+    if kind == "matching":
+        expected = payload.get("correct_matches") or []
+        return bool(expected) and list(answer) == list(expected)
+    return set(answer) == set(payload.get("correct_option_indices") or [])
+
+
+def grade(payloads: list[dict], answers: list[Answer]) -> tuple[float, list[dict[str, Any]]]:
+    """Note /20 : somme des points des questions entièrement justes (tout ou rien, par type)."""
     points = compute_points(payloads)
     results: list[dict[str, Any]] = []
     for payload, max_points, answer in zip(payloads, points, answers):
-        correct = sorted(payload.get("correct_option_indices") or [])
-        is_correct = set(answer) == set(correct)
+        kind = payload.get("kind") or "choice"
+        is_correct = _is_correct(payload, answer)
         results.append(
             {
                 "question": payload.get("question", ""),
-                "answer": sorted(answer),
-                "correct_option_indices": correct,
+                "kind": kind,
+                "answer": sorted(answer) if kind == "choice" else list(answer),
+                "correct_option_indices": sorted(payload.get("correct_option_indices") or []),
+                "expected_value": payload.get("expected_value"),
+                "unit": payload.get("unit"),
+                "subjects": payload.get("subjects") or [],
+                "correct_matches": payload.get("correct_matches") or [],
                 "is_correct": is_correct,
                 "points": max_points,
                 "points_earned": max_points if is_correct else 0.0,
@@ -229,7 +301,7 @@ async def submit_attempt(
     db: AsyncSession,
     session_id: uuid.UUID,
     attempt_id: uuid.UUID,
-    answers: list[list[int]],
+    answers: list[Answer],
     *,
     aborted: bool = False,
     abort_reason: str | None = None,
@@ -297,8 +369,12 @@ def build_refill_prompt(gemini_response: dict, existing: list[dict], quiz_size: 
         f"Rédige exactement {quiz_size} NOUVELLES questions de QCM sur ce cours "
         f"(répartition des difficultés : {distribution}).\n"
         "Règles :\n"
-        "- 2 à 5 `choices` par question ; `correct_indices` = indices 0-based des bonnes réponses "
-        "(une seule ou plusieurs pour un QCM à réponses multiples), jamais vide.\n"
+        "- `kind` = 'choice' par défaut : 2 à 5 `choices` ; `correct_indices` = indices 0-based des bonnes "
+        "réponses (une seule ou plusieurs pour un QCM à réponses multiples), jamais vide.\n"
+        "- Au plus un quart des questions en `kind` = 'numeric' (calcul à résultat unique exact : "
+        "`expected_value` fini, `unit` facultative, `choices` et `correct_indices` vides) ou 'matching' "
+        "(3 à 6 `subjects` associés à autant de `choices` distincts ; `correct_matches` = pour chaque sujet "
+        "l'indice de son option, sans doublon ; `correct_indices` vide).\n"
         "- Distracteurs plausibles ; `explanation` justifie la bonne réponse, `explanation_per_choice` "
         "donne une phrase par choix, dans l'ordre des choix.\n"
         "- `section_refs` : positions 1-based des sections DEVELOPMENT mobilisées ; mélange plusieurs "
@@ -324,6 +400,10 @@ def parse_refill(structured: Any, existing: list[dict]) -> list[dict[str, Any]]:
         if not key or key in seen:
             continue
         seen.add(key)
+        issue = quiz_question_issue(question)
+        if issue:
+            logger.warning("quiz_bank_refill_question_dropped", extra={"reason": issue})
+            continue
         payloads.append(_map_quiz_question(question, 1.0))
     return payloads
 

@@ -12,6 +12,7 @@ Mode 1 (file-only) is pure ingestion → no schema needed.
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -261,14 +262,43 @@ class QuizDifficulty(str, Enum):
     DIFFICILE = "difficile"
 
 
+class QuizKind(str, Enum):
+    CHOICE = "choice"
+    NUMERIC = "numeric"
+    MATCHING = "matching"
+
+
+MATCHING_MIN_ITEMS = 3
+MATCHING_MAX_ITEMS = 8
+
+
 class QuizQuestion(BaseModel):
     question: str
-    choices: list[str] = Field(description="Answer options, 2-5 items.")
+    kind: QuizKind = Field(
+        default=QuizKind.CHOICE,
+        description="'choice' (default QCM), 'numeric' (single computed value) or 'matching' (final quiz only).",
+    )
+    choices: list[str] = Field(
+        default_factory=list,
+        description="choice: answer options, 2-5 items. numeric: []. matching: the options to associate (3-6).",
+    )
     correct_indices: list[int] = Field(
+        default_factory=list,
         description=(
-            "0-based indices into `choices`. Exactly one element for a single-"
-            "answer question, multiple elements for a multi-answer (QCM) question."
+            "choice only: 0-based indices into `choices`. Exactly one element for a single-"
+            "answer question, multiple elements for a multi-answer (QCM) question. [] otherwise."
         ),
+    )
+    expected_value: float | None = Field(
+        default=None, description="numeric only: the single exact expected result (finite number)."
+    )
+    unit: str | None = Field(default=None, description="numeric only: optional unit, e.g. 'm/s'.")
+    subjects: list[str] = Field(
+        default_factory=list, description="matching only: the items to match, same length as `choices`."
+    )
+    correct_matches: list[int] = Field(
+        default_factory=list,
+        description="matching only: for each subject, the index in `choices` of its option (a permutation, no duplicate).",
     )
     difficulty: QuizDifficulty = Field(
         description=(
@@ -307,6 +337,10 @@ class QuizQuestion(BaseModel):
 
     @model_validator(mode="after")
     def _check_correct_indices(self) -> "QuizQuestion":
+        if self.kind is not QuizKind.CHOICE:
+            return self  # numeric / matching : voir `quiz_question_issue` (écartées une à une, jamais le quiz)
+        if len(self.choices) < 2:
+            raise ValueError("choices doit contenir au moins 2 éléments")
         if not self.correct_indices:
             raise ValueError("correct_indices ne peut pas être vide")
         if len(self.correct_indices) != len(set(self.correct_indices)):
@@ -318,6 +352,21 @@ class QuizQuestion(BaseModel):
                     f"(choices a {len(self.choices)} éléments, index 0..{len(self.choices)-1})"
                 )
         return self
+
+
+def quiz_question_issue(q: "QuizQuestion") -> str | None:
+    """Raison courte d'invalidité d'une question numeric/matching (None si valide ou choice).
+    Ne recopie jamais le texte de la question."""
+    if q.kind is QuizKind.NUMERIC:
+        if q.expected_value is None or not math.isfinite(q.expected_value):
+            return "numeric_without_finite_value"
+    elif q.kind is QuizKind.MATCHING:
+        n = len(q.subjects)
+        if not MATCHING_MIN_ITEMS <= n <= MATCHING_MAX_ITEMS or len(q.choices) != n:
+            return "matching_bad_lengths"
+        if len(q.correct_matches) != n or sorted(q.correct_matches) != list(range(n)):
+            return "matching_not_a_permutation"
+    return None
 
 
 class FadedExample(BaseModel):

@@ -1153,3 +1153,31 @@ async def test_session_context_block_uses_web_search_when_grounding_enabled(sett
 
     assert "synthèse" in context
     gemini.search_grounded.assert_awaited_once()
+
+
+def test_invalid_interactive_questions_are_dropped_without_dropping_the_quiz():
+    from app.schemas.course_generation import QuizKind
+    from app.services.course_generator import _map_quiz_question, valid_quiz_questions
+
+    base = {"difficulty": QuizDifficulty.NORMALE, "explanation": "", "requires_calculation": True}
+    quiz = _make_quiz([QuizDifficulty.NORMALE])
+    quiz += [
+        QuizQuestion(question="num ok", kind=QuizKind.NUMERIC, expected_value=4, unit="m", **base),
+        QuizQuestion(question="num vide", kind=QuizKind.NUMERIC, **base),
+        QuizQuestion(question="num inf", kind=QuizKind.NUMERIC, expected_value=float("inf"), **base),
+        QuizQuestion(question="app ok", kind=QuizKind.MATCHING, subjects=["a", "b", "c"], choices=["x", "y", "z"],
+                     correct_matches=[1, 2, 0], **base),
+        QuizQuestion(question="app doublon", kind=QuizKind.MATCHING, subjects=["a", "b", "c"],
+                     choices=["x", "y", "z"], correct_matches=[1, 1, 0], **base),
+        QuizQuestion(question="app court", kind=QuizKind.MATCHING, subjects=["a", "b"], choices=["x", "y"],
+                     correct_matches=[1, 0], **base),
+        QuizQuestion(question="app hors bornes", kind=QuizKind.MATCHING, subjects=["a", "b", "c"],
+                     choices=["x", "y", "z"], correct_matches=[0, 1, 3], **base),
+    ]
+
+    kept = valid_quiz_questions(quiz)
+
+    assert [q.question for q in kept] == ["Q1", "num ok", "app ok"]
+    mapped = _map_quiz_question(kept[1], 2.0)
+    assert mapped["kind"] == "numeric" and mapped["expected_value"] == 4 and mapped["correct_option_indices"] == []
+    assert _map_quiz_question(kept[2])["correct_matches"] == [1, 2, 0]

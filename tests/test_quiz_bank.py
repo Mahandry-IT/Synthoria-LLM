@@ -344,3 +344,97 @@ async def test_refill_skips_gemini_when_bank_still_has_enough_fresh_questions(st
     await quiz_bank.refill_bank(store.sid, _factory(), gemini, Settings(gemini_api_key="k"), set())
 
     gemini.format_structured.assert_not_called()
+
+
+# ─── Questions numériques et appariements ────────────────────────────────────
+
+
+def _num(expected: float | None, unit: str | None = None) -> dict:
+    return {**_q("n"), "kind": "numeric", "options": [], "correct_option_indices": [],
+            "expected_value": expected, "unit": unit}
+
+
+def _match(matches: list[int] | None = None) -> dict:
+    return {**_q("m"), "kind": "matching", "subjects": ["s1", "s2", "s3"], "options": ["o1", "o2", "o3"],
+            "correct_option_indices": [], "correct_matches": matches if matches is not None else [2, 0, 1]}
+
+
+@pytest.mark.parametrize(
+    "expected, answer, ok",
+    [
+        (4, [4], True), (4.0, [4.0], True), (4, [4.0001], False), (4, [3.9999], False),
+        (0.33333, [0.3333], True), (0.33333, [0.33], False), (0.5, [0.5001], True), (0.5, [0.5002], False),
+        (4, [], False), (4, [float("nan")], False), (4, [float("inf")], False),
+    ],
+)
+def test_numeric_grading_follows_rg2(expected, answer, ok):
+    assert quiz_bank.numeric_is_correct(expected, answer) is ok
+    _, results = quiz_bank.grade([_num(expected)], [answer])
+    assert results[0]["is_correct"] is ok
+
+
+def test_matching_is_all_or_nothing_and_null_is_wrong():
+    payloads = [_match(), _match(), _match()]
+
+    _, results = quiz_bank.grade(payloads, [[2, 0, 1], [2, 0, None], [0, 2, 1]])
+
+    assert [r["is_correct"] for r in results] == [True, False, False]
+    assert results[1]["answer"] == [2, 0, None]
+    assert results[0]["kind"] == "matching" and results[0]["correct_matches"] == [2, 0, 1]
+    assert results[0]["subjects"] == ["s1", "s2", "s3"]
+
+
+def test_grade_result_carries_numeric_detail():
+    _, results = quiz_bank.grade([_num(9.81, "m/s2")], [[9.81]])
+    assert results[0]["kind"] == "numeric" and results[0]["expected_value"] == 9.81 and results[0]["unit"] == "m/s2"
+
+
+@pytest.mark.parametrize(
+    "answers, payload",
+    [
+        ([[1, 2]], _num(4)),
+        ([[float("nan")]], _num(4)),
+        ([[1, 1, 0]], _match()),
+        ([[0, 1]], _match()),
+        ([[0, 1, 3]], _match()),
+        ([[None, 1, 5]], _match()),
+        ([[0.5]], _q("c")),
+        ([[-1]], _q("c")),
+    ],
+)
+def test_validate_answers_rejects_bad_formats_per_kind(answers, payload):
+    with pytest.raises(quiz_bank.InvalidQuizAnswers):
+        quiz_bank.validate_answers(answers, [payload], partial=False)
+
+
+def test_validate_answers_accepts_valid_formats_per_kind():
+    quiz_bank.validate_answers([[], [4.5], [0, None, 2], [1]], [_num(4), _num(4), _match(), _q("c")], partial=False)
+
+
+def test_public_question_hides_numeric_and_matching_answers():
+    num = quiz_bank.public_question(_num(4), 2.0)
+    match = quiz_bank.public_question(_match(), 2.0)
+
+    assert num["expected_value"] is None and match["correct_matches"] == []
+    assert match["subjects"] == ["s1", "s2", "s3"]
+
+
+def test_original_quiz_keeps_new_kinds_and_reads_legacy_questions_as_choice():
+    legacy = {k: v for k, v in _q("old").items()}
+    quiz = quiz_bank.original_quiz({"quiz": [legacy, _num(4), _match(), _num(None)]})
+
+    assert [q["kind"] for q in quiz] == ["choice", "numeric", "matching"]
+    _, results = quiz_bank.grade([quiz[0]], [[0]])
+    assert results[0]["is_correct"] is True
+
+
+def test_parse_refill_drops_invalid_new_kinds_only():
+    good = {"question": "Calcul ?", "kind": "numeric", "expected_value": 12, "difficulty": "normale",
+            "explanation": "e", "requires_calculation": True}
+    bad_num = {**good, "question": "Autre ?", "expected_value": None}
+    bad_match = {"question": "Assoc ?", "kind": "matching", "subjects": ["a", "b", "c"], "choices": ["x", "y", "z"],
+                 "correct_matches": [0, 0, 1], "difficulty": "normale", "explanation": "e", "requires_calculation": False}
+
+    payloads = quiz_bank.parse_refill({"questions": [bad_num, good, bad_match]}, [])
+
+    assert len(payloads) == 1 and payloads[0]["kind"] == "numeric" and payloads[0]["expected_value"] == 12

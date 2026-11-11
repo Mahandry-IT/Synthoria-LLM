@@ -67,6 +67,7 @@ from app.services.course_generator import (
     _get_plan_instructions,
     _get_teacher_instructions,
     _is_quiz_difficulty_error,
+    valid_quiz_questions,
     _rebalance_quiz_difficulty,
     _retrieve_chunks,
     _validate_and_map,
@@ -680,7 +681,7 @@ def _wrap_up_gaps(wrap_up: CourseGenerationSchema, planned: list[ApiPlannedSecti
             gaps.append(f"section « {plan_section.title} » ({plan_section.type}) absente ou vide")
         else:
             available.remove(match)
-    if not wrap_up.quiz:
+    if not valid_quiz_questions(wrap_up.quiz):
         gaps.append("quiz vide")
     return gaps
 
@@ -832,7 +833,7 @@ async def generate_course_from_validated_plan(
         "sources": [s.model_dump(mode="json") for s in sources],
         "sections": [s.model_dump(mode="json") for s in ordered_sections],
         "direct_answer": wrap_up.direct_answer.model_dump(mode="json") if wrap_up.direct_answer else None,
-        "quiz": [q.model_dump(mode="json") for q in wrap_up.quiz],
+        "quiz": [q.model_dump(mode="json") for q in valid_quiz_questions(wrap_up.quiz)],
         "confidence": wrap_up.confidence.value,
         "unconfirmed_points": wrap_up.unconfirmed_points,
         "video_search_queries": wrap_up.video_search_queries,

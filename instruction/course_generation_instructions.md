@@ -120,6 +120,9 @@ Do NOT collapse all content into a single section. Each distinct concept deserve
   - `facile` = direct recall — keep these rare in the final quiz.
 - **Interleaving**: in the final quiz, favor questions that **mix several sections** and fill `section_refs` with the 1-based positions (among the DEVELOPMENT sections) of the sections each question draws on.
 - **Feedback per choice**: whenever possible, fill `explanation_per_choice` for the quiz questions too.
+- **Question kinds (final quiz only, never in `check_questions`)**: `kind` defaults to `choice`. At most ~25 % of the final quiz may use the two other kinds; the rest stays `choice`.
+  - `numeric`: only a calculation with ONE exact result (never an approximate or ambiguous one, no rounding to guess). Fill `expected_value` (finite number), optional `unit`; leave `choices`, `correct_indices`, `subjects`, `correct_matches` empty. An integer result must be an integer (4, not 4.0001); a decimal result is checked to 0.0001, so state the expected precision in the question.
+  - `matching`: 3 to 6 `subjects` to associate with as many DISTINCT options. Put the options in `choices` (same length as `subjects`), and `correct_matches` = for each subject, the index in `choices` of its option (a permutation: no index used twice). Leave `correct_indices` empty.
 - **Quiz distractors**: for each question, the incorrect options must be plausible and close to the correct answer (similar order of magnitude, same unit, a common misconception, an off-by-one/sign error, a confusion between two closely related concepts) rather than obviously wrong or unrelated values. This increases difficulty and forces genuine understanding rather than elimination by guesswork.
 - Aim for 2-3 COMMON_PITFALLS entries per course.
 - Include a SUMMARY section and NEXT_STEPS with 3-5 suggestions.
