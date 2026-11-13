@@ -16,8 +16,8 @@ services:
       CHROMA_PERSIST_DIRECTORY: /data/chroma
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # Répartit GEMINI_RPM_LIMIT entre api (interactif, prioritaire) et worker (arrière-plan) —
-      # voir README, « Limite de débit Gemini ». Les deux parts n'ont pas besoin de sommer à 1.0.
-      GEMINI_RPM_SHARE: ${GEMINI_RPM_SHARE_API:-0.7}
+      # voir README, « Limite de débit Gemini ». Parts par défaut : api 0.6, worker 0.3, exercise-worker 0.1 (somme 1.0).
+      GEMINI_RPM_SHARE: ${GEMINI_RPM_SHARE_API:-0.6}
       YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-synthoria}:${POSTGRES_PASSWORD:-synthoria}@postgres:5432/${POSTGRES_DB:-synthoria}   # construite depuis POSTGRES_* (mot de passe sans @ : / ? #)
       MEDIA_STORAGE_DIR: /data/media
@@ -75,6 +75,30 @@ services:
     volumes:
       - podcast-data:/data/podcasts
       - media-data:/data/media
+
+  exercise-worker:
+    build: .
+    command: ["python", "-m", "app.workers.exercise_worker"]
+    env_file:
+    - .env
+    dns:
+      - ${DNS_PRIMARY:-8.8.8.8}
+      - ${DNS_SECONDARY:-1.1.1.1}
+    environment:
+      PYTHONUNBUFFERED: 1
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_RPM_SHARE: ${GEMINI_RPM_SHARE_EXERCISE_WORKER:-0.1}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-synthoria}:${POSTGRES_PASSWORD:-synthoria}@postgres:5432/${POSTGRES_DB:-synthoria}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Les tables sont créées au démarrage de l'api (create_all) : attendre pour ne pas interroger exercise_jobs avant.
+      api:
+        condition: service_healthy
+    healthcheck:
+      disable: true   # le worker n'expose pas d'HTTP : ne pas hériter du healthcheck /health de l'image
+    restart: unless-stopped
+    stop_grace_period: 60s   # laisse le worker finir son appel Gemini sur SIGTERM
 
   piper:
     build:
