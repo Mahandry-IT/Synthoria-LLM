@@ -126,6 +126,18 @@ class Settings(BaseSettings):
     # Évaluation de la reformulation (« explique avec tes mots »)
     recall_answer_max_length: int = 1000
     recall_rate_limit_per_minute: int = 10
+    # Exercices corrigés : un lot par cours, généré à la demande par un worker dédié (file `exercise_jobs`)
+    exercise_max_express: int = 2
+    exercise_max_standard: int = 3
+    exercise_max_approfondi: int = 4
+    exercise_worker_poll_seconds: float = 5.0
+    exercise_job_stale_minutes: int = 10
+    exercise_max_attempts: int = 3
+    exercise_retry_delay_seconds: float = 30.0
+    exercise_generate_rate_limit_per_minute: int = 2
+    exercise_answer_rate_limit_per_minute: int = 10
+    exercise_answer_max_length: int = 4000
+
     # Évaluation de la réponse au défi (avant l'explication), même borne de longueur que la reformulation
     challenge_rate_limit_per_minute: int = 10
     more_sections_rate_limit_per_minute: int = 6

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.chat_routes import router as chat_router
+from app.api.exercise_routes import router as exercise_router
 from app.api.media_routes import router as media_router
 from app.api.podcast_routes import router as podcast_router
 from app.api.quiz_routes import router as quiz_router
@@ -17,7 +18,7 @@ from app.core.rate_limit import RateLimitMiddleware
 from app.core.request_id import RequestIdLogFilter, RequestIdMiddleware
 from app.db.base import Base
 from app.db.session import create_engine
-from app.db.models import CoursePlan, CourseSession, PodcastJob  # noqa: F401 — ensure Base.metadata knows the models
+from app.db.models import CourseExercise, CoursePlan, CourseSession, ExerciseJob, PodcastJob  # noqa: F401 — ensure Base.metadata knows the models
 from app.db.schema_sync import sync_added_columns
 from app.services.gemini_client import GeminiClient
 from app.services.ollama_client import OllamaClient
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(media_router)
     app.include_router(chat_router)
     app.include_router(quiz_router)
+    app.include_router(exercise_router)
     return app
 
 

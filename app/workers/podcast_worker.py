@@ -7,7 +7,6 @@ Plusieurs workers peuvent tourner en parallèle (réclamation FOR UPDATE SKIP LO
 import asyncio
 import logging
 import shutil
-import signal
 import sys
 import time
 from pathlib import Path
@@ -20,6 +19,7 @@ from app.repositories import podcast_job_repository as jobs_repo
 from app.services.gemini_client import GeminiClient
 from app.services.podcast.pipeline import run_podcast_job
 from app.services.podcast.tts_client import PiperHTTPEngine, TTSEngine
+from app.workers.signals import install_signal_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -96,21 +96,13 @@ async def run_worker(settings: Settings, stop_event: asyncio.Event) -> None:
         logger.info("podcast_worker_stopped")
 
 
-def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event) -> None:
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, stop_event.set)
-        except NotImplementedError:  # Windows
-            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop_event.set))
-
-
 async def _main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)], force=True,
     )
     stop_event = asyncio.Event()
-    _install_signal_handlers(asyncio.get_running_loop(), stop_event)
+    install_signal_handlers(asyncio.get_running_loop(), stop_event)
     await run_worker(get_settings(), stop_event)
 
 

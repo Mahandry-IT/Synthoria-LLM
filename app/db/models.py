@@ -426,3 +426,58 @@ class FlashcardVariant(Base):
     __table_args__ = (
         UniqueConstraint("session_id", "card_id", "variant_no", name="uq_flashcard_variants_card_variant"),
     )
+
+
+class ExerciseJob(Base):
+    """File de génération des exercices corrigés : une seule ligne par cours (RG-9).
+
+    Statuts : `pending` → `generating` → `done` | `failed`. Un `failed` seul peut être relancé.
+    Sur un job `pending`, `locked_at` porte l'instant avant lequel il ne doit pas être repris
+    (attente après un 429) ; sur un job `generating`, l'instant du verrou (jobs périmés libérés).
+    """
+
+    __tablename__ = "exercise_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    params_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    __table_args__ = (Index("idx_exercise_jobs_status_created", "status", "created_at"),)
+
+
+class CourseExercise(Base):
+    """Exercice corrigé d'un cours. `expected_solution` ne quitte jamais le serveur en dehors de la
+    réponse de correction ; la réponse de l'apprenant n'est jamais enregistrée."""
+
+    __tablename__ = "course_exercises"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("course_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    section_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    covers: Mapped[str] = mapped_column(Text, nullable=False)
+    statement: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    hints: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    expected_solution: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), default=_utc_now, onupdate=_utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "position", name="uq_course_exercises_session_position"),
+    )

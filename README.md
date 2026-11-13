@@ -44,6 +44,7 @@ Ce compose sert au **développement local** (images construites depuis le dépô
 | --- | --- | --- |
 | `api` | API FastAPI | `http://localhost:8000` |
 | `worker` | génération des podcasts (même image que `api`) | interne |
+| `exercise-worker` | génération des exercices corrigés (même image que `api`) | interne |
 | `ollama` / `ollama-init` | LLM + embeddings / téléchargement des modèles | `http://localhost:11435` |
 | `postgres` | sessions, plans, jobs, quotas (PostgreSQL 16) | interne |
 | `chroma` | base vectorielle | `http://localhost:8001` |
@@ -61,7 +62,7 @@ Le workflow `.github/workflows/publish.yml` lance `pytest` (avec un PostgreSQL d
 
 | Image | Dockerfile | Utilisée par |
 | --- | --- | --- |
-| `ghcr.io/mahandry-it/synthoria-llm` | `Dockerfile` | `api`, `worker` |
+| `ghcr.io/mahandry-it/synthoria-llm` | `Dockerfile` | `api`, `worker`, `exercise-worker` |
 | `ghcr.io/mahandry-it/synthoria-piper` | `docker/piper/Dockerfile` | `piper`, `piper-init` |
 
 Tags : `latest` (dernier `master` vert, stack de production), `develop` (dernier `develop` vert, stack de test) et `sha-<7>` (commit, pour revenir en arrière). Aucun secret n'est embarqué : les clés restent dans le `.env` de l'hôte.
@@ -103,6 +104,10 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | PUT | `/courses/{session_id}/sections/{section_id}/note` | Enregistre (ou efface, note vide) la note libre de l'apprenant sur une section (≤ 2000 caractères, jamais générée) → `{note, updated_at}`. `404` session/section inconnue, `422` trop longue, `429` (20/min). |
 | GET | `/reviews/due?limit=20` | Flashcards à réviser aujourd'hui (jamais révisées ou échues), dérivées des questions « Vérifie » des cours récents. Chaque carte porte aussi `variant_no` (0 = question d'origine), `mode` (`qcm` si `box + variant_no` est pair et que la carte a des choix, `text` sinon), `choices`, `correct_indices` et `explanation` ; `back` reste présent |
 | POST | `/reviews/{session_id}/{card_id}` | Enregistre `{result: correct\|incorrect}` et planifie la suite (Leitner J+1, J+3, J+7, J+21) → `{box, due_at, variant_no}`. `correct` fait passer la carte à la variante suivante (même notion, autre formulation) ; si elle n'existe pas encore, une tâche de fond génère en 1 appel Gemini par cours 2 variantes pour chaque carte sue qui n'en a plus (`FLASHCARD_VARIANTS_MAX_CARDS_PER_CALL`, 15) ; en attendant, la carte retombe sur sa variante courante. `404` carte inconnue |
+| POST | `/courses/{session_id}/exercises/generate` | Met en file la génération du lot d'exercices corrigés du cours (`202 {status: pending\|generating\|done}`), sur demande seulement. Idempotent : un seul lot par cours, relancé seulement s'il a échoué. `404` session inconnue, `409` cours ou quiz non terminé, `429` (`EXERCISE_GENERATE_RATE_LIMIT_PER_MINUTE`, 2/min). |
+| GET | `/courses/{session_id}/exercises` | `{status: absent\|pending\|generating\|done\|failed, error_message, exercises[{id, section_id, position, title, covers}]}` : jamais d'énoncé, d'indice ni de solution. `done` avec liste vide = aucune section n'avait besoin d'exercice. `404` session inconnue. |
+| GET | `/courses/{session_id}/exercises/{exercise_id}` | `{id, section_id, position, title, covers, statement[blocs], hints[≤3], duration_minutes}`, sans solution. `404` si l'exercice n'appartient pas à la session. |
+| POST | `/courses/{session_id}/exercises/{exercise_id}/answer` | Corrige la réponse (body `{answer}`, ≤ `EXERCISE_ANSWER_MAX_LENGTH` = 4000 caractères) → `{feedback, correct_points[], missing_points[], expected_approach}`, sans score. Énoncé et solution lus en base ; réponse traitée comme une donnée et jamais enregistrée. `404`, `422`, `429` (10/min ou quota Gemini), `502`/`503` : le message invite à réessayer. |
 | POST | `/podcasts/generate/{session_id}` | Met en file la génération d'un podcast à partir d'un cours persisté (`202` + `job_id`). Body optionnel `{style, target_minutes, force}`. `404` session inconnue, `422` cours sans contenu exploitable, `429` trop de demandes, `503` fonctionnalité désactivée. Idempotent : un job non échoué équivalent est renvoyé sauf `force=true`. |
 | GET | `/podcasts/jobs/{job_id}` | État du job : `pending → scripting → synthesizing → mixing → done \| failed`, `stage`, `progress` (0-100), `error_message`, `duration_seconds` |
 | GET | `/podcasts/{job_id}/audio` | MP3 (support `Range` pour le seek du lecteur). `409` si le job n'est pas `done`, `410` si le fichier a expiré |
@@ -172,6 +177,18 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 `PODCAST_ENABLED`, `PODCAST_AUTO_GENERATE`, `PODCAST_STORAGE_DIR`, `PODCAST_TTS_BASE_URL`, `PODCAST_VOICE_HOST`, `PODCAST_VOICE_EXPERT`, `PODCAST_DEFAULT_TARGET_MINUTES`, `PODCAST_MAX_MINUTES`, `PODCAST_MAX_SEGMENTS`, `PODCAST_SCRIPT_BATCH_SIZE`, `PODCAST_TTS_CONCURRENCY`, `PODCAST_TTS_MAX_CHARS`, `PODCAST_WORKER_POLL_SECONDS`, `PODCAST_JOB_STALE_MINUTES`, `PODCAST_MAX_ATTEMPTS`, `PODCAST_AUDIO_BITRATE`, `PODCAST_RETENTION_DAYS`, `PODCAST_GENERATE_RATE_LIMIT_PER_MINUTE` — valeurs par défaut dans `.env.example`. Les dossiers de jobs plus vieux que `PODCAST_RETENTION_DAYS` sont supprimés par le worker (l'audio renvoie alors `410`).
 
 > **Sécurité** : l'API n'a pas d'authentification — toute personne connaissant l'UUID d'un job peut lire son audio. Acceptable en local, à traiter avant toute exposition. Le conteneur `piper` ne publie aucun port.
+
+## Exercices corrigés
+
+Un lot d'exercices par cours, généré **à la demande** (jamais avec le cours ni le quiz) et corrigé par l'IA.
+
+- **File et worker** : table `exercise_jobs` (une ligne par cours, migration `022`), service `exercise-worker` (`python -m app.workers.exercise_worker`, réclamation `FOR UPDATE SKIP LOCKED`). Statuts `pending → generating → done | failed`, `absent` = aucune ligne. Lancer deux fois ne crée qu'un lot ; seul un job `failed` est relancé.
+- **Un seul appel Gemini** pour tout le lot : l'IA reçoit les sections (id, titre, notions) et choisit celles qui ont un calcul, une méthode ou un cas à appliquer. Le serveur plafonne (`EXERCISE_MAX_EXPRESS` 2, `_STANDARD` 3, `_APPROFONDI` 4), écarte les exercices dont le `section_id` est inconnu, l'énoncé vide ou qui n'ont pas 3 indices. Aucune section concernée : `done` avec zéro exercice.
+- **Reprise** : un 429 minute ou une indisponibilité remet le job en file avec attente (`EXERCISE_RETRY_DELAY_SECONDS`, ou le `retryDelay` de Google), dans la limite de `EXERCISE_MAX_ATTEMPTS`. Quota journalier : `failed` immédiat. Exercices et statut `done` sont écrits dans une seule transaction (jamais de lot partiel). Un job dont le worker a disparu est libéré après `EXERCISE_JOB_STALE_MINUTES`.
+- **Secret** : la solution attendue (`course_exercises.expected_solution`) ne sort que dans la correction ; la liste n'a ni énoncé ni indice, le détail n'a pas de solution.
+- **Prérequis** : le cours (aucune section incomplète) et son quiz doivent exister (`409` sinon).
+
+`EXERCISE_*` : valeurs par défaut dans `.env.example`. Les limiteurs sont par IP, en mémoire (non partagés entre processus). Comme le reste de l'API, aucune authentification : l'accès se limite à l'existence de la session.
 
 ## Format du cours (pédagogie active)
 
@@ -250,7 +267,7 @@ MEDIA_MAX_BYTES=5242880
 
 Google limite l'API sur plusieurs axes **par projet et par modèle** (ex. `gemini-*-flash-lite` au palier gratuit : 15 requêtes/minute, 250k tokens/minute, 500 requêtes/jour) — partagés entre tous les appels, quel que soit le conteneur qui les émet. L'application espace ses appels (`app/services/gemini_rate_limit.py`, fenêtre glissante) pour rester sous `GEMINI_RPM_LIMIT` (14 par défaut) au lieu de heurter un 429 puis retenter.
 
-**État partagé Postgres** (table `gemini_model_quota`, migration `013`) : les conteneurs `api` et `worker` (podcast) partagent la même vue de ce qui a réellement été consommé, au lieu d'avoir chacun leur compteur en mémoire isolé. `GEMINI_RPM_SHARE` répartit `GEMINI_RPM_LIMIT` entre les deux process (différencié par service dans `docker-compose.yml`, ex. 0.7 api / 0.3 worker) plutôt que de laisser chacun croire disposer de la totalité du quota. Un cache mémoire de quelques secondes (`GEMINI_QUOTA_CACHE_TTL_SECONDS`) évite une requête DB à chaque appel — fuite de budget bornée assumée, pas une coordination parfaite entre process.
+**État partagé Postgres** (table `gemini_model_quota`, migration `013`) : les conteneurs `api` et `worker` (podcast) partagent la même vue de ce qui a réellement été consommé, au lieu d'avoir chacun leur compteur en mémoire isolé. `GEMINI_RPM_SHARE` répartit `GEMINI_RPM_LIMIT` entre les deux process (différencié par service dans `docker-compose.yml`, ex. 0.6 api / 0.3 worker podcast / 0.1 exercise-worker) plutôt que de laisser chacun croire disposer de la totalité du quota. Un cache mémoire de quelques secondes (`GEMINI_QUOTA_CACHE_TTL_SECONDS`) évite une requête DB à chaque appel — fuite de budget bornée assumée, pas une coordination parfaite entre process.
 
 **Disjoncteur par modèle** (`app/services/gemini_quota_manager.py`) : un 429 identifié comme quota **journalier** marque le modèle indisponible jusqu'au prochain minuit Pacifique (fuseau des quotas Google), sans consommer de tentative ni de RPM partagé supplémentaire — un 429 **minute** retente normalement avec backoff. `GEMINI_MODEL_RPD_LIMITS` (ex. `{"gemini-3.6-flash": 100}`) permet aussi de plafonner volontairement un modèle en dessous de son vrai quota Google.
 
@@ -345,7 +362,7 @@ app/
 │   ├── podcast/      # sérialisation du cours, script, normalisation TTS, client Piper, assemblage ffmpeg, pipeline
 │   └── media/        # supports visuels : normalisation/stockage (Pillow), résolveur (GET /media/{asset_id})
 │       └── providers/  # fournisseurs d'images web (Wikimedia Commons, Openverse)
-├── workers/          # worker de jobs podcast (python -m app.workers.podcast_worker)
+├── workers/          # workers de jobs : podcast (python -m app.workers.podcast_worker), exercices (python -m app.workers.exercise_worker)
 ├── cli.py            # CLI (python -m app.cli podcast ...)
 ├── main.py           # bootstrap FastAPI
 ├── __init__.py
