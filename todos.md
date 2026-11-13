@@ -6,39 +6,39 @@ Contrainte transversale : le quota Gemini est limité, donc chaque lot borne le 
 ## Lot 1 — Quiz enrichi et navigation (V1)
 
 ### 1. Conception du quiz
-- [ ] Définir les types de question : choix multiples, réponse numérique, appariement
-- [ ] Fixer le contrat de réponse de l'API pour chaque type (bonne réponse, tolérance, options)
-- [ ] Décider où vit la règle entier strict / décimal à 0,0001 (RG-2) : interface seule, valeur attendue fournie par le serveur
+- [x] Définir les types de question : choix multiples, réponse numérique, appariement
+- [x] Fixer le contrat de réponse de l'API pour chaque type (bonne réponse, tolérance, options)
+- [x] Décider où vit la règle entier strict / décimal à 0,0001 (RG-2) : interface seule, valeur attendue fournie par le serveur
 
 ### 2. Backend : schémas et migration
-- [ ] Étendre les schémas de question (numérique, appariement) avec défaut pour les questions existantes
-- [ ] Migration de la banque de questions si le stockage change
-- [ ] Rendre la lecture des anciens quiz inchangée
+- [x] Étendre les schémas de question (numérique, appariement) avec défaut pour les questions existantes
+- [x] Migration de la banque de questions si le stockage change
+- [x] Rendre la lecture des anciens quiz inchangée
 
 ### 3. Backend : génération des nouvelles questions
-- [ ] Adapter les consignes de génération du quiz (quand produire un numérique ou un appariement)
-- [ ] Valider côté serveur : autant d'options que de sujets, valeur numérique exploitable
-- [ ] Garder un seul appel pour le quiz entier (pas d'appel par question)
+- [x] Adapter les consignes de génération du quiz (quand produire un numérique ou un appariement)
+- [x] Valider côté serveur : autant d'options que de sujets, valeur numérique exploitable
+- [x] Garder un seul appel pour le quiz entier (pas d'appel par question)
 
 ### 4. Backend : correction et tentatives
-- [ ] Corriger les trois types de question à la soumission
-- [ ] Enregistrer les tentatives avec les nouveaux types
-- [ ] Renvoyer la bonne réponse pour l'affichage de la correction
+- [x] Corriger les trois types de question à la soumission
+- [x] Enregistrer les tentatives avec les nouveaux types
+- [x] Renvoyer la bonne réponse pour l'affichage de la correction
 
 ### 5. Frontend : nouvelles questions
-- [ ] Composant réponse numérique avec la règle de RG-2
-- [ ] Composant appariement : listes déroulantes, option prise retirée des autres, valeur vide qui la remet
-- [ ] Correction affichée pour chaque type
+- [x] Composant réponse numérique avec la règle de RG-2
+- [x] Composant appariement : listes déroulantes, option prise retirée des autres, valeur vide qui la remet
+- [x] Correction affichée pour chaque type
 
 ### 6. Frontend : navigation à trois onglets
-- [ ] Onglets Leçons, Exercices corrigés, Quiz sous le podcast
-- [ ] Onglet Exercices corrigés accessible même sans exercice (état vide)
-- [ ] Conserver l'onglet actif au rechargement
+- [x] Onglets Leçons, Exercices corrigés, Quiz sous le podcast
+- [x] Onglet Exercices corrigés accessible même sans exercice (état vide)
+- [x] Conserver l'onglet actif au rechargement
 
 ### 7. Tests, documentation, déploiement du lot 1
-- [ ] Tests backend (validation, correction) et frontend (appariement, numérique)
-- [ ] Mettre à jour la collection Postman et le README si le contrat change
-- [ ] Appliquer la migration, reconstruire les images
+- [x] Tests backend (validation, correction) et frontend (appariement, numérique)
+- [x] Mettre à jour la collection Postman et le README si le contrat change
+- [x] Appliquer la migration, reconstruire les images
 
 ## Lot 2 — Nouveau format de leçon (V1)
 
@@ -75,6 +75,7 @@ Contrainte transversale : le quota Gemini est limité, donc chaque lot borne le 
 - [ ] Tests de schéma, de complétude et de rendu
 - [ ] Anciens cours : vérifier qu'ils s'affichent sans régression
 - [ ] Décision sur la régénération des cours existants
+- [ ] Mettre à jour le README (nouveaux types de question du lot 1, nouveau format de section)
 
 ## Lot 3 — Exercices corrigés : données, génération, onglet (V2)
 
