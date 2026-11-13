@@ -63,6 +63,11 @@
       "key": "fileSubfolder",
       "value": "2026",
       "description": "Sous-dossier de rangement des fichiers ingérés"
+    },
+    {
+      "key": "exerciseId",
+      "value": "",
+      "description": "UUID d'un exercice (champ exercises[].id de GET /courses/{sessionId}/exercises)"
     }
   ],
   "item": [
@@ -1062,6 +1067,191 @@
             "description": "Sert une image ré-hébergée (jamais de hotlink) : téléchargée, ré-encodée et servie depuis le stockage local, jamais depuis la source d'origine. Codes: 200, 404 (image inconnue), 410 (fichier expiré/supprimé), 422 (asset_id invalide)."
           },
           "response": []
+        }
+      ]
+    },
+    {
+      "name": "Exercices corrigés",
+      "item": [
+        {
+          "name": "POST /courses/{session_id}/exercises/generate",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/exercises/generate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "exercises",
+                "generate"
+              ]
+            },
+            "description": "Met en file la génération du lot d'exercices du cours, sur demande seulement (jamais avec le cours ni le quiz). Idempotent : un seul lot par cours, relancé seulement s'il a échoué. Réponse : {status: pending | generating | done}. Suivre ensuite GET /courses/{session_id}/exercises. Codes : 202 accepté, 404 session inconnue, 409 cours ou quiz non terminé, 429 limite par minute (EXERCISE_GENERATE_RATE_LIMIT_PER_MINUTE)."
+          },
+          "response": [
+            {
+              "name": "202 Accepté",
+              "originalRequest": {},
+              "status": "Accepted",
+              "code": "202",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"pending\"\n}"
+            },
+            {
+              "name": "409 Cours non terminé",
+              "originalRequest": {},
+              "status": "Conflict",
+              "code": "409",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"detail\": \"Le cours n'est pas terminé\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /courses/{session_id}/exercises",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/exercises",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "exercises"
+              ]
+            },
+            "description": "État de la génération et liste des exercices : titre, section, ce qu'ils couvrent. Jamais d'énoncé, d'indice ni de solution. status : absent | pending | generating | done | failed (error_message renseigné si failed ; exercises vide tant que le job n'est pas done). Codes : 200, 404 session inconnue."
+          },
+          "response": [
+            {
+              "name": "200 Lot prêt",
+              "originalRequest": {},
+              "status": "OK",
+              "code": "200",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"done\",\n  \"error_message\": null,\n  \"exercises\": [\n    {\n      \"id\": \"22222222-2222-2222-2222-222222222222\",\n      \"section_id\": \"1-0\",\n      \"position\": 1,\n      \"title\": \"Calculer le rapport de transformation\",\n      \"covers\": \"Rapport de transformation et tension au secondaire\",\n      \"duration_minutes\": 10\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /courses/{session_id}/exercises/{exercise_id}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/exercises/{{exerciseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "exercises",
+                "{{exerciseId}}"
+              ]
+            },
+            "description": "Énoncé, indices (3) et durée d'un exercice, sans solution : appelé au clic sur « Commencer ». Codes : 200, 404 exercice inconnu ou n'appartenant pas à la session."
+          },
+          "response": [
+            {
+              "name": "200 Détail",
+              "originalRequest": {},
+              "status": "OK",
+              "code": "200",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"id\": \"22222222-2222-2222-2222-222222222222\",\n  \"section_id\": \"1-0\",\n  \"position\": 1,\n  \"title\": \"Calculer le rapport de transformation\",\n  \"covers\": \"Rapport de transformation et tension au secondaire\",\n  \"statement\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"Un transformateur a 200 spires au primaire et 50 au secondaire. Quelle est la tension de sortie pour 230 V en entrée ?\"\n    }\n  ],\n  \"hints\": [\n    \"Quel est le rapport N2/N1 ?\",\n    \"Appliquez U2 = U1 x N2/N1.\",\n    \"Vérifiez l'unité du résultat.\"\n  ],\n  \"duration_minutes\": 10\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST /courses/{session_id}/exercises/{exercise_id}/answer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courses/{{sessionId}}/exercises/{{exerciseId}}/answer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "courses",
+                "{{sessionId}}",
+                "exercises",
+                "{{exerciseId}}",
+                "answer"
+              ]
+            },
+            "description": "Corrige la réponse de l'apprenant. Énoncé et solution lus en base ; la réponse est une donnée balisée, jamais enregistrée ; aucun score. Réponse : {feedback, correct_points[], missing_points[], expected_approach}. Codes : 200, 404 exercice inconnu pour cette session, 422 réponse vide ou trop longue (EXERCISE_ANSWER_MAX_LENGTH), 429 limite par minute ou quota Gemini, 502/503 échec Gemini (la réponse reste côté client, on peut réessayer).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"answer\": \"Le rapport est 50/200 = 0,25, donc U2 = 230 x 0,25 = 57,5.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "name": "200 Correction",
+              "originalRequest": {},
+              "status": "OK",
+              "code": "200",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"feedback\": \"Bonne méthode, il manque l'unité.\",\n  \"correct_points\": [\n    \"Rapport N2/N1 = 0,25\"\n  ],\n  \"missing_points\": [\n    \"Unité du résultat (volts)\"\n  ],\n  \"expected_approach\": \"U2 = 230 x 50/200 = 57,5 V\"\n}"
+            },
+            {
+              "name": "429 Trop de corrections",
+              "originalRequest": {},
+              "status": "Too Many Requests",
+              "code": "429",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"detail\": \"Trop de corrections demandées, réessayez dans une minute\"\n}"
+            }
+          ]
         }
       ]
     }

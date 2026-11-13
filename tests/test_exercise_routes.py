@@ -120,9 +120,18 @@ def test_list_never_contains_statement_hints_or_solution(env):
 
     assert body["status"] == "done" and len(body["exercises"]) == 2
     for item in body["exercises"]:
-        assert set(item) == {"id", "section_id", "position", "title", "covers"}
+        assert set(item) == {"id", "section_id", "position", "title", "covers", "duration_minutes"}
     raw = env.client.get(_base()).text
     assert "SOLUTION-SECRETE" not in raw and "statement" not in raw and "hints" not in raw
+
+
+def test_list_exposes_each_exercise_duration(env):
+    env.job.return_value = job_row("done")
+    env.exercises.return_value = [exercise_row(position=1, duration_minutes=7), exercise_row(position=2)]
+
+    items = env.client.get(_base()).json()["exercises"]
+
+    assert [i["duration_minutes"] for i in items] == [7, 10]
 
 
 def test_list_done_with_zero_exercise_is_valid(env):

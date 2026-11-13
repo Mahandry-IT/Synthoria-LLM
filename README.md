@@ -105,8 +105,8 @@ Les modèles nécessaires sont pullés automatiquement dans le conteneur Ollama 
 | GET | `/reviews/due?limit=20` | Flashcards à réviser aujourd'hui (jamais révisées ou échues), dérivées des questions « Vérifie » des cours récents. Chaque carte porte aussi `variant_no` (0 = question d'origine), `mode` (`qcm` si `box + variant_no` est pair et que la carte a des choix, `text` sinon), `choices`, `correct_indices` et `explanation` ; `back` reste présent |
 | POST | `/reviews/{session_id}/{card_id}` | Enregistre `{result: correct\|incorrect}` et planifie la suite (Leitner J+1, J+3, J+7, J+21) → `{box, due_at, variant_no}`. `correct` fait passer la carte à la variante suivante (même notion, autre formulation) ; si elle n'existe pas encore, une tâche de fond génère en 1 appel Gemini par cours 2 variantes pour chaque carte sue qui n'en a plus (`FLASHCARD_VARIANTS_MAX_CARDS_PER_CALL`, 15) ; en attendant, la carte retombe sur sa variante courante. `404` carte inconnue |
 | POST | `/courses/{session_id}/exercises/generate` | Met en file la génération du lot d'exercices corrigés du cours (`202 {status: pending\|generating\|done}`), sur demande seulement. Idempotent : un seul lot par cours, relancé seulement s'il a échoué. `404` session inconnue, `409` cours ou quiz non terminé, `429` (`EXERCISE_GENERATE_RATE_LIMIT_PER_MINUTE`, 2/min). |
-| GET | `/courses/{session_id}/exercises` | `{status: absent\|pending\|generating\|done\|failed, error_message, exercises[{id, section_id, position, title, covers}]}` : jamais d'énoncé, d'indice ni de solution. `done` avec liste vide = aucune section n'avait besoin d'exercice. `404` session inconnue. |
-| GET | `/courses/{session_id}/exercises/{exercise_id}` | `{id, section_id, position, title, covers, statement[blocs], hints[≤3], duration_minutes}`, sans solution. `404` si l'exercice n'appartient pas à la session. |
+| GET | `/courses/{session_id}/exercises` | `{status: absent\|pending\|generating\|done\|failed, error_message, exercises[{id, section_id, position, title, covers, duration_minutes}]}` : jamais d'énoncé, d'indice ni de solution. `done` avec liste vide = aucune section n'avait besoin d'exercice. `404` session inconnue. |
+| GET | `/courses/{session_id}/exercises/{exercise_id}` | `{id, section_id, position, title, covers, statement[blocs], hints[≤3], duration_minutes}`, sans solution. `404` si l'exercice n'appartient pas à la session ; `422` si un id n'est pas un UUID valide. |
 | POST | `/courses/{session_id}/exercises/{exercise_id}/answer` | Corrige la réponse (body `{answer}`, ≤ `EXERCISE_ANSWER_MAX_LENGTH` = 4000 caractères) → `{feedback, correct_points[], missing_points[], expected_approach}`, sans score. Énoncé et solution lus en base ; réponse traitée comme une donnée et jamais enregistrée. `404`, `422`, `429` (10/min ou quota Gemini), `502`/`503` : le message invite à réessayer. |
 | POST | `/podcasts/generate/{session_id}` | Met en file la génération d'un podcast à partir d'un cours persisté (`202` + `job_id`). Body optionnel `{style, target_minutes, force}`. `404` session inconnue, `422` cours sans contenu exploitable, `429` trop de demandes, `503` fonctionnalité désactivée. Idempotent : un job non échoué équivalent est renvoyé sauf `force=true`. |
 | GET | `/podcasts/jobs/{job_id}` | État du job : `pending → scripting → synthesizing → mixing → done \| failed`, `stage`, `progress` (0-100), `error_message`, `duration_seconds` |
@@ -187,6 +187,22 @@ Un lot d'exercices par cours, généré **à la demande** (jamais avec le cours 
 - **Reprise** : un 429 minute ou une indisponibilité remet le job en file avec attente (`EXERCISE_RETRY_DELAY_SECONDS`, ou le `retryDelay` de Google), dans la limite de `EXERCISE_MAX_ATTEMPTS`. Quota journalier : `failed` immédiat. Exercices et statut `done` sont écrits dans une seule transaction (jamais de lot partiel). Un job dont le worker a disparu est libéré après `EXERCISE_JOB_STALE_MINUTES`.
 - **Secret** : la solution attendue (`course_exercises.expected_solution`) ne sort que dans la correction ; la liste n'a ni énoncé ni indice, le détail n'a pas de solution.
 - **Prérequis** : le cours (aucune section incomplète) et son quiz doivent exister (`409` sinon).
+
+### Parcours de l'apprenant
+
+1. L'onglet affiche la liste (titre, section, ce que l'exercice couvre) ; rien ne se génère tant que l'apprenant ne le demande pas, puis le front interroge l'état jusqu'à `done` ou `failed` (relance possible).
+2. **Commencer** charge le détail et démarre le minuteur (`duration_minutes`, indicatif : il ne bloque pas la réponse).
+3. **Indices** : révélés un par un, à la demande.
+4. L'apprenant rédige sa réponse et demande la **correction** : retour, points justes, points manquants, démarche attendue.
+5. **Refaire** efface la réponse et ramène à la carte « avant » ; le minuteur repart au clic sur **Commencer**, sans rien conserver côté serveur.
+
+### Règles de gestion
+
+- **RG-1** : aucune note ni score, seulement un retour qualitatif.
+- **RG-4** : génération refusée (`409`) tant que le cours et son quiz ne sont pas terminés.
+- **RG-5** : génération à la demande uniquement.
+- **RG-8** : la liste n'expose ni énoncé ni solution ; le détail n'expose pas la solution.
+- **RG-9** : la réponse de l'apprenant n'est jamais enregistrée ; la solution ne sort que dans la correction.
 
 `EXERCISE_*` : valeurs par défaut dans `.env.example`. Les limiteurs sont par IP, en mémoire (non partagés entre processus). Comme le reste de l'API, aucune authentification : l'accès se limite à l'existence de la session.
 

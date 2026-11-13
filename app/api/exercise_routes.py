@@ -41,6 +41,7 @@ class ExerciseSummary(BaseModel):
     position: int
     title: str
     covers: str
+    duration_minutes: int
 
 
 class ExerciseListResponse(BaseModel):
@@ -165,7 +166,10 @@ async def list_exercises(session_id: uuid.UUID, request: Request) -> ExerciseLis
         status=job.status,
         error_message=job.error_message if job.status == "failed" else None,
         exercises=[
-            ExerciseSummary(id=e.id, section_id=e.section_id, position=e.position, title=e.title, covers=e.covers)
+            ExerciseSummary(
+                id=e.id, section_id=e.section_id, position=e.position, title=e.title, covers=e.covers,
+                duration_minutes=e.duration_minutes,
+            )
             for e in exercises
         ],
     )
