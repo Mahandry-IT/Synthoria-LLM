@@ -68,7 +68,8 @@ async def _repair(
             "Une première version de cette section avait les problèmes suivants, à corriger :\n"
             + "\n".join(f"- {issue}" for issue in best_issues.all)
             + "\nRéponds avec la section COMPLÈTE : `subsections` contient les trois sous-sections "
-            "Pourquoi, Quoi et Comment, chacune avec au moins un bloc."
+            "Pourquoi, Quoi et Comment, chacune avec au moins un bloc, et renseigne `key_takeaways` et "
+            "`pitfalls_to_avoid` (jamais vides)."
         )
         try:
             candidate = await _generate_one(prompt, section.title, system_instruction, gemini_client)
@@ -121,8 +122,8 @@ async def regenerate_section(
         f"{render_rules(profile)}\n\n"
         f"Génère UNE SEULE section DEVELOPMENT intitulée exactement « {section_title} », complète : "
         "sous-sections Pourquoi/Quoi/Comment (avec un exemple travaillé complet dans Comment), un défi "
-        "(`challenge`), un exemple à trous (`faded_example`), les `check_questions` et un `recall_prompt`. "
-        "Retourne le JSON selon le schéma fourni."
+        "(`challenge`), un exemple à trous (`faded_example`), les `check_questions`, un `recall_prompt`, "
+        "les `key_takeaways` et les `pitfalls_to_avoid`. Retourne le JSON selon le schéma fourni."
     )
     section = await _generate_one(prompt, section_title, system_instruction, gemini_client)
     # Régénération déclenchée par l'utilisateur : borne de réparation plus basse que la génération

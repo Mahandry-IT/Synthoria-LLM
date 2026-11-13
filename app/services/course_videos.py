@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from typing import Any
@@ -403,6 +404,80 @@ async def rank_videos(
     return [video for _score, video in [*by_category.values(), *rest]]
 
 
+_MIN_WORD_LEN = 4
+
+
+def _topic_words(text: str) -> set[str]:
+    """Mots significatifs (sans accents ni casse, au moins `_MIN_WORD_LEN` lettres) d'un titre."""
+    folded = unicodedata.normalize("NFKD", text.casefold())
+    plain = "".join(c for c in folded if not unicodedata.combining(c))
+    return {w for w in re.findall(r"[a-z0-9]+", plain) if len(w) >= _MIN_WORD_LEN}
+
+
+# Mots de structure ou de pédagogie, sans valeur de rattachement (forme sans accent, voir `_topic_words`).
+_GENERIC_WORDS = frozenset({
+    "introduction", "resume", "conclusion", "presentation", "apercu", "generalites", "general", "generale",
+    "synthese", "bilan", "retenir", "suite", "cours", "lecon", "chapitre", "partie", "section",
+    "exercice", "exercices", "exemple", "exemples", "notions", "notion", "bases", "base", "principes",
+    "fondamentaux", "pourquoi", "comment", "pieges", "erreurs",
+})
+_MIN_SHARED_WORDS = 2
+_MIN_SHORT_TITLE_RATIO = 0.5
+
+
+def _matches_section(video_words: set[str], section_words: set[str]) -> int:
+    """Nombre de mots partagés si la vidéo est assez proche de la section, sinon 0.
+
+    Il faut au moins `_MIN_SHARED_WORDS` mots significatifs en commun ; un titre de section court
+    (2 mots significatifs ou moins) se contente de `_MIN_SHORT_TITLE_RATIO` de ses mots. Un titre
+    sans mot significatif (ex. « Introduction ») n'attire jamais de vidéo."""
+    if not section_words:
+        return 0
+    shared = len(video_words & section_words)
+    if shared >= _MIN_SHARED_WORDS:
+        return shared
+    if len(section_words) <= _MIN_SHARED_WORDS and shared / len(section_words) >= _MIN_SHORT_TITLE_RATIO:
+        return shared
+    return 0
+
+
+def assign_sections_by_topic(
+    videos: list[CourseVideo], sections: list[tuple[str, str]], settings: Settings
+) -> list[CourseVideo]:
+    """Repli déterministe (aucun appel Gemini) quand le classement n'a pas rattaché les vidéos.
+
+    Seules les vidéos sans `category` sont traitées : le classement V2 renseigne toujours `category`
+    (même avec `section_index` nul, vidéo volontairement générale à laisser telle quelle) ; une
+    vidéo sans `category` n'a donc jamais été classée. `sections` = couples `(id, titre)` des
+    seules sections DEVELOPMENT. Une vidéo va à la section dont le titre partage le plus de mots
+    significatifs avec le sien (voir `_matches_section`) ; égalité ou aucun recoupement :
+    `section_id` reste nul (vidéo du cours). Plafond `course_videos_max_per_section`.
+    """
+    section_words = [(sid, _topic_words(title) - _GENERIC_WORDS) for sid, title in sections]
+    taken: dict[str, int] = {}
+    for video in videos:
+        if video.section_id:
+            taken[video.section_id] = taken.get(video.section_id, 0) + 1
+    result: list[CourseVideo] = []
+    for video in videos:
+        if video.section_id or video.category is not None:
+            result.append(video)
+            continue
+        words = _topic_words(video.title)
+        scored = [
+            (score, sid)
+            for sid, sw in section_words
+            if (score := _matches_section(words, sw)) and taken.get(sid, 0) < settings.course_videos_max_per_section
+        ]
+        best = max((score for score, _ in scored), default=0)
+        winners = [sid for score, sid in scored if score == best]
+        if best and len(winners) == 1:
+            taken[winners[0]] = taken.get(winners[0], 0) + 1
+            video = video.model_copy(update={"section_id": winners[0]})
+        result.append(video)
+    return result
+
+
 # ─── Point d'entrée ───────────────────────────────────────────
 
 
@@ -445,4 +520,10 @@ async def attach_verified_videos(
         logger.warning("course_videos_lookup_failed", exc_info=True)
     if not videos:
         logger.warning("course_videos_none_verified")
-    return response.model_copy(update={"videos": videos[: settings.course_videos_max]})
+    videos = videos[: settings.course_videos_max]
+    if videos and any(v.section_id is None and v.category is None for v in videos):
+        # Type de section absent de l'API : on ne garde que les DEVELOPMENT (sous-sections ou défi),
+        # l'introduction n'en a pas.
+        development = [(s.id, s.title) for s in response.sections or [] if s.subsections or s.challenge]
+        videos = assign_sections_by_topic(videos, development, settings)
+    return response.model_copy(update={"videos": videos})

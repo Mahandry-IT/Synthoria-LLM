@@ -34,6 +34,10 @@ class DepthProfile:
     check_questions_max: int
     quiz_min: int
     quiz_max: int
+    takeaways_min: int
+    takeaways_max: int
+    pitfalls_min: int
+    pitfalls_max: int
     quiz_open_ended: bool = False
 
 
@@ -42,16 +46,19 @@ PROFILES: dict[str, DepthProfile] = {
         name="express", min_sections=7, max_sections=12, non_text_ratio=0.5,
         max_prose_words=150, max_blocks=5, check_questions_min=1, check_questions_max=2,
         quiz_min=5, quiz_max=6,
+        takeaways_min=2, takeaways_max=2, pitfalls_min=1, pitfalls_max=1,
     ),
     "standard": DepthProfile(
         name="standard", min_sections=13, max_sections=16, non_text_ratio=0.5,
         max_prose_words=300, max_blocks=8, check_questions_min=2, check_questions_max=3,
         quiz_min=8, quiz_max=10,
+        takeaways_min=3, takeaways_max=3, pitfalls_min=1, pitfalls_max=1,
     ),
     "approfondi": DepthProfile(
         name="approfondi", min_sections=18, max_sections=None, non_text_ratio=0.5,
         max_prose_words=500, max_blocks=12, check_questions_min=2, check_questions_max=3,
         quiz_min=10, quiz_max=12, quiz_open_ended=True,
+        takeaways_min=3, takeaways_max=4, pitfalls_min=2, pitfalls_max=2,
     ),
 }
 
@@ -109,6 +116,9 @@ def render_rules(profile: DepthProfile) -> str:
         f"- Au plus {profile.max_blocks} blocs par section, toutes sous-sections confondues.\n"
         "- Chaque bloc TEXT tient en 3 phrases au plus.\n"
         f"- {_range(profile.check_questions_min, profile.check_questions_max)} `check_questions` par section.\n"
+        f"- {_range(profile.takeaways_min, profile.takeaways_max)} `key_takeaways` (puces courtes : l'essentiel à "
+        f"retenir) et {_range(profile.pitfalls_min, profile.pitfalls_max)} `pitfalls_to_avoid` "
+        "(`mistake` + `how_to_avoid`) par section.\n"
         "- Renseigne `challenge_key_points` : 2 à 4 idées courtes qu'une bonne réponse au défi contient.\n"
         "- Arbitrage : si couvrir tous les sous-thèmes du plan oblige à dépasser le budget, la couverture "
         "gagne — condense la prose (tableaux, listes) plutôt que d'omettre un sous-thème."

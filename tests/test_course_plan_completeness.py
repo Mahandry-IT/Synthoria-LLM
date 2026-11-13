@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.lesson_box_fixtures import BOXES_FIELDS
 from app.api.schemas import ApiPlannedSection
 from app.core.exceptions import GeminiUnavailableError
 from app.schemas.course_generation import Section
@@ -38,7 +39,7 @@ def _full_section(
             blocks += extra_comment_blocks
         subsections.append({"title": name, "blocks": blocks})
     return Section.model_validate({
-        "type": "development", "title": title, "blocks": [], "subsections": subsections,
+        "type": "development", "title": title, "blocks": [], "subsections": subsections, **BOXES_FIELDS,
         "covered_subtopics": covered_subtopics or [],
     })
 

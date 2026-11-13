@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.lesson_box_fixtures import BOXES_FIELDS
 from app.api.schemas import ApiPlannedSection
 from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiQuotaExceededError, GeminiUnavailableError
@@ -176,7 +177,7 @@ def _dev_section(title: str) -> dict:
     return {
         "type": "development",
         "title": title,
-        "blocks": [],
+        "blocks": [], **BOXES_FIELDS,
         "subsections": [
             {
                 "title": "Quoi",

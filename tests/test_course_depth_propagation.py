@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests.lesson_box_fixtures import BOXES_FIELDS
 from app.api import routes
 from app.api.schemas import ApiPlannedSection, CourseMeta
 from app.core.config import Settings
@@ -31,7 +32,7 @@ PLAN_META = {"title": "Transformateurs", "subject": "Électrotechnique", "langua
 def _conform_section(title: str) -> dict:
     """Section DEVELOPMENT conforme à tous les modes : 4 blocs dont 2 non textuels, peu de mots."""
     return {
-        "type": "development", "title": title, "blocks": [],
+        "type": "development", "title": title, "blocks": [], **BOXES_FIELDS,
         "subsections": [
             {"title": "Pourquoi", "blocks": [{"type": "list", "list_items": ["enjeu"]}]},
             {"title": "Quoi", "blocks": [
@@ -45,7 +46,7 @@ def _conform_section(title: str) -> dict:
 
 def _text_only_section(title: str) -> dict:
     return {
-        "type": "development", "title": title, "blocks": [],
+        "type": "development", "title": title, "blocks": [], **BOXES_FIELDS,
         "subsections": [
             {"title": name, "blocks": [{"type": "text", "text": name.lower()}]}
             for name in ("Pourquoi", "Quoi", "Comment")

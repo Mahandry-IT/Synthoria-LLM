@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.lesson_box_fixtures import BOXES_FIELDS
 from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError, GeminiUnavailableError
 from app.schemas.course_generation import SectionType
@@ -15,7 +16,7 @@ def _row(mode: str = "file_question", filenames: list[str] | None = None) -> Sim
 
 def _good_section(title: str = "Le transformateur") -> dict:
     return {
-        "type": "development", "title": title, "blocks": [],
+        "type": "development", "title": title, "blocks": [], **BOXES_FIELDS,
         "subsections": [
             {"title": "Pourquoi", "blocks": [{"type": "text", "text": "raison"}]},
             {"title": "Quoi", "blocks": [{"type": "text", "text": "définition"}]},

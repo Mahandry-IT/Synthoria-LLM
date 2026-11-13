@@ -73,8 +73,8 @@ async def add_course_sections(
         "Génère une ou plusieurs sections DEVELOPMENT complètes, chacune avec un titre thématique "
         "précis (jamais générique), ses sous-sections Pourquoi/Quoi/Comment (toutes obligatoires, "
         "avec un exemple travaillé complet dans Comment), un défi (`challenge`), un exemple à trous "
-        "(`faded_example`), les `check_questions` et un `recall_prompt`. Retourne le JSON selon le "
-        "schéma fourni."
+        "(`faded_example`), les `check_questions`, un `recall_prompt`, les `key_takeaways` et les "
+        "`pitfalls_to_avoid`. Retourne le JSON selon le schéma fourni."
     )
     structured = await gemini_client.format_structured(
         raw_answer=prompt, system_instruction=_get_teacher_instructions(), response_schema=SectionsBatchSchema,
