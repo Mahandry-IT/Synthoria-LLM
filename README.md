@@ -177,7 +177,7 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 
 - **Blocs typés** : chaque section expose `subsections[].blocks[]` (`text`, `definition`, `list`, `table`, `formula`, `code`, `worked_example`, `callout`, `pitfall`, `diagram` Mermaid, `chart`). `quoi/pourquoi/comment/tables` sont **dépréciés** (historique, podcast) et seront retirés dans une version ultérieure. Les diagrammes (≤ 4000 caractères), graphiques (≤ 12 libellés, 4 séries) et graphes (≤ 20 nœuds, 40 arêtes, 12 étapes) sont bornés.
 - **Réponse directe** : `answer` = `summary` + `key_points` + `blocks`, distincte de l'introduction (garde-fou de similarité, `COURSE_ANSWER_INTRO_SIMILARITY_MAX`). L'ancien format `quoi/pourquoi/comment/worked_example` reste lisible.
-- **Cycle par section** (développement) : `challenge` (+ `challenge_key_points`, 2-4 idées attendues, analysées par `POST .../challenge`) → Pourquoi → Quoi → Comment → `faded_example` (À toi) → `check_questions` (Vérifie, feedback par choix) → `recall_prompt` (reformulation). Nombre de sections, taille des sections et du quiz : selon le mode (voir [Modes de cours](#modes-de-cours)).
+- **Cycle par section** (développement) : `challenge` (+ `challenge_key_points`, 2-4 idées attendues, analysées par `POST .../challenge`) → Pourquoi → Quoi → Comment → `faded_example` (À toi) → `check_questions` (Vérifie, feedback par choix) → `recall_prompt` (reformulation) → `key_takeaways` (« Ce qu'il faut retenir », 2-4 puces courtes) → `pitfalls_to_avoid` (« Ce qu'il faut éviter », 1-2 entrées `{mistake, how_to_avoid}`). Les deux encadrés sont des champs de la section, distincts du bloc `pitfall` et de la section « Pièges courants » ; textes du modèle, bornés côté API (puce ≤ 200 caractères, piège ≤ 300, 6 puces et 3 pièges au plus) et à afficher sans HTML. Ils sont **requis** dans le JSON schema envoyé à Gemini (lots, régénération, ajout de sections) mais facultatifs à la lecture : un cours enregistré avant ce format les renvoie vides et n'est jamais marqué `incomplete` pour cette raison ; une section générée sans l'un d'eux n'est ni bloquante ni `incomplete` : l'absence est signalée comme un problème mineur, réclamée seulement si une réparation a déjà lieu pour un autre motif (bloquant ou soft), et ne déclenche jamais d'appel Gemini à elle seule ; sinon la section est gardée telle quelle. Nombre de sections, taille des sections et du quiz : selon le mode (voir [Modes de cours](#modes-de-cours)).
 - **Quiz final** : majorité de questions normale/difficile (`COURSE_QUIZ_MIN_HARD_SHARE`, 0.6), `section_refs` pour les questions mêlant plusieurs sections.
 - **Pré-test** : `POST /courses/plan` renvoie `pretest` (1 question par section) ; une section envoyée à `/courses/generate/from-plan` avec `mastery: "known"` est générée en version condensée.
 - **Flashcards** : `flashcards[]` dérivées des questions « Vérifie ». Migration `005_add_flashcard_reviews` (table `flashcard_reviews`) : `docker compose exec api alembic upgrade head` (la table est aussi créée au démarrage). Intervalles : `REVIEW_INTERVALS_DAYS`.
@@ -199,10 +199,12 @@ Codes de sortie : `0` succès, `1` échec du job, `2` ressource introuvable. Scr
 | Mots de prose max / section | 150 | 300 | 500 |
 | Blocs max / section | 5 | 8 | 12 |
 | Questions « Vérifie » | 1-2 | 2-3 | 2-3 |
+| « Ce qu'il faut retenir » (`key_takeaways`) | 2 | 3 | 3-4 |
+| « Ce qu'il faut éviter » (`pitfalls_to_avoid`) | 1 | 1 | 2 |
 | Quiz final | 5-6 | 8-10 | 10-12+ |
 
 - **Prose** = `text`, `definition`, `callout`, éléments de `list` et `worked_example` ; tableaux, formules, code, schémas et graphiques ne comptent pas dans les mots mais comptent dans les blocs. **Textuel** = `text`, `definition`, `callout` (un bloc `image` compte comme non textuel tant qu'aucun résolveur ne garantit son affichage). Un bloc `text` reste limité à 3 phrases.
-- **Validation** (`app/services/visual_validation.py`, `course_plan_generator.section_issues`) : problèmes **bloquants** (sous-section Pourquoi/Quoi/Comment vide, sous-thème du plan non traité) et **soft** (ratio, mots, blocs, `text` trop long), avec des messages chiffrés (« 412 mots de prose pour un budget de 300 ») recopiés dans le prompt de réparation. Réparation bornée à 2 appels Gemini par lot ; un remplaçant n'est retenu que si son score pondéré (bloquant × 10 + soft) est strictement meilleur. Après réparation : bloquant restant → section `incomplete` ; soft seulement → la meilleure version est gardée et `course_section_budget_exceeded` est journalisé (suivre ce taux après déploiement : chaque dépassement coûte jusqu'à 2 appels).
+- **Validation** (`app/services/visual_validation.py`, `course_plan_generator.section_issues`) : problèmes **bloquants** (sous-section Pourquoi/Quoi/Comment vide, sous-thème du plan non traité), **soft** (ratio, mots, blocs, `text` trop long) et **encadrés** manquants (`key_takeaways` / `pitfalls_to_avoid` d'une section nouvelle : listés dans le prompt de réparation, comptés dans le score à 1 point, mais ni bloquants ni déclencheurs d'une réparation), avec des messages chiffrés (« 412 mots de prose pour un budget de 300 ») recopiés dans le prompt de réparation. Réparation bornée à 2 appels Gemini par lot ; un remplaçant n'est retenu que si son score pondéré (bloquant × 10 + soft + encadrés) est strictement meilleur. Après réparation : bloquant restant → section `incomplete` ; soft seulement → la meilleure version est gardée et `course_section_budget_exceeded` est journalisé (suivre ce taux après déploiement : chaque dépassement coûte jusqu'à 2 appels).
 - **Arbitrage** : si la couverture des sous-thèmes et le budget entrent en conflit, la couverture gagne.
 - **Rétro-compatibilité** : un plan ou une session sans mode (antérieurs) est traité comme `approfondi` (`meta.depth` absent, colonne `course_plans.depth` à `approfondi` par défaut). `DEFAULT_COURSE_DEPTH` ne s'applique qu'aux nouvelles requêtes sans `depth`.
 - **Migration** `015_add_course_plan_depth` (`course_plans.depth VARCHAR(12) NOT NULL DEFAULT 'approfondi'`) : idempotente, et la même colonne est ajoutée au démarrage de l'API (`app/db/schema_sync.py`) car le conteneur ne joue pas les migrations Alembic (`create_all` n'ajoute jamais de colonne à une table existante).
@@ -274,7 +276,7 @@ Créer la clé : [Google Cloud Console](https://console.cloud.google.com/apis/cr
 
 **Classement pédagogique (optionnel)** : si `COURSE_VIDEOS_RANKING_ENABLED=true` (défaut) et qu'une clé Data API a trouvé ≥ 2 candidats, un appel Flash-Lite supplémentaire (`rank_videos`) catégorise chaque vidéo (`category` : cours / exercices_corriges / intuition / demonstration / methode, `level` : debutant / intermediaire / avance, `relevance_score` 0-100) à partir d'un vivier plus large que `COURSE_VIDEOS_MAX` (+5 candidats). Gemini ne reçoit et ne renvoie que des index numérotés et des enums — jamais d'URL ni de texte libre non borné — donc un titre ou une description de vidéo malveillante ne peut pas injecter d'instruction. Les candidats sous `YOUTUBE_RANKING_MIN_SCORE` (40 par défaut) sont écartés ; la sélection finale privilégie la diversité (meilleur score de chaque catégorie d'abord). Best-effort : en cas d'échec, l'ordre V1 est conservé. Ce classement ajoute 1 appel Gemini par cours (dans la fenêtre de `GEMINI_RPM_LIMIT`) ; désactiver `COURSE_VIDEOS_RANKING_ENABLED` si le quota est trop juste.
 
-**Vidéos par section** : ce même appel de classement (aucun appel ni requête YouTube en plus) indique, pour chaque vidéo retenue, la section qu'elle illustre le mieux. La vidéo porte alors `section_id` (l'`id` de la section) ; le client l'affiche dans cette section. `section_id: null` désigne une vidéo générale, à afficher au niveau du cours — c'est aussi le cas sans classement (repli V1, mode dégradé, recherche groundée), pour les cours enregistrés avant cet ajout, au-delà de `COURSE_VIDEOS_MAX_PER_SECTION` (2 par défaut) vidéos pour une même section, et le client doit traiter de même un `section_id` qui ne correspond à aucune section. La liste `videos` reste au niveau du cours : seul ce champ est ajouté.
+**Vidéos par section** : ce même appel de classement (aucun appel ni requête YouTube en plus) indique, pour chaque vidéo retenue, la section qu'elle illustre le mieux. La vidéo porte alors `section_id` (l'`id` de la section) ; le client l'affiche dans cette section. `section_id: null` désigne une vidéo générale, à afficher au niveau du cours — c'est aussi le cas sans classement (repli V1, mode dégradé, recherche groundée) **sauf** si un repli déterministe par sujet reconnaît la section (`assign_sections_by_topic` : sections de développement seulement, au moins 2 mots significatifs communs avec le titre de la section (ou la moitié de ses mots s'il en a 2 ou moins), mots génériques comme « introduction » ou « résumé » ignorés, égalité ou recoupement insuffisant = `null`, aucun appel supplémentaire, plafond par section conservé ; les vidéos classées par Gemini ne sont pas retouchées), pour les cours enregistrés avant cet ajout, au-delà de `COURSE_VIDEOS_MAX_PER_SECTION` (2 par défaut) vidéos pour une même section, et le client doit traiter de même un `section_id` qui ne correspond à aucune section. La liste `videos` reste au niveau du cours : seul ce champ est ajouté.
 
 ### Supports visuels
 
@@ -364,11 +366,18 @@ migrations/
 
 ## Quiz — Schéma de réponse
 
-Chaque question de quiz dans `CourseGenerationResponse.quiz` suit ce schéma :
+Chaque question de quiz dans `CourseGenerationResponse.quiz` a un `kind` (`choice` par défaut, absent des anciens quiz) :
+
+- `choice` : QCM à `options` (>= 2) et `correct_option_indices` ;
+- `numeric` (quiz final seulement) : calcul à résultat unique, `expected_value` (nombre fini) et `unit` facultative, sans `options` ; un entier doit être exact, un décimal est vérifié à 0,0001 ;
+- `matching` (quiz final seulement) : 3 à 6 `subjects` à associer à autant d'`options` distinctes ; `correct_matches` donne, pour chaque sujet, l'indice de son option (une permutation).
+
+Les réponses attendues (`correct_option_indices`, `expected_value`, `correct_matches`) sont vides dans les routes publiques avant correction. Les types `numeric` et `matching` représentent au plus ~25 % du quiz final ; les `check_questions` de section restent des `choice`. Exemple `choice` :
 
 ```json
 {
   "question": "Quelle est la formule de la régression linéaire ?",
+  "kind": "choice",
   "options": ["y = ax + b", "y = a² + b", "y = a/b", "y = a - bx"],
   "correct_option_indices": [0],
   "difficulty": "facile",
@@ -380,6 +389,9 @@ Chaque question de quiz dans `CourseGenerationResponse.quiz` suit ce schéma :
 
 | Champ | Type | Description |
 | ----- | ---- | ----------- |
+| `kind` | `"choice"` / `"numeric"` / `"matching"` | Type de question (défaut `choice`) |
+| `expected_value` / `unit` | `float` / `str` | `numeric` : résultat attendu et unité facultative |
+| `subjects` / `correct_matches` | `list[str]` / `list[int]` | `matching` : sujets et, par sujet, indice de l'option attendue (permutation) |
 | `correct_option_indices` | `list[int]` | Indices 0-based des bonnes réponses. 1 élément = réponse unique, >1 = QCM multiple |
 | `difficulty` | `"facile"` / `"normale"` / `"difficile"` | Niveau de difficulté. Répartition calculée : difficile = round(N/2), normale = round(N/4), facile = N − les deux. Réessayé puis rééquilibré automatiquement si Gemini échoue. |
 | `points` | `float` | Points alloués (calculé côté serveur). Total = 20/20, borne min 0.5 |

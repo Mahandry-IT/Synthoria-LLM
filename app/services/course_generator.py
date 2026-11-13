@@ -35,7 +35,7 @@ from app.schemas.course_generation import (
     quiz_question_issue,
 )
 from app.services.course_widgets import attach_widgets
-from app.services.course_depth import LEGACY_DEPTH, get_profile, render_course_rules
+from app.services.course_depth import LEGACY_DEPTH, PROFILES, get_profile, render_course_rules
 from app.services.course_videos import _search_videos, attach_verified_videos  # noqa: F401 — rétrocompat (imports historiques)
 from app.services.gemini_client import GeminiClient
 from app.services.leitner import flashcards_from_course
@@ -381,6 +381,42 @@ def is_incomplete_section_dict(section: dict[str, Any]) -> bool:
     return not blocks and not any((section.get(key) or "").strip() for key in ("quoi", "pourquoi", "comment"))
 
 
+_TAKEAWAY_MAX_CHARS = 200
+_PITFALL_MAX_CHARS = 300
+# Bornes alignées sur le plus grand maximum des modes (`course_depth.PROFILES`).
+_MAX_TAKEAWAYS = max(p.takeaways_max for p in PROFILES.values())
+_MAX_PITFALLS = max(p.pitfalls_max for p in PROFILES.values())
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Tronque à la limite de mot avec « … » ; un texte dans la limite est rendu tel quel."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    if text[limit - 1].isspace():  # coupe déjà tombée sur une fin de mot
+        return cut.rstrip() + "…"
+    head, sep, _ = cut.rpartition(" ")
+    return (head if sep and head else cut).rstrip() + "…"
+
+
+def _clean_takeaways(items: list[str]) -> list[str]:
+    """Puces du modèle : vides écartées, longueur et nombre bornés (texte non fiable)."""
+    return [_truncate(t.strip(), _TAKEAWAY_MAX_CHARS) for t in items if t.strip()][:_MAX_TAKEAWAYS]
+
+
+def _clean_pitfalls(items: list[Any]) -> list[dict[str, str]]:
+    """Pièges du modèle : une entrée sans erreur ou sans remède est écartée, textes bornés."""
+    cleaned = [
+        {
+            "mistake": _truncate(p.mistake.strip(), _PITFALL_MAX_CHARS),
+            "how_to_avoid": _truncate(p.how_to_avoid.strip(), _PITFALL_MAX_CHARS),
+        }
+        for p in items
+        if p.mistake.strip() and p.how_to_avoid.strip()
+    ]
+    return cleaned[:_MAX_PITFALLS]
+
+
 def _map_sections_to_course_sections(
     sections: list[Section],
     start_index: int = 0,
@@ -473,6 +509,8 @@ def _map_sections_to_course_sections(
                 challenge_key_points=section.challenge_key_points,
                 faded_example=section.faded_example.model_dump(mode="json") if section.faded_example else None,
                 check_questions=[_map_quiz_question(q) for q in section.check_questions],
+                key_takeaways=_clean_takeaways(section.key_takeaways),
+                pitfalls_to_avoid=_clean_pitfalls(section.pitfalls_to_avoid),
                 recall_prompt=section.recall_prompt.model_dump(mode="json") if section.recall_prompt else None,
                 incomplete=is_incomplete_section(section),
             ))

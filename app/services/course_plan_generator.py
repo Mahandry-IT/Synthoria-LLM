@@ -374,6 +374,20 @@ def _structural_gaps(section: Section) -> list[str]:
     return [name for name in _DEVELOPMENT_SUBSECTIONS if name not in with_blocks]
 
 
+def _box_gaps(section: Section) -> list[str]:
+    """Encadrés de fin de section absents d'une section NOUVELLE (`key_takeaways`, `pitfalls_to_avoid`).
+
+    Non bloquant : voir `SectionIssues.boxes`. Ne s'applique qu'aux sections que l'on vient de générer (`section_issues`) : les cours déjà
+    enregistrés n'ont pas ces champs et ne passent jamais par ce contrôle (`is_incomplete_section_dict`
+    ne les teste pas)."""
+    gaps = []
+    if not any(t.strip() for t in section.key_takeaways):
+        gaps.append("`key_takeaways`")
+    if not any(p.mistake.strip() and p.how_to_avoid.strip() for p in section.pitfalls_to_avoid):
+        gaps.append("`pitfalls_to_avoid`")
+    return gaps
+
+
 def _section_text(section: Section) -> str:
     """Concatène tout le texte exploitable d'une section (blocs texte, tableaux, formules, légendes,
     diagrammes, graphiques, graphes) — utilisé pour la vérification déterministe de couverture (repli quand
@@ -449,6 +463,9 @@ class SectionIssues:
       Après réparation, une section qui en a encore devient « incomplète ».
     - `soft` (forme) : ratio de blocs non textuels, budget de mots/blocs, bloc TEXT trop long.
       Après réparation, la meilleure version est gardée et le dépassement journalisé.
+    - `boxes` (encadrés retenir / piège manquants) : jamais bloquants et jamais à eux seuls cause
+      d'un appel Gemini (absents de `__bool__`) ; listés dans `all` pour qu'une réparation déclenchée
+      par un autre problème les réclame aussi. Une section sinon valide, sans encadrés, est gardée.
 
     Arbitrage : si la couverture des sous-thèmes et le budget entrent en conflit, la couverture
     gagne (poids `_BLOCKING_WEIGHT` dans `score`, et seuls les problèmes bloquants rendent une
@@ -457,18 +474,20 @@ class SectionIssues:
 
     blocking: tuple[str, ...] = ()
     soft: tuple[str, ...] = ()
+    boxes: tuple[str, ...] = ()
     blocking_count: int = 0  # une unité par sous-section vide et par sous-thème manquant
 
     @property
     def all(self) -> list[str]:
-        return [*self.blocking, *self.soft]
+        return [*self.blocking, *self.soft, *self.boxes]
 
     @property
     def score(self) -> int:
         """Score pondéré (plus bas = meilleur) qui départage une section et son remplaçant."""
-        return _BLOCKING_WEIGHT * self.blocking_count + len(self.soft)
+        return _BLOCKING_WEIGHT * self.blocking_count + len(self.soft) + len(self.boxes)
 
     def __bool__(self) -> bool:
+        # Les encadrés manquants ne déclenchent jamais de réparation à eux seuls.
         return bool(self.blocking or self.soft)
 
 
@@ -484,13 +503,18 @@ def section_issues(
     if is_incomplete_section(section):
         return SectionIssues()
     gaps = _structural_gaps(section)
+    box_gaps = _box_gaps(section)
     missing_topics = _missing_subtopics(section, planned) if planned is not None else []
     blocking = [f"sous-section « {name} » vide, à écrire" for name in gaps]
     if missing_topics:
         blocking.append("sous-thèmes non traités : " + " ; ".join(missing_topics))
+    boxes = (
+        ("champs à renseigner (retenir / piège de fin de section) : " + ", ".join(box_gaps),) if box_gaps else ()
+    )
     return SectionIssues(
         blocking=tuple(blocking),
         soft=tuple(visual_issues(section, profile)),
+        boxes=boxes,
         blocking_count=len(gaps) + len(missing_topics),
     )
 
@@ -559,7 +583,8 @@ async def _repair_incomplete_sections(
             f"{rules}\n\n"
             f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre, en corrigeant "
             "chacun de ces problèmes : remplis TOUTES les sous-sections Pourquoi/Quoi/Comment (jamais vide), "
-            "couvre en détail tous les sous-thèmes listés et renseigne `covered_subtopics`."
+            "couvre en détail tous les sous-thèmes listés, renseigne `covered_subtopics`, ainsi que `key_takeaways` "
+            "et `pitfalls_to_avoid` s'ils manquent."
         )
         try:
             structured = await gemini_client.format_structured(

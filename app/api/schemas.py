@@ -413,6 +413,13 @@ class ApiRecallPrompt(BaseModel):
     expected_key_points: list[str] = Field(default_factory=list)
 
 
+class ApiPitfallToAvoid(BaseModel):
+    """Piège d'un encadré « Ce qu'il faut éviter » : texte du modèle, à afficher sans HTML."""
+
+    mistake: str = Field("", max_length=300)
+    how_to_avoid: str = Field("", max_length=300)
+
+
 class CourseSection(BaseModel):
     id: str
     title: str
@@ -429,6 +436,14 @@ class CourseSection(BaseModel):
             "2-4 idées attendues dans une réponse au défi (évaluation côté serveur) ; vide pour les "
             "anciennes sessions (repli sur Pourquoi/Quoi)."
         ),
+    )
+    key_takeaways: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=6,
+        description="2-4 puces « Ce qu'il faut retenir » ; vide pour les cours antérieurs au format.",
+    )
+    pitfalls_to_avoid: list[ApiPitfallToAvoid] = Field(
+        default_factory=list, max_length=3,
+        description="1-2 pièges « Ce qu'il faut éviter » ; vide pour les cours antérieurs au format.",
     )
     faded_example: "ApiFadedExample | None" = None
     check_questions: list["QuizQuestion"] = Field(default_factory=list, description="2-3 questions « Vérifie ».")

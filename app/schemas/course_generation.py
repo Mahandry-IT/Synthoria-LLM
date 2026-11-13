@@ -405,6 +405,13 @@ class RecallPrompt(BaseModel):
     )
 
 
+class PitfallToAvoid(BaseModel):
+    """Piège de fin de section (encadré « Ce qu'il faut éviter »), distinct du bloc `pitfall`."""
+
+    mistake: str = Field(description="The typical mistake, in one short sentence.")
+    how_to_avoid: str = Field(description="How to avoid it, in one short sentence.")
+
+
 class Section(BaseModel):
     type: SectionType = Field(description="Structural role of the section.")
     title: str = Field(description="Section heading shown to the learner.")
@@ -440,6 +447,20 @@ class Section(BaseModel):
     )
     recall_prompt: RecallPrompt | None = Field(
         default=None, description="DEVELOPMENT only: the closing 'explain in your own words' prompt."
+    )
+    key_takeaways: list[str] = Field(
+        default_factory=list,
+        description=(
+            "DEVELOPMENT only: the essentials to remember, as short bullet points (box « Ce qu'il faut "
+            "retenir »), as many as the course mode rules say."
+        ),
+    )
+    pitfalls_to_avoid: list[PitfallToAvoid] = Field(
+        default_factory=list,
+        description=(
+            "DEVELOPMENT only: typical mistakes (box « Ce qu'il faut éviter »), each with how to avoid it, "
+            "as many as the course mode rules say."
+        ),
     )
     covered_subtopics: list[str] = Field(
         default_factory=list,
@@ -574,7 +595,8 @@ class SectionsBatchSchema(BaseModel):
             "contient, dans cet ordre, les sous-sections Pourquoi / Quoi / Comment (toutes "
             "obligatoires), un exemple travaillé complet dans Comment, un défi (`challenge`) et ses idées attendues "
             "(`challenge_key_points`), un exemple à trous "
-            "(`faded_example`), les `check_questions` (nombre fixé par les règles du mode) et un `recall_prompt`."
+            "(`faded_example`), les `check_questions` (nombre fixé par les règles du mode), un `recall_prompt`, "
+            "les `key_takeaways` et les `pitfalls_to_avoid` (nombres fixés par les règles du mode)."
         )
     )
 
@@ -596,6 +618,7 @@ class SectionsBatchSchema(BaseModel):
 # facultatif : il n'a de sens que pour une génération depuis un plan).
 _DEVELOPMENT_REQUIRED_FIELDS = (
     "subsections", "challenge", "challenge_key_points", "faded_example", "check_questions", "recall_prompt",
+    "key_takeaways", "pitfalls_to_avoid",
 )
 
 
@@ -606,9 +629,15 @@ def _require_development_content(schema: dict[str, Any]) -> dict[str, Any]:
         section["required"] = [*section.get("required", []), *(
             f for f in _DEVELOPMENT_REQUIRED_FIELDS if f not in section.get("required", [])
         )]
-        subsections = section.get("properties", {}).get("subsections")
+        properties = section.get("properties", {})
+        subsections = properties.get("subsections")
         if subsections is not None:
             subsections["minItems"] = 3
+        # Encadrés : au moins un élément côté Gemini seulement (les anciens JSON, sans encadrés, restent
+        # valides côté Pydantic : défaut liste vide, aucun `min_length`).
+        for name in ("key_takeaways", "pitfalls_to_avoid"):
+            if name in properties:
+                properties[name]["minItems"] = 1
     blocks = defs.get("Subsection", {}).get("properties", {}).get("blocks")
     if blocks is not None:
         blocks["minItems"] = 1
