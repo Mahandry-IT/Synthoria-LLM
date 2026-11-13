@@ -80,38 +80,38 @@ Contrainte transversale : le quota Gemini est limité, donc chaque lot borne le 
 ## Lot 3 — Exercices corrigés : données, génération, onglet (V2)
 
 ### 15. Conception des exercices
-- [ ] Contrat d'un exercice : titre, ce qu'il couvre, énoncé riche, indices, section liée, correction attendue
-- [ ] États de génération : absent, en cours, prêt, en échec
-- [ ] Budget d'appels par cours (RG-9) et critère « la section en a besoin » (RG-6)
+- [x] Contrat d'un exercice : titre, ce qu'il couvre, énoncé riche, indices, section liée, correction attendue
+- [x] États de génération : absent, en cours, prêt, en échec
+- [x] Budget d'appels par cours (RG-9) et critère « la section en a besoin » (RG-6)
 
 ### 16. Modèle et migration
-- [ ] Stockage des exercices par cours, lien optionnel vers une section
-- [ ] Stockage de l'état de génération
-- [ ] Migration réversible
+- [x] Stockage des exercices par cours, lien optionnel vers une section
+- [x] Stockage de l'état de génération
+- [x] Migration réversible
 
 ### 17. Génération asynchrone
-- [ ] Tâche en arrière-plan sur le modèle du podcast
-- [ ] Un seul lot par cours, après la leçon et le quiz (RG-4)
-- [ ] Arrêt propre et reprise possible en cas de 429
+- [x] Tâche en arrière-plan sur le modèle du podcast
+- [x] Un seul lot par cours, après la leçon et le quiz (RG-4)
+- [x] Arrêt propre et reprise possible en cas de 429
 
 ### 18. Routes des exercices
-- [ ] Lancer la génération (sur demande seulement, RG-5)
-- [ ] Lire l'état, la liste et le détail d'un exercice
-- [ ] Contrôle d'accès et limites de débit
+- [x] Lancer la génération (sur demande seulement, RG-5)
+- [x] Lire l'état, la liste et le détail d'un exercice
+- [x] Contrôle d'accès et limites de débit
 
 ### 19. Correction de la réponse par l'IA
-- [ ] Corriger une réponse en LaTeX sur le modèle de « Explique avec tes mots »
-- [ ] Aucun point attribué (RG-1)
-- [ ] Message de reprise sans perte de la réponse en cas d'échec
+- [x] Corriger une réponse en LaTeX sur le modèle de « Explique avec tes mots »
+- [x] Aucun point attribué (RG-1)
+- [x] Message de reprise sans perte de la réponse en cas d'échec
 
 ### 20. Frontend : fenêtre et onglet Exercices corrigés
-- [ ] Fenêtre « Générer les exercices ? » à la fin de la génération du cours
-- [ ] Bouton « Générer les exercices » dans l'onglet quand il n'y en a pas
-- [ ] Liste des exercices avec la section liée et ce qu'ils couvrent, suivi de l'avancement
+- [x] Fenêtre « Générer les exercices ? » à la fin de la génération du cours
+- [x] Bouton « Générer les exercices » dans l'onglet quand il n'y en a pas
+- [x] Liste des exercices avec la section liée et ce qu'ils couvrent, suivi de l'avancement
 
 ### 21. Tests du lot 3
-- [ ] Tests de génération (budget, sections retenues), de routes et de correction
-- [ ] Test de non-régression des quotas sur la génération du cours
+- [x] Tests de génération (budget, sections retenues), de routes et de correction
+- [x] Test de non-régression des quotas sur la génération du cours
 
 ## Lot 4 — Exercices corrigés : expérience (V2)
 
