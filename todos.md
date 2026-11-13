@@ -43,39 +43,39 @@ Contrainte transversale : le quota Gemini est limité, donc chaque lot borne le 
 ## Lot 2 — Nouveau format de leçon (V1)
 
 ### 8. Conception du format de section
-- [ ] Définir l'ordre : Pourquoi/Quoi/Comment, tableau ou exemple, démonstration pas à pas, « À toi », fin de section
-- [ ] Définir « Ce qu'il faut retenir » et « Ce qu'il faut éviter » comme éléments de fin de section
-- [ ] Décider comment l'IA choisit entre mini-QCM et « Explique avec tes mots » (point ouvert du cahier des charges)
+- [x] Définir l'ordre : Pourquoi/Quoi/Comment, tableau ou exemple, démonstration pas à pas, « À toi », fin de section
+- [x] Définir « Ce qu'il faut retenir » et « Ce qu'il faut éviter » comme éléments de fin de section
+- [x] Décider comment l'IA choisit entre mini-QCM et « Explique avec tes mots » (point ouvert du cahier des charges)
 
 ### 9. Backend : schémas de section
-- [ ] Ajouter retenir et piège au schéma de section avec défaut pour les cours existants
-- [ ] Ajouter le mini-QCM de fin de section
-- [ ] Étendre la complétude : une section sans ses éléments obligatoires est incomplète
+- [x] Ajouter retenir et piège au schéma de section avec défaut pour les cours existants
+- [x] Ajouter le mini-QCM de fin de section
+- [x] Étendre la complétude : une section sans ses éléments obligatoires est incomplète
 
 ### 10. Backend : génération et budget d'appels
-- [ ] Revoir les consignes (résumés simples, exemple, démonstration, bilan)
-- [ ] Adapter les règles par mode (express, standard, approfondi)
-- [ ] Vérifier avec le vrai Gemini que le schéma reste supportable par le modèle léger
+- [x] Revoir les consignes (résumés simples, exemple, démonstration, bilan)
+- [x] Adapter les règles par mode (express, standard, approfondi)
+- [x] Vérifier avec le vrai Gemini que le schéma reste supportable par le modèle léger
 
 ### 11. Backend : vidéos par section
-- [ ] Rattacher chaque vidéo à sa section (le classement sait déjà associer des sections)
-- [ ] Garder les notes de vidéo existantes
-- [ ] Section sans vidéo : aucun espace vide
+- [x] Rattacher chaque vidéo à sa section (le classement sait déjà associer des sections)
+- [x] Garder les notes de vidéo existantes
+- [x] Section sans vidéo : aucun espace vide
 
 ### 12. Frontend : rendu d'une section
-- [ ] Affichage de retenir et piège en fin de section
-- [ ] Mini-QCM de fin de section
-- [ ] Démonstration pas à pas : réutiliser les widgets et les étapes du graphique
+- [x] Affichage de retenir et piège en fin de section
+- [x] Mini-QCM de fin de section
+- [x] Démonstration pas à pas : réutiliser les widgets et les étapes du graphique
 
 ### 13. Frontend : vidéos par section
-- [ ] Bloc vidéos à la fin de chaque section
-- [ ] Ajout, modification et suppression de notes depuis la section
+- [x] Bloc vidéos à la fin de chaque section
+- [x] Ajout, modification et suppression de notes depuis la section
 
 ### 14. Tests, documentation, déploiement du lot 2
-- [ ] Tests de schéma, de complétude et de rendu
-- [ ] Anciens cours : vérifier qu'ils s'affichent sans régression
-- [ ] Décision sur la régénération des cours existants
-- [ ] Mettre à jour le README (nouveaux types de question du lot 1, nouveau format de section)
+- [x] Tests de schéma, de complétude et de rendu
+- [x] Anciens cours : vérifier qu'ils s'affichent sans régression
+- [x] Décision sur la régénération des cours existants
+- [x] Mettre à jour le README (nouveaux types de question du lot 1, nouveau format de section)
 
 ## Lot 3 — Exercices corrigés : données, génération, onglet (V2)
 
