@@ -21,8 +21,11 @@ comprises), `course_widgets_budget_seconds` secondes. Best-effort, ne lève jama
 est livré tel quel. Le HTML n'est jamais journalisé.
 """
 
+import json
 import logging
 import time
+from functools import lru_cache
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -48,6 +51,27 @@ _DEVELOPMENT_SUBSECTIONS = {"pourquoi", "quoi", "comment"}
 _TARGET_SUBSECTION = "comment"
 # Texte de la section donné au modèle : assez pour reprendre ses données, borné pour le quota.
 _SECTION_TEXT_CHARS = 6000
+
+# Boîte à outils `window.SW`, injectée par le client dans l'iframe : le fichier de signatures est la source
+# unique (copie de celui du frontend), le bloc « API disponible » du prompt en est généré.
+_TOOLKIT_PATH = Path(__file__).with_name("widget_toolkit.json")
+
+
+@lru_cache(maxsize=1)
+def _toolkit() -> dict:
+    return json.loads(_TOOLKIT_PATH.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=1)
+def _toolkit_block() -> str:
+    """Bloc « API disponible » : signatures et descriptions, conventions et un exemple complet."""
+    toolkit = _toolkit()
+    lines = [f"API disponible, `{toolkit['namespace']}` déjà chargé (aucun import) :"]
+    lines.extend(f"- {fn['signature']} : {fn['description']}" for fn in toolkit["functions"])
+    lines.extend(f"- {rule}" for rule in toolkit["conventions"])
+    lines.append("Exemple complet :\n" + toolkit["example_widget"])
+    return "\n".join(lines)
+
 
 _SYSTEM_INSTRUCTION = (
     "Tu es un enseignant-développeur qui illustre un cours par des leçons interactives soignées, "
@@ -128,15 +152,19 @@ def _prompt(response: CourseGenerationResponse, section: CourseSection, max_char
         "Exigences pédagogiques et d'interaction :\n"
         "- Contrôles variés : boutons Étape suivante / Précédent / Réinitialiser / Lecture automatique, "
         "curseurs de paramètres, sélecteur de variante ou d'exemple. Au moins 2 interactions différentes.\n"
-        "- Visualisation SVG ou canvas lisible : axes, légende, éléments mis en évidence.\n"
+        "- Visualisation lisible : axes, légende, éléments mis en évidence. Pour une courbe, un graphe (nœuds et "
+        "liens) ou un nuage de points, utilise `SW` (SW.axes + SW.line / SW.scatter, SW.bars, SW.graph) et "
+        "PAS du SVG écrit à la main ; SW.svg ou canvas pour le reste.\n"
+        "- Au moins un curseur (SW.slider) ou un pas-à-pas (SW.stepper) qui met le visuel à jour.\n"
         "- Panneau d'état avec les valeurs qui évoluent (compteurs, tableau, formule évaluée).\n"
         "- Texte d'explication, en français, qui change à chaque étape.\n"
         "- État initial déjà parlant : rien de vide au chargement.\n"
-        f"- Taille visée : 6 000 à 14 000 caractères, au plus {max_chars}. Données écrites dans le script.\n\n"
+        f"- Taille visée : 3 000 à 9 000 caractères (SW fait le gros du dessin), au plus {max_chars}. Données écrites dans le script.\n\n"
+        f"{_toolkit_block()}\n\n"
         "Règles techniques de `html` :\n"
         "- UN FRAGMENT de body : des éléments, un bloc <style> et un bloc <script> inline. Jamais de <html>, "
         "<head>, <body>, <meta>, <base>, <link>, <iframe>, <object>, <embed> ni <form>.\n"
-        "- Autonome : JavaScript natif, aucune bibliothèque, aucune URL (http://, https://, //hôte), aucun "
+        "- Autonome : JavaScript natif, aucune bibliothèque sauf `window.SW` (déjà chargé), aucune URL (http://, https://, //hôte), aucun "
         "@import, aucun fetch/XMLHttpRequest/WebSocket, aucun <script src>, aucun stockage navigateur "
         "(localStorage, sessionStorage, cookie), aucun eval, aucun accès à window.parent ni window.top, "
         "aucun postMessage. Pour du SVG construit en JS, utilise createElementNS avec "

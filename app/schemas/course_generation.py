@@ -1353,7 +1353,11 @@ class SectionWidget(BaseModel):
     description: str = Field(
         description="Alternative text (French, 500 characters max): what the widget shows and lets the learner do."
     )
-    html: str = Field(description="Self-contained body fragment: HTML elements, inline <style> and <script>.")
+    html: str = Field(description=(
+            "Self-contained body fragment: HTML elements, inline <style> and <script>. Native JavaScript, no URL, "
+            "no library except the preloaded window.SW toolkit (charts, graphs, sliders, steppers)."
+        ),
+    )
 
 
 class SectionWidgetResult(BaseModel):
