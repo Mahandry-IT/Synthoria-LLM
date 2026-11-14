@@ -309,8 +309,25 @@ def _map_match(support: StepSupport) -> dict[str, Any] | None:
     return {"match_pairs": pairs} if len(pairs) >= 2 else None
 
 
+def _table_from_pairs(support: StepSupport) -> dict[str, Any] | None:
+    """Rattrapage : un support `table` rempli avec `match_pairs` (et sans tableau) devient un tableau à 2 colonnes."""
+    rows = [
+        [_clean(pair.left, CYCLE_CELL_MAX), _clean(pair.right, CYCLE_CELL_MAX)]
+        for pair in support.match_pairs
+    ]
+    rows = [row for row in rows if row[0] and row[1]][:CYCLE_TABLE_ROWS_MAX]
+    if len(rows) < 2:
+        return None
+    return _validated(
+        CourseTable,
+        {"caption": _clean(support.caption, CYCLE_CAPTION_MAX), "headers": ["Élément", "Correspondance"], "rows": rows},
+    )
+
+
 def _map_table_support(support: StepSupport) -> tuple[SupportKind, dict[str, Any] | None]:
     table = _map_table(support.table)
+    if table is None and support.kind is SupportKind.TABLE:
+        table = _table_from_pairs(support)
     if table is None:
         return support.kind, None
     if support.kind is SupportKind.FILL_TABLE:
