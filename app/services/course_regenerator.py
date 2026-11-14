@@ -46,8 +46,8 @@ def _is_introduction(section: dict[str, Any]) -> bool:
     `quoi`) — contrairement à toute section de développement, section de repli comprise. Une
     section vide n'en est pas une : c'est une section de développement qu'une régénération ratée
     a vidée."""
-    if is_incomplete_section_dict(section):
-        return False
+    if is_incomplete_section_dict(section) or isinstance(section.get("cycle"), dict):
+        return False  # une section au format cycle est toujours une section de développement
     titles = {str(sub.get("title") or "").strip().casefold() for sub in section.get("subsections") or []}
     has_development_text = any((section.get(key) or "").strip() for key in ("pourquoi", "comment"))
     return not (titles & _DEVELOPMENT_SUBSECTIONS) and not has_development_text

@@ -16,12 +16,41 @@ COURSE_DEPTHS: tuple[str, ...] = get_args(CourseDepth)
 LEGACY_DEPTH: CourseDepth = "approfondi"
 
 
+CycleTrapMode = Literal["cards", "spot", "spot_rewrite"]
+
+
+@dataclass(frozen=True)
+class CycleProfile:
+    """Règles du « cycle » (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve) d'un mode.
+
+    Un profil existe pour chaque mode, mais il n'est utilisé que si `DepthProfile.use_cycle` est vrai :
+    seul le mode standard a été validé par l'essai Gemini (express et approfondi : profils posés d'après
+    le cahier des charges, jamais essayés)."""
+
+    steps_min: int  # mini-étapes de « Sous le capot » acceptées par la validation
+    steps_max: int
+    steps_target: int  # nombre visé dans le prompt
+    steps_ref: int  # nombre « normal » : référence de l'ajustement de durée
+    predictions_min: int
+    predictions_max: int
+    traps_mode: CycleTrapMode
+    traps_min: int
+    traps_max: int
+    vocab_min: int
+    vocab_max: int
+    minutes_min: int  # durée de base, en minutes (avant ajustement par le nombre de mini-étapes)
+    minutes_max: int
+    takeaways: int
+
+
 @dataclass(frozen=True)
 class DepthProfile:
     """Profil d'un mode de cours.
 
     `max_sections` à None : nombre de sections piloté par la couverture (plancher seulement).
     `quiz_open_ended` : la borne haute du quiz est indicative (« 10-12+ »), jamais un plafond.
+    `use_cycle` : les sections de développement de ce mode suivent le format « cycle » (objet `cycle`) au
+    lieu du format Pourquoi / Quoi / Comment. Un mode s'y convertit en passant ce réglage à True.
     """
 
     name: CourseDepth
@@ -39,6 +68,8 @@ class DepthProfile:
     pitfalls_min: int
     pitfalls_max: int
     quiz_open_ended: bool = False
+    use_cycle: bool = False
+    cycle: CycleProfile | None = None
 
 
 PROFILES: dict[str, DepthProfile] = {
@@ -47,18 +78,34 @@ PROFILES: dict[str, DepthProfile] = {
         max_prose_words=150, max_blocks=5, check_questions_min=1, check_questions_max=2,
         quiz_min=5, quiz_max=6,
         takeaways_min=2, takeaways_max=2, pitfalls_min=1, pitfalls_max=1,
+        cycle=CycleProfile(
+            steps_min=3, steps_max=3, steps_target=3, steps_ref=3, predictions_min=1, predictions_max=1,
+            traps_mode="cards", traps_min=2, traps_max=2, vocab_min=2, vocab_max=4,
+            minutes_min=3, minutes_max=3, takeaways=2,
+        ),
     ),
     "standard": DepthProfile(
         name="standard", min_sections=13, max_sections=16, non_text_ratio=0.5,
         max_prose_words=300, max_blocks=8, check_questions_min=2, check_questions_max=3,
         quiz_min=8, quiz_max=10,
         takeaways_min=3, takeaways_max=3, pitfalls_min=1, pitfalls_max=1,
+        use_cycle=True,
+        cycle=CycleProfile(
+            steps_min=3, steps_max=5, steps_target=4, steps_ref=4, predictions_min=1, predictions_max=2,
+            traps_mode="spot", traps_min=2, traps_max=3, vocab_min=3, vocab_max=6,
+            minutes_min=5, minutes_max=5, takeaways=3,
+        ),
     ),
     "approfondi": DepthProfile(
         name="approfondi", min_sections=18, max_sections=None, non_text_ratio=0.5,
         max_prose_words=500, max_blocks=12, check_questions_min=2, check_questions_max=3,
         quiz_min=10, quiz_max=12, quiz_open_ended=True,
         takeaways_min=3, takeaways_max=4, pitfalls_min=2, pitfalls_max=2,
+        cycle=CycleProfile(
+            steps_min=5, steps_max=7, steps_target=5, steps_ref=5, predictions_min=2, predictions_max=2,
+            traps_mode="spot_rewrite", traps_min=2, traps_max=3, vocab_min=3, vocab_max=8,
+            minutes_min=8, minutes_max=10, takeaways=3,
+        ),
     ),
 }
 
@@ -123,6 +170,70 @@ def render_rules(profile: DepthProfile) -> str:
         "- Arbitrage : si couvrir tous les sous-thèmes du plan oblige à dépasser le budget, la couverture "
         "gagne — condense la prose (tableaux, listes) plutôt que d'omettre un sous-thème."
     )
+
+
+def cycle_profile_of(profile: DepthProfile) -> CycleProfile:
+    """Règles du cycle du mode (toujours définies, même quand `use_cycle` est faux)."""
+    assert profile.cycle is not None, f"profil {profile.name} sans règles de cycle"
+    return profile.cycle
+
+
+CYCLE_MINUTES_CAP = (1, 30)
+# Une mini-étape de plus ou de moins que la référence du mode change la durée d'autant (en minutes).
+_MINUTES_PER_STEP = 1
+
+
+def estimate_minutes(depth: str, steps: int) -> tuple[int, int]:
+    """Durée estimée `(minutes_min, minutes_max)` d'une section au format cycle, calculée côté serveur.
+
+    Base du mode (express 3, standard 5, approfondi 8 à 10 min), ajustée de 1 minute par mini-étape d'écart
+    avec le nombre de référence du mode, bornée à 1-30. Aucun appel Gemini : la durée n'est jamais demandée
+    au modèle."""
+    c = cycle_profile_of(get_profile(depth))
+    shift = (steps - c.steps_ref) * _MINUTES_PER_STEP
+    low_cap, high_cap = CYCLE_MINUTES_CAP
+    low = min(max(c.minutes_min + shift, low_cap), high_cap)
+    high = min(max(c.minutes_max + shift, low), high_cap)
+    return low, high
+
+
+def render_cycle_rules(profile: DepthProfile) -> str:
+    """Règles de forme du `cycle` d'une section `development`, injectées dans les prompts de génération et
+    de réparation des modes qui utilisent le cycle. Les chiffres ne vivent qu'ici, jamais dans les `.md`."""
+    c = cycle_profile_of(profile)
+    steps = (
+        _range(c.steps_min, c.steps_max) + (f" (vise {c.steps_target})" if c.steps_min != c.steps_max else "")
+    )
+    traps = {
+        "cards": "`cards` (cartes à révéler : `claim` + `explanation`)",
+        "spot": "`spot` (repérer l'idée fausse : `statements` 3 à 4 + `wrong_index` + `explanation`)",
+        "spot_rewrite": (
+            "`spot_rewrite` (repérer l'idée fausse PUIS choisir la bonne formulation : `statements`, "
+            "`wrong_index`, `rewrite_options`, `correct_rewrite_index`, `explanation`)"
+        ),
+    }[c.traps_mode]
+    return (
+        f"--- Règles du mode « {profile.name} » pour le `cycle` de chaque section DEVELOPMENT ---\n"
+        f"- `steps` (Sous le capot) : {steps} mini-étapes, chacune avec son support.\n"
+        f"- Prédictions : {_range(c.predictions_min, c.predictions_max)} dans toute la section (au plus une par "
+        "mini-étape, `prediction` à null ailleurs).\n"
+        f"- `traps.mode` = {traps}, {_range(c.traps_min, c.traps_max)} éléments dans `traps.entries`.\n"
+        f"- `vocabulary` : {_range(c.vocab_min, c.vocab_max)} termes, uniquement ceux rencontrés dans les mini-étapes.\n"
+        "- `trial` : `qcm` (1 à 2 questions) ou `exercise_card` selon la nature de la notion ; un calcul ou une "
+        "procédure → `exercise_card`.\n"
+        f"- `key_takeaways` : {c.takeaways} puces courtes ; `recall_prompt` renseigné.\n"
+        "- Pas de champ de durée à produire : elle est calculée côté serveur.\n"
+        "- Les champs de l'ancien format (`subsections`, `blocks`, `challenge`, `faded_example`, `check_questions`, "
+        "`pitfalls_to_avoid`) ne sont PAS produits pour ces sections."
+    )
+
+
+CYCLE_CONTENT_DEMAND = (
+    "son objet `cycle` complet (`thread`, `challenge`, `steps` avec le support de chaque mini-étape, "
+    "`vocabulary`, `traps`, `trial`), au moins une mini-étape de reconstruction (classer, ordonner, compléter un "
+    "tableau ou relier), un `widget_brief` (une phrase pour le visuel simulable, seulement s'il existe un vrai "
+    "mécanisme à faire varier), un `recall_prompt` et les `key_takeaways`"
+)
 
 
 def render_quiz_rules(profile: DepthProfile) -> str:

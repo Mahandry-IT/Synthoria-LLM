@@ -14,8 +14,9 @@ from __future__ import annotations
 from datetime import datetime
 import math
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from app.core.config import get_settings
 
@@ -412,6 +413,290 @@ class PitfallToAvoid(BaseModel):
     how_to_avoid: str = Field(description="How to avoid it, in one short sentence.")
 
 
+# ─── Format « cycle » (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve) ────────────
+#
+# Objet facultatif `Section.cycle` : absent = ancien format (Pourquoi / Quoi / Comment). Les champs ont un
+# défaut côté Pydantic (les anciens JSON restent valides, et une réponse incomplète n'est jamais une erreur de
+# validation : la section est signalée puis réparée) ; c'est le JSON Schema envoyé à Gemini
+# (`CycleSectionsBatchSchema`) qui impose les champs requis. Les bornes de nombre et de longueur sont
+# contrôlées par `cycle_validation` et `visual_validation`, pas par le schéma.
+#
+# Même un champ obligatoire côté Gemini (`support`, `kind`, `step_number`, `row`, `col`...) a ici un défaut, et un
+# `kind` inconnu devient None (ou le défaut du mode) : sinon un seul champ omis ferait lever `ValidationError` sur
+# tout le lot de sections. `cycle_validation` signale alors un trou BLOQUANT précis (réparation ciblée).
+
+
+def _known_or_none(enum_cls: type[Enum], value: Any) -> Any:
+    """Membre de `enum_cls` désigné par `value`, ou None si la valeur est inconnue (jamais d'exception)."""
+    try:
+        return enum_cls(value)
+    except (ValueError, TypeError):
+        return None
+
+
+class SupportKind(str, Enum):
+    CHART = "chart"  # graphique à étapes (`ChartData.steps`)
+    DIAGRAM = "diagram"  # schéma Mermaid
+    TABLE = "table"  # tableau affiché tel quel
+    FILL_TABLE = "fill_table"  # reconstruction : tableau à compléter
+    CLASSIFY = "classify"  # reconstruction : classer des cas
+    ORDER = "order"  # reconstruction : remettre dans l'ordre
+    MATCH = "match"  # reconstruction : relier causes et effets / termes et sens
+
+
+# Supports de reconstruction (RG-15) : l'apprenant agit sans simulation.
+RECONSTRUCTION_KINDS = frozenset({SupportKind.FILL_TABLE, SupportKind.CLASSIFY, SupportKind.ORDER, SupportKind.MATCH})
+
+
+class PredictionKind(str, Enum):
+    CHOICE = "choice"
+    VALUE = "value"
+
+
+class TrapMode(str, Enum):
+    CARDS = "cards"  # cartes à révéler
+    SPOT = "spot"  # repérer l'idée fausse
+    SPOT_REWRITE = "spot_rewrite"  # repérer puis choisir la bonne formulation
+
+
+class TrialKind(str, Enum):
+    QCM = "qcm"
+    EXERCISE_CARD = "exercise_card"
+
+
+class CycleChallenge(BaseModel):
+    question: str = Field(
+        default="",
+        description="Concrete case + question, answerable by intuition. Never says how many answers are right.",
+    )
+    options: list[str] = Field(default_factory=list, description="3 to 5 check-box options, each short (max 90 characters).")
+    correct_indices: list[int] = Field(
+        default_factory=list, description="0-based indices of the right options: at least one, never all of them."
+    )
+    feedback: str = Field(default="", description="One-line correction (max 25 words): why the right ones are right.")
+
+
+class CellRef(BaseModel):
+    row: int | None = Field(default=None, description="0-based row index in table.rows.")
+    col: int | None = Field(default=None, description="0-based column index in table.headers.")
+
+
+class ClassifyItem(BaseModel):
+    label: str = Field(default="", description="Short case to classify (max 60 characters).")
+    category_index: int | None = Field(
+        default=None, description="0-based index into `categories` of its right category."
+    )
+
+
+class MatchPair(BaseModel):
+    left: str = Field(default="", description="Cause / term (max 50 characters).")
+    right: str = Field(
+        default="", description="Matching effect / meaning (max 50 characters), distinct from the others."
+    )
+
+
+class StepSupport(BaseModel):
+    """Light support of a step. Only the fields matching `kind` are set."""
+
+    kind: SupportKind | None = Field(
+        default=None, description="Which support this step carries; determines which fields below are set."
+    )
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _unknown_kind(cls, value: Any) -> Any:
+        return _known_or_none(SupportKind, value)
+
+    caption: str = Field(default="", description="Short title of the support (max 80 characters).")
+    chart: ChartData | None = Field(
+        default=None, description="chart only. Include `steps` (2-4) so the learner walks through it."
+    )
+    diagram: DiagramData | None = Field(default=None, description="diagram only. Max 8 nodes, short labels.")
+    table: TableData | None = Field(
+        default=None,
+        description=(
+            "REQUIRED and non-empty (headers + 2-5 filled rows) when kind is `table` or `fill_table`; max 5 rows x 3-4 "
+            "columns, cells max 8 words, every row as long as the headers. Leave null for every other kind."
+        ),
+    )
+    blanks: list[CellRef] = Field(
+        default_factory=list,
+        description="fill_table only: 1-4 cells of `table` hidden from the learner (the cell text is the answer).",
+    )
+    distractors: list[str] = Field(
+        default_factory=list, description="fill_table only: 0-3 plausible wrong cell values added to the answer bank."
+    )
+    categories: list[str] = Field(default_factory=list, description="classify only: 2-4 category names (max 30 characters).")
+    cases: list[ClassifyItem] = Field(default_factory=list, description="classify only: 3-6 cases, each with its category.")
+    order_items: list[str] = Field(
+        default_factory=list, description="order only: 3-6 items IN THE CORRECT ORDER (the app shuffles them)."
+    )
+    order_criterion: str = Field(
+        default="", description="order only: what the order follows (e.g. 'du premier au dernier envoi')."
+    )
+    match_pairs: list[MatchPair] = Field(
+        default_factory=list,
+        description=(
+            "ONLY when kind is `match`: 3-5 {left, right} pairs. Leave EMPTY for every other kind, in particular "
+            "for `table` and `fill_table` (they use `table`)."
+        ),
+    )
+
+
+class StepPrediction(BaseModel):
+    kind: PredictionKind | None = Field(
+        default=None, description="choice (default) or value (a number / an order of magnitude)."
+    )
+    question: str = Field(default="", description="What the learner predicts BEFORE manipulating (max 140 characters).")
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _unknown_kind(cls, value: Any) -> Any:
+        return _known_or_none(PredictionKind, value)
+
+    options: list[str] = Field(
+        default_factory=list, description="choice only: 2-4 plausible options (max 60 characters each)."
+    )
+    correct_index: int | None = Field(default=None, description="choice only: 0-based index of the right option.")
+    expected_value: float | None = Field(default=None, description="value only: the exact expected number.")
+    tolerance: float | None = Field(
+        default=None,
+        description=(
+            "value only: absolute tolerance in the unit of the value; 0 for an exact integer/count, otherwise at "
+            "most 5% of |expected_value|."
+        ),
+    )
+    unit: str | None = Field(default=None, description="value only: unit (max 12 characters), if any.")
+    outcome: str = Field(
+        default="",
+        description=(
+            "One sentence (max 160 characters) stating what really happens, so the app can compare it to the prediction."
+        ),
+    )
+
+
+class CycleStep(BaseModel):
+    text: str = Field(
+        default="",
+        description="1 to 3 short sentences, one idea per sentence, about 40 words (never above 80). Plain text.",
+    )
+    action: str = Field(
+        default="",
+        description=(
+            "One imperative instruction addressed to the support that follows (max 25 words), "
+            "e.g. 'Classe les trois adresses.'"
+        ),
+    )
+    support: StepSupport = Field(default_factory=StepSupport)
+    prediction: StepPrediction | None = Field(
+        default=None, description="Only on a step where intuition may be wrong; null otherwise."
+    )
+
+
+class VocabTerm(BaseModel):
+    term: str = Field(default="", description="Term met in the steps (max 40 characters).")
+    plain: str = Field(default="", description="Plain-language meaning (max 20 words).")
+    formula_latex: str | None = Field(
+        default=None, description="Optional LaTeX formula, only when the term is a formula."
+    )
+
+
+class TrapItem(BaseModel):
+    claim: str = Field(default="", description="cards only: the false idea, phrased as a learner would say it.")
+    statements: list[str] = Field(
+        default_factory=list,
+        description="spot / spot_rewrite: 3-4 short affirmations (max 100 characters), exactly one false.",
+    )
+    wrong_index: int | None = Field(
+        default=None, description="spot / spot_rewrite: 0-based index of the false statement."
+    )
+    explanation: str = Field(default="", description="Why the error is tempting and what is true (max 220 characters).")
+    rewrite_options: list[str] = Field(
+        default_factory=list, description="spot_rewrite only: 3 candidate corrections of the false statement."
+    )
+    correct_rewrite_index: int | None = Field(
+        default=None, description="spot_rewrite only: 0-based index of the right correction."
+    )
+
+
+class CycleTraps(BaseModel):
+    mode: TrapMode = TrapMode.SPOT
+    entries: list[TrapItem] = Field(default_factory=list)
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _unknown_mode(cls, value: Any) -> Any:
+        """Mode inconnu : `spot` ; les entrées, contrôlées pour ce mode, signalent alors ce qui manque."""
+        return _known_or_none(TrapMode, value) or TrapMode.SPOT
+
+
+class ExerciseCard(BaseModel):
+    # Aucune valeur numérique attendue : le modèle la renseignait de façon peu fiable à l'essai ; un calcul à
+    # valeur exacte passe par une question `numeric` d'un `qcm`.
+    statement: str = Field(default="", description="New case (not the running example's numbers), max 400 characters.")
+    hint: str = Field(default="", description="One-line hint (max 200 characters), shown on request.")
+    steps: list[str] = Field(
+        default_factory=list,
+        description="2-5 solution steps shown one by one after the attempt (max 200 characters each).",
+    )
+    result: str = Field(default="", description="Final result, commented (max 160 characters).")
+
+
+class CycleTrial(BaseModel):
+    kind: TrialKind = Field(default=TrialKind.QCM, description="qcm (1-2 questions) or exercise_card.")
+    questions: list[QuizQuestion] = Field(
+        default_factory=list,
+        description="qcm only: 1-2 questions (kind choice, or numeric for one exact number), difficulty 'normale'.",
+    )
+    card: ExerciseCard | None = Field(default=None, description="exercise_card only.")
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _unknown_kind(cls, value: Any) -> Any:
+        return _known_or_none(TrialKind, value) or TrialKind.QCM
+
+    @field_validator("questions", mode="before")
+    @classmethod
+    def _drop_invalid_questions(cls, value: Any) -> Any:
+        """Une question inutilisable (moins de 2 choix, index hors bornes...) est écartée seule : elle ne doit pas
+        faire échouer tout le lot. Si aucune ne reste, l'épreuve est signalée vide (bloquant, réparable)."""
+        if not isinstance(value, list):
+            return value
+        kept = []
+        for item in value:
+            try:
+                QuizQuestion.model_validate(item)
+            except ValidationError:
+                continue
+            kept.append(item)
+        return kept
+
+
+class SectionCycle(BaseModel):
+    """The five moments of a DEVELOPMENT section, always in this order: challenge, steps, vocabulary, traps, trial."""
+
+    # Défi (`challenge`), Sous le capot (`steps`), Le mot juste (`vocabulary`), Les pièges classiques (`traps`),
+    # Épreuve (`trial`) : les titres affichés sont constants côté client. La durée estimée n'est jamais demandée
+    # au modèle (calculée côté serveur).
+    thread: str = Field(
+        default="", description="The ONE running example used by the challenge and every step (max 140 characters)."
+    )
+    challenge: CycleChallenge = Field(default_factory=CycleChallenge)
+    steps: list[CycleStep] = Field(default_factory=list)
+    vocabulary: list[VocabTerm] = Field(default_factory=list)
+    traps: CycleTraps = Field(default_factory=CycleTraps)
+    trial: CycleTrial = Field(default_factory=CycleTrial)
+
+
+class WidgetBrief(BaseModel):
+    step_number: int | None = Field(
+        default=None, description="1-based number of the step the simulable widget attaches to."
+    )
+    brief: str = Field(
+        default="", description="One sentence (max 200 characters): what the learner manipulates and what changes."
+    )
+
+
 class Section(BaseModel):
     type: SectionType = Field(description="Structural role of the section.")
     title: str = Field(description="Section heading shown to the learner.")
@@ -469,6 +754,18 @@ class Section(BaseModel):
             "section really explains, each copied VERBATIM from the plan. List a "
             "subtopic only if the text above develops it (definition/mechanism and "
             "concrete items), never if it is merely mentioned."
+        ),
+    )
+    cycle: SectionCycle | None = Field(
+        default=None,
+        description=(
+            "The five moments of the section: challenge, steps, vocabulary, traps, trial."
+        ),
+    )
+    widget_brief: WidgetBrief | None = Field(
+        default=None,
+        description=(
+            "Cycle format only: null unless a real simulable mechanism exists (a parameter that changes a result)."
         ),
     )
 
@@ -568,6 +865,68 @@ class ImageDescriptionsSchema(BaseModel):
     )
 
 
+# ─── Schémas Gemini : ancien format et format « cycle » ─────────────────────────────────────────────
+#
+# `Section` porte les deux formats (champs de l'ancien format + `cycle`, `widget_brief`) pour que la validation
+# et le mapping restent uniques. Chaque schéma envoyé à Gemini n'expose que les champs de SON format : un
+# schéma plus gros que nécessaire coûte en complexité (le modèle léger rejette un schéma trop complexe, voir
+# `CycleSectionsBatchSchema`) et pousserait le modèle à remplir des champs qu'on ne lui demande pas.
+
+_CYCLE_SECTION_FIELDS = ("cycle", "widget_brief")
+_OLD_FORMAT_SECTION_FIELDS = (
+    "blocks", "subsections", "challenge", "challenge_key_points", "faded_example", "check_questions",
+    "pitfalls_to_avoid",
+)
+
+
+def _drop_section_fields(schema: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any]:
+    section = schema.get("$defs", {}).get("Section")
+    if section is not None:
+        for name in names:
+            section.get("properties", {}).pop(name, None)
+        section["required"] = [f for f in section.get("required", []) if f not in names]
+        if not section["required"]:
+            section.pop("required")
+    return _prune_unused_defs(schema)
+
+
+def _referenced_defs(node: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            found.add(ref.rsplit("/", 1)[-1])
+        for key, value in node.items():
+            if key != "$defs":
+                found |= _referenced_defs(value)
+    elif isinstance(node, list):
+        for item in node:
+            found |= _referenced_defs(item)
+    return found
+
+
+def _prune_unused_defs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Retire de `$defs` les définitions que plus aucune propriété n'atteint depuis la racine."""
+    defs = schema.get("$defs")
+    if not defs:
+        return schema
+    reachable: set[str] = set()
+    pending = _referenced_defs({k: v for k, v in schema.items() if k != "$defs"})
+    while pending:
+        name = pending.pop()
+        if name in reachable or name not in defs:
+            continue
+        reachable.add(name)
+        pending |= _referenced_defs(defs[name])
+    schema["$defs"] = {name: body for name, body in defs.items() if name in reachable}
+    return schema
+
+
+def _without_cycle(schema: dict[str, Any]) -> dict[str, Any]:
+    """Schéma d'ancien format : ni `cycle` ni `widget_brief` dans `Section`."""
+    return _drop_section_fields(schema, _CYCLE_SECTION_FIELDS)
+
+
 class CoverageCompletionSchema(BaseModel):
     """Schéma léger pour l'appel Gemini de complétion de couverture.
 
@@ -583,6 +942,10 @@ class CoverageCompletionSchema(BaseModel):
             "'Pages non couvertes', 'Supplément' — donner un titre thématique réel."
         )
     )
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _without_cycle(super().model_json_schema(*args, **kwargs))
 
 
 class SectionsBatchSchema(BaseModel):
@@ -611,7 +974,7 @@ class SectionsBatchSchema(BaseModel):
         régénération), on exige les sous-sections (3, chacune avec au moins un bloc) et le reste du
         cycle pédagogique. La validation Pydantic reste inchangée.
         """
-        return _require_development_content(super().model_json_schema(*args, **kwargs))
+        return _require_development_content(_without_cycle(super().model_json_schema(*args, **kwargs)))
 
 
 # Champs d'une section DEVELOPMENT que Gemini doit toujours renvoyer (`covered_subtopics` reste
@@ -642,6 +1005,122 @@ def _require_development_content(schema: dict[str, Any]) -> dict[str, Any]:
     if blocks is not None:
         blocks["minItems"] = 1
     return schema
+
+
+class CycleSectionsBatchSchema(SectionsBatchSchema):
+    """Gemini schema of a batch of DEVELOPMENT sections in the cycle format."""
+
+    # Validation Pydantic identique à `SectionsBatchSchema` (même `Section`). Le JSON Schema envoyé est ALLÉGÉ,
+    # comme dans l'essai Gemini (modèle léger) : seuls les champs du cycle sont exposés, aucun `maxItems`, des
+    # `minItems` ≤ 3 seulement sur de petits tableaux, et aucun `minItems` sur les gros tableaux d'objets
+    # (`sections`, `steps`) — un `minItems` y multiplie la grammaire du schéma et le modèle léger répond HTTP 400.
+    # Le nombre de sections et de mini-étapes est donc exigé par la validation (`cycle_validation`) et par le
+    # prompt de réparation, jamais par le schéma.
+
+    sections: list[Section] = Field(
+        description=(
+            "Exactly one DEVELOPMENT section per planned section of the batch, in the same order and with the "
+            "same title as in the plan. Each one carries its `cycle` (challenge, steps, vocabulary, traps, trial), "
+            "a `widget_brief`, a `recall_prompt` and its `key_takeaways`."
+        )
+    )
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        # `super(SectionsBatchSchema, cls)` : schéma Pydantic brut, sans les exigences de l'ancien format.
+        return _cycle_gemini_schema(super(SectionsBatchSchema, cls).model_json_schema(*args, **kwargs))
+
+
+# Au-delà de 3, le modèle léger a rejeté le schéma à l'essai : le reste est validé en Python.
+_CYCLE_MIN_ITEMS_CAP = 3
+
+# (définition, champs exigés) du schéma cycle : tous les champs de contenu sont requis, ceux propres à un
+# `kind` (support, prédiction, piège) restent facultatifs.
+_CYCLE_REQUIRED: dict[str, tuple[str, ...]] = {
+    "Section": ("type", "title", "cycle", "widget_brief", "recall_prompt", "key_takeaways"),
+    "SectionCycle": ("thread", "challenge", "steps", "vocabulary", "traps", "trial"),
+    "CycleChallenge": ("question", "options", "correct_indices", "feedback"),
+    "CycleStep": ("text", "action", "support", "prediction"),
+    "StepSupport": ("kind", "caption"),
+    "StepPrediction": ("kind", "question", "outcome"),
+    "CycleTraps": ("mode", "entries"),
+    "TrapItem": ("explanation",),
+    "CycleTrial": ("kind",),
+    "ExerciseCard": ("statement", "hint", "steps", "result"),
+    "VocabTerm": ("term", "plain"),
+    "WidgetBrief": ("step_number", "brief"),
+    "CellRef": ("row", "col"),
+    "ClassifyItem": ("label", "category_index"),
+    "MatchPair": ("left", "right"),
+    "RecallPrompt": ("prompt", "expected_key_points"),
+}
+# Champs tolérants côté Pydantic (`X | None`, défaut None) mais jamais nuls pour Gemini : `X | null` aplati en `X`.
+_CYCLE_NEVER_NULL: tuple[tuple[str, str], ...] = (
+    ("StepSupport", "kind"), ("StepPrediction", "kind"), ("WidgetBrief", "step_number"),
+    ("CellRef", "row"), ("CellRef", "col"), ("ClassifyItem", "category_index"),
+)
+# (définition, propriété, minItems) : petits tableaux seulement.
+_CYCLE_MIN_ITEMS: tuple[tuple[str, str, int], ...] = (
+    ("Section", "key_takeaways", 2),
+    ("SectionCycle", "vocabulary", 2),
+    ("CycleChallenge", "options", 3),
+    ("CycleChallenge", "correct_indices", 1),
+    ("CycleTraps", "entries", 2),
+    ("ExerciseCard", "steps", 2),
+)
+
+
+def _slim(node: Any) -> Any:
+    """Allège un schéma : retire `title` et `default`, et aplatit `X | null` des propriétés NON requises
+    (la présence facultative suffit, `null` reste accepté par Pydantic côté validation)."""
+    if isinstance(node, list):
+        return [_slim(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    required = set(node.get("required", []))
+    slimmed: dict[str, Any] = {}
+    for key, value in node.items():
+        if key == "default" or (key == "title" and isinstance(value, str)):
+            continue
+        if key == "properties" and isinstance(value, dict):
+            slimmed[key] = {name: _slim_property(name, prop, required) for name, prop in value.items()}
+        else:
+            slimmed[key] = _slim(value)
+    return slimmed
+
+
+def _slim_property(name: str, prop: Any, required: set[str]) -> Any:
+    prop = _slim(prop)
+    if name in required or not isinstance(prop, dict) or "anyOf" not in prop:
+        return prop
+    non_null = [alt for alt in prop["anyOf"] if alt.get("type") != "null"]
+    if len(non_null) == 1 and len(prop["anyOf"]) == 2:
+        return {**{k: v for k, v in prop.items() if k != "anyOf"}, **non_null[0]}
+    return prop
+
+
+def _cycle_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Schéma brut de `CycleSectionsBatchSchema` → schéma envoyé à Gemini (voir sa docstring)."""
+    schema = _drop_section_fields(schema, _OLD_FORMAT_SECTION_FIELDS)
+    defs = schema["$defs"]
+    # Aucun `minItems` sur `sections` ni sur `steps` : le nombre de sections du lot et de mini-étapes est exigé par
+    # la validation Python (HTTP 400 à l'essai avec `sections.minItems = 2` et `steps.minItems = 5`).
+    # `cycle` est requis et jamais null dans une section de ce schéma.
+    cycle = defs["Section"]["properties"]["cycle"]
+    defs["Section"]["properties"]["cycle"] = {
+        "$ref": next(alt["$ref"] for alt in cycle["anyOf"] if "$ref" in alt),
+        "description": cycle["description"],
+    }
+    for name, prop in _CYCLE_NEVER_NULL:
+        field = defs[name]["properties"][prop]
+        non_null = [alt for alt in field.get("anyOf", []) if alt.get("type") != "null"]
+        if len(non_null) == 1:
+            defs[name]["properties"][prop] = {**{k: v for k, v in field.items() if k != "anyOf"}, **non_null[0]}
+    for name, fields in _CYCLE_REQUIRED.items():
+        defs[name]["required"] = list(dict.fromkeys([*defs[name].get("required", []), *fields]))
+    for name, prop, low in _CYCLE_MIN_ITEMS:
+        defs[name]["properties"][prop]["minItems"] = min(low, _CYCLE_MIN_ITEMS_CAP)
+    return _slim(schema)
 
 
 class PlanMeta(BaseModel):
@@ -809,6 +1288,10 @@ class CourseGenerationSchema(BaseModel):
         default_factory=list,
         description="Facts that could not be confirmed by context or search — state explicitly instead of inventing.",
     )
+
+    @classmethod
+    def model_json_schema(cls, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return _without_cycle(super().model_json_schema(*args, **kwargs))
 
     @model_validator(mode="after")
     def _check_format_matches_mode(self) -> "CourseGenerationSchema":

@@ -235,11 +235,12 @@ async def test_regenerate_section_reads_meta_depth_and_returns_conform_section_w
 async def test_regenerate_section_repairs_non_conform_section_and_keeps_the_best():
     gemini = _regen_gemini(_text_only_section("x"), _conform_section("y"))
 
-    result = await regenerate_section(_session_row("standard"), "Notion", gemini, _store(), Settings(gemini_api_key="k"))
+    # Mode approfondi : le mode standard régénère au format cycle (voir test_cycle_regeneration.py).
+    result = await regenerate_section(_session_row("approfondi"), "Notion", gemini, _store(), Settings(gemini_api_key="k"))
 
     assert gemini.format_structured.await_count == 2
     repair_prompt = gemini.format_structured.await_args.kwargs["raw_answer"]
-    assert "aucun bloc visuel" in repair_prompt and "300 mots" in repair_prompt
+    assert "aucun bloc visuel" in repair_prompt and "500 mots" in repair_prompt
     assert result.title == "Notion"
     assert any(b.type.value == "table" for sub in result.subsections for b in sub.blocks)
 

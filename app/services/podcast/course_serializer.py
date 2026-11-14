@@ -68,17 +68,31 @@ def _development_text(section: CourseSection | CourseAnswer) -> str:
         ("Comment", section.comment or ""),
         ("Exemple", example_text),
         ("Points clés", " ; ".join(section.key_points)),
-        ("Questions de rappel", _recall_questions_text(getattr(section, "check_questions", []))),
+        ("Questions de rappel", _recall_questions_text(section)),
     )
 
 
-def _recall_questions_text(questions: list[Any]) -> str:
-    """Questions « Vérifie » de la section (avec leur bonne réponse), pour la question de rappel du podcast."""
-    lines = []
-    for q in questions[:_RECALL_QUESTIONS_MAX]:
-        answers = [q.options[i] for i in q.correct_option_indices if 0 <= i < len(q.options)]
-        if answers:
-            lines.append(f"{_clean(q.question)} Réponse : {_clean(' ; '.join(answers))}")
+def _recall_questions_text(section: Any) -> str:
+    """Questions de rappel de la section (avec leur bonne réponse), pour le segment de rappel du podcast.
+
+    Section au format cycle : pas de `check_questions`, les questions viennent du défi puis des questions à
+    choix de l'épreuve QCM (jamais les numériques). Les anciennes sections gardent leurs « Vérifie »."""
+    pairs: list[tuple[str, list[str]]] = []
+    for q in getattr(section, "check_questions", None) or []:
+        pairs.append((q.question, [q.options[i] for i in q.correct_option_indices if 0 <= i < len(q.options)]))
+    cycle = getattr(section, "cycle", None)
+    if cycle is not None:
+        challenge = cycle.challenge
+        pairs.append((challenge.question, [challenge.options[i] for i in challenge.correct_indices if 0 <= i < len(challenge.options)]))
+        trial = cycle.trial
+        for q in trial.questions if trial is not None and trial.kind == "qcm" else []:
+            if q.kind == "choice":
+                pairs.append((q.question, [q.options[i] for i in q.correct_option_indices if 0 <= i < len(q.options)]))
+    lines = [
+        f"{_clean(question)} Réponse : {_clean(' ; '.join(answers))}"
+        for question, answers in pairs[:_RECALL_QUESTIONS_MAX]
+        if answers
+    ]
     return " | ".join(lines)
 
 

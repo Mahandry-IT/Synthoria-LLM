@@ -250,7 +250,8 @@ def _wordy_section(title: str = "S", words: int = 400, covered: list[str] | None
 
 def test_section_issues_separates_blocking_from_soft():
     section = _full_section(subsection_titles=("Pourquoi", "Quoi"), covered_subtopics=["Moyenne"])
-    issues = section_issues(section, _planned(subtopics=["Moyenne", "Variance"]), _STANDARD)
+    # Ancien format (sous-sections) : le mode approfondi. En mode standard (cycle), le trou est dit en termes de cycle.
+    issues = section_issues(section, _planned(subtopics=["Moyenne", "Variance"]), get_profile("approfondi"))
 
     assert any("Comment" in i for i in issues.blocking)
     assert any("Variance" in i for i in issues.blocking)
