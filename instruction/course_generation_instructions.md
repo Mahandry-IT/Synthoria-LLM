@@ -56,6 +56,7 @@ Fill ONLY the fields of the chosen kind.
 - `classify` (reconstruction): `categories` and `cases` (short cases, each with its `category_index`); every category receives at least one case.
 - `order` (reconstruction): `order_items` WRITTEN IN THE CORRECT ORDER (the app shuffles them) and `order_criterion` (what the order follows).
 - `match` (reconstruction; at most once per section, only when pairs of cause / effect or term / meaning are natural): fill ONLY `match_pairs` (`{left, right}`, all `right` values distinct); `table` stays null.
+- A `table` support holds `table` (`headers` + `rows`), never `match_pairs`; observation steps use a filled `table`, `chart` or `diagram`, otherwise `order` / `classify`.
 - Each kind uses its own fields and no other: `table` / `fill_table` → `table`; `match` → `match_pairs`; `classify` → `categories` + `cases`; `order` → `order_items` + `order_criterion`; `chart` → `chart`; `diagram` → `diagram`.
 
 **No natural simulation** (law, grammar, a sequence of commands, definitions)? The section still keeps an action: use the reconstruction kinds (`classify`, `order`, `fill_table`, `match`) and a table or schema that fills up step by step, with a prediction before each addition. A section is never made of text alone: at least one step MUST ALWAYS use a reconstruction kind (`classify`, `order`, `fill_table` or `match`), whether or not `widget_brief` is set (a widget is never guaranteed: it can be refused or skipped).

@@ -430,3 +430,41 @@ def test_mapping_survives_garbage_without_raising():
         section["cycle"]["steps"][3]["support"]["order_items"] = []
 
     assert _map(mutate) == (None, None)  # plus aucune mini-étape exploitable
+
+
+def _table_step_with_pairs(pairs: list[dict[str, str]]) -> Callable[[dict[str, Any]], None]:
+    def mutate(section):
+        section["cycle"]["steps"][0]["support"] = {
+            "kind": "table", "caption": "Associations", "table": None, "match_pairs": pairs,
+        }
+    return mutate
+
+
+def test_table_support_filled_with_match_pairs_becomes_a_two_column_table():
+    pairs = [{"left": "TCP", "right": "Fiable"}, {"left": "UDP", "right": "Rapide"}, {"left": "ICMP", "right": "Diagnostic"}]
+
+    support = _cycle(_table_step_with_pairs(pairs))["steps"][0]["support"]
+
+    assert support["kind"] == "table" and support["caption"] == "Associations"
+    assert support["table"]["headers"] == ["Élément", "Correspondance"]
+    assert support["table"]["rows"] == [["TCP", "Fiable"], ["UDP", "Rapide"], ["ICMP", "Diagnostic"]]
+
+
+def test_rescued_table_support_keeps_section_complete_without_gap_or_repair():
+    from tests.test_cycle_review_fixes import _gaps, _mapped
+
+    mutate = _table_step_with_pairs([{"left": "TCP", "right": "Fiable"}, {"left": "UDP", "right": "Rapide"}])
+
+    assert _gaps(mutate) == []  # aucun trou bloquant : pas de réparation déclenchée
+    assert _mapped(mutate)["steps"][0]["support"]["kind"] == "table"
+    mapped = _map_sections_to_course_sections(
+        [Section.model_validate(cycle_section(mutate=mutate))], rng=random.Random(1)
+    )
+    assert mapped[0].cycle is not None and mapped[0].incomplete is False
+
+
+def test_table_support_without_table_nor_valid_pairs_stays_blocking():
+    from tests.test_cycle_review_fixes import _gaps
+
+    for pairs in ([], [{"left": "TCP", "right": "Fiable"}], [{"left": "TCP", "right": ""}, {"left": "", "right": "x"}]):
+        assert any("tableau vide ou absent" in g for g in _gaps(_table_step_with_pairs(pairs)))

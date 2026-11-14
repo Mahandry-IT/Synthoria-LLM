@@ -104,6 +104,10 @@ def _fill_table_gaps(support: StepSupport, table: TableData) -> list[str]:
     return []
 
 
+def _usable_pairs(support: StepSupport) -> int:
+    return sum(1 for p in support.match_pairs if not _blank(p.left) and not _blank(p.right))
+
+
 def _support_gaps(support: StepSupport) -> list[str]:
     kind = support.kind
     if kind is None:
@@ -118,6 +122,8 @@ def _support_gaps(support: StepSupport) -> list[str]:
     elif kind in (SupportKind.TABLE, SupportKind.FILL_TABLE):
         table = support.table
         if table is None or not table.headers or not any(any(not _blank(c) for c in row) for row in table.rows):
+            if kind is SupportKind.TABLE and _usable_pairs(support) >= 2:
+                return []  # rattrapé par le mapping : `match_pairs` devient un tableau à 2 colonnes
             return ["tableau vide ou absent (`table` obligatoire pour `table` et `fill_table`)"]
         if kind is SupportKind.FILL_TABLE:
             return _fill_table_gaps(support, table)
