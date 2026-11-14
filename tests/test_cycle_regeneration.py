@@ -133,7 +133,7 @@ async def test_invalid_cycle_json_raises_invalid_response():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("depth", ["express", "approfondi", None])
+@pytest.mark.parametrize("depth", ["express"])
 async def test_other_modes_and_old_courses_regenerate_in_the_old_format(depth):
     old = old_format_section("Notion")
     gemini = _gemini([old])
@@ -169,7 +169,7 @@ async def test_standard_course_adds_sections_with_a_cycle():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("depth", ["express", "approfondi", None])
+@pytest.mark.parametrize("depth", ["express"])
 async def test_other_modes_add_old_format_sections(depth):
     gemini = _gemini([old_format_section("Nouvelle")])
 

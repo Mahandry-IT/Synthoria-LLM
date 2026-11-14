@@ -9,6 +9,11 @@ from app.schemas.course_generation import SectionType
 from app.services.course_section_adder import add_course_sections
 
 
+@pytest.fixture(autouse=True)
+def _old_format(approfondi_old_format):
+    """Ces tests portent sur le prompt d'ajout (ancien format) ; le cycle est couvert par test_cycle_regeneration.py."""
+
+
 def _row(
     *,
     mode: str = "file_question",

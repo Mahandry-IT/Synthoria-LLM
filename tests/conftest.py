@@ -21,3 +21,15 @@ def _no_youtube_lookup(monkeypatch):
     # fausser les tests qui comptent les appels. `test_course_widgets.py` les réactive explicitement.
     monkeypatch.setenv("COURSE_WIDGETS_ENABLED", "false")
     monkeypatch.setenv("YOUTUBE_API_KEY", "")
+
+
+@pytest.fixture
+def approfondi_old_format(monkeypatch):
+    """Approfondi suit le cycle : ces tests éprouvent l'ancien format (Pourquoi / Quoi / Comment) sur ce mode."""
+    import dataclasses
+
+    from app.services import course_depth
+
+    monkeypatch.setitem(
+        course_depth.PROFILES, "approfondi", dataclasses.replace(course_depth.PROFILES["approfondi"], use_cycle=False)
+    )

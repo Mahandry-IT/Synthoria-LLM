@@ -149,7 +149,7 @@ async def test_nominal_standard_generation_adds_no_gemini_call():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("depth", ["express", "approfondi", None])
+@pytest.mark.parametrize("depth", ["express"])
 async def test_other_modes_keep_the_old_format_and_schema(depth):
     client = _fake_gemini([old_format_section("Sous-réseaux")])
 
@@ -305,7 +305,7 @@ def test_old_format_sections_keep_the_title_based_structural_check():
 
     assert _structural_gaps(old) == ["Quoi", "Comment"]
     # Mode non cycle : messages d'origine ; lot du format cycle : dit en termes de cycle, jamais « sous-section vide ».
-    assert section_issues(old, None, get_profile("approfondi")).blocking == ("sous-section « Quoi » vide, à écrire", "sous-section « Comment » vide, à écrire")
+    assert section_issues(old, None, get_profile("express")).blocking == ("sous-section « Quoi » vide, à écrire", "sous-section « Comment » vide, à écrire")
     in_cycle_mode = section_issues(old, None, STANDARD)
     assert len(in_cycle_mode.blocking) == 1 and "objet `cycle` absent" in in_cycle_mode.blocking[0]
     assert in_cycle_mode.blocking_count == 2 and not any("sous-section" in b for b in in_cycle_mode.blocking)

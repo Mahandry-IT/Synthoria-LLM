@@ -7,7 +7,7 @@ renvoie un widget (ou aucun si elle n'a ni mécanisme ni donnée à manipuler), 
 (`ApiWidget`) avant de l'insérer à la fin de la sous-section « Comment ». Un widget refusé peut être
 réécrit une fois, avec la raison du refus.
 
-Section au format « cycle » (mode standard) : pas de sous-sections. Le widget n'est demandé que si la section
+Section au format « cycle » (modes standard et approfondi) : pas de sous-sections. Le widget n'est demandé que si la section
 porte un `widget_brief` (une phrase : ce que l'apprenant manipule, et l'étape visée) ; c'est le MÊME appel,
 unique par section, budget et bornes inchangés. Il est rattaché à la mini-étape désignée
 (`cycle.steps[n].widget`). Le widget n'est JAMAIS garanti : plafonds par cours (`course_widgets_max`,

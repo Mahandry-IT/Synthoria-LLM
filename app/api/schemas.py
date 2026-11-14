@@ -464,7 +464,7 @@ class CourseSection(BaseModel):
         None,
         description=(
             "Format « cycle » (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve) des sections de "
-            "développement des cours en mode standard ; absent = ancien format (Pourquoi / Quoi / Comment), "
+            "développement des cours en mode standard ou approfondi ; absent = ancien format (Pourquoi / Quoi / Comment), "
             "toujours valide. Les options des QCM et des affirmations sont déjà mélangées par le serveur. Dans ce "
             "format, `quoi/pourquoi/comment` ne portent qu'un texte à plat (podcast, assistant, détection)."
         ),
