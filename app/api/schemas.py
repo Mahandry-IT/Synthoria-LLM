@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 from datetime import datetime
@@ -5,13 +6,15 @@ from typing import Annotated, Any, Generic, Literal, TypeVar, get_args
 from uuid import UUID
 
 from fastapi import Query
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from app.core.config import get_settings
 from app.db.models import DEFAULT_COURSE_FOLDER, DEFAULT_COURSE_SUBFOLDER
 from app.services.course_depth import LEGACY_DEPTH, CourseDepth
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 class PageParams:
@@ -457,6 +460,18 @@ class CourseSection(BaseModel):
             "dépréciés : conservés pour l'historique et le podcast pendant une version."
         ),
     )
+    cycle: "ApiSectionCycle | None" = Field(
+        None,
+        description=(
+            "Format « cycle » (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve) des sections de "
+            "développement des cours en mode standard ; absent = ancien format (Pourquoi / Quoi / Comment), "
+            "toujours valide. Les options des QCM et des affirmations sont déjà mélangées par le serveur. Dans ce "
+            "format, `quoi/pourquoi/comment` ne portent qu'un texte à plat (podcast, assistant, détection)."
+        ),
+    )
+    widget_brief: "ApiWidgetBrief | None" = Field(
+        None, description="Visuel simulable demandé à la section (usage serveur) ; absent hors format cycle."
+    )
     incomplete: bool = Field(
         False,
         description="Génération de cette section échouée (erreur temporaire) : seule une section incomplète peut être régénérée.",
@@ -464,6 +479,17 @@ class CourseSection(BaseModel):
     note: str = Field(
         "", description="Note libre de l'apprenant sur cette section (pense-bête, idées) ; jamais générée par le modèle."
     )
+
+    @field_validator("cycle", "widget_brief", mode="wrap")
+    @classmethod
+    def _tolerant_cycle(cls, value: Any, handler: Any) -> Any:
+        """Un `cycle` (ou son `widget_brief`) invalide ne fait jamais échouer le cours à la lecture : il est
+        ignoré, la section se lit alors comme une section sans cycle (jamais de 500)."""
+        try:
+            return handler(value)
+        except ValidationError:
+            logger.warning("course_cycle_dropped", extra={"reason": "validation"})
+            return None
 
 
 class CoursePitfall(BaseModel):
@@ -546,6 +572,246 @@ class QuizQuestion(BaseModel):
                         f"(options a {len(options)} éléments, index 0..{len(options)-1})"
                     )
         return v
+
+
+# --- Format « cycle » d'une section (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve) ---
+# Textes du modèle, donc non fiables : bornés ici et affichés sans HTML par le client. Le mapping
+# (`app.services.cycle_mapping`) tronque et écarte les éléments invalides AVANT cette validation ; elle reste la
+# dernière barrière. Les bonnes réponses font partie du contenu du cours (déjà lisible côté client) : rien de
+# secret ici, mais jamais de donnée personnelle.
+
+CYCLE_THREAD_MAX = 200
+CYCLE_QUESTION_MAX = 400
+CYCLE_OPTION_MAX = 160
+CYCLE_FEEDBACK_MAX = 300
+CYCLE_STEP_TEXT_MAX = 500
+CYCLE_ACTION_MAX = 200
+CYCLE_CAPTION_MAX = 120
+CYCLE_CELL_MAX = 120
+CYCLE_LABEL_MAX = 100
+CYCLE_CATEGORY_MAX = 60
+CYCLE_ITEM_MAX = 120
+CYCLE_OUTCOME_MAX = 300
+CYCLE_UNIT_MAX = 20
+CYCLE_TERM_MAX = 80
+CYCLE_PLAIN_MAX = 300
+CYCLE_FORMULA_MAX = 200
+CYCLE_CLAIM_MAX = 160
+CYCLE_EXPLANATION_MAX = 400
+CYCLE_CARD_STATEMENT_MAX = 700
+CYCLE_CARD_LINE_MAX = 300
+WIDGET_BRIEF_MAX = 300
+CYCLE_STEPS_MAX = 8
+CYCLE_TABLE_ROWS_MAX = 8
+CYCLE_TABLE_COLS_MAX = 6
+CYCLE_OPTIONS_MAX = 6
+CYCLE_ITEMS_MAX = 8
+CYCLE_VOCABULARY_MAX = 10
+CYCLE_TRAP_ENTRIES_MAX = 4
+CYCLE_TRIAL_QUESTIONS_MAX = 3
+CYCLE_TRIAL_OPTIONS_MAX = 5
+CYCLE_CARD_STEPS_MAX = 6
+
+
+def _text(limit: int) -> Any:
+    """Texte non vide d'au plus `limit` caractères."""
+    return Annotated[str, Field(min_length=1, max_length=limit)]
+
+
+def _opt_text(limit: int) -> Any:
+    return Annotated[str, Field(max_length=limit)]
+
+
+class ApiCellRef(BaseModel):
+    row: int = Field(..., ge=0, le=CYCLE_TABLE_ROWS_MAX)
+    col: int = Field(..., ge=0, le=CYCLE_TABLE_COLS_MAX)
+
+
+class ApiClassifyCase(BaseModel):
+    label: _text(CYCLE_LABEL_MAX)
+    category_index: int = Field(..., ge=0, le=CYCLE_OPTIONS_MAX)
+
+
+class ApiMatchPair(BaseModel):
+    left: _text(CYCLE_LABEL_MAX)
+    right: _text(CYCLE_LABEL_MAX)
+
+
+class ApiCycleChallenge(BaseModel):
+    """Défi posé avant toute explication : cases à cocher, sans annoncer le nombre de bonnes réponses.
+    L'ordre des options est déjà mélangé par le serveur ; `correct_indices` suit cet ordre."""
+
+    question: _text(CYCLE_QUESTION_MAX)
+    options: list[_text(CYCLE_OPTION_MAX)] = Field(..., min_length=2, max_length=CYCLE_OPTIONS_MAX)
+    correct_indices: list[int] = Field(..., min_length=1)
+    feedback: _opt_text(CYCLE_FEEDBACK_MAX) = ""
+
+    @model_validator(mode="after")
+    def _check_correct_indices(self) -> "ApiCycleChallenge":
+        """Comme une prédiction `choice` : index dans les options, sans doublon, jamais toutes les options."""
+        indices = self.correct_indices
+        if any(not 0 <= i < len(self.options) for i in indices):
+            raise ValueError("défi : correct_indices hors des options")
+        if len(set(indices)) != len(indices):
+            raise ValueError("défi : correct_indices en doublon")
+        if len(indices) >= len(self.options):
+            raise ValueError("défi : correct_indices ne doit jamais désigner toutes les options")
+        return self
+
+
+class ApiStepSupport(BaseModel):
+    """Support léger d'une mini-étape ; seuls les champs du groupe de `kind` sont renseignés."""
+
+    kind: Literal["chart", "diagram", "table", "fill_table", "classify", "order", "match"]
+    caption: _opt_text(CYCLE_CAPTION_MAX) = ""
+    chart: ApiChart | None = None
+    diagram: ApiDiagram | None = None
+    table: CourseTable | None = None
+    blanks: list[ApiCellRef] = Field(default_factory=list, max_length=4)
+    distractors: list[_text(CYCLE_CELL_MAX)] = Field(default_factory=list, max_length=3)
+    categories: list[_text(CYCLE_CATEGORY_MAX)] = Field(default_factory=list, max_length=4)
+    cases: list[ApiClassifyCase] = Field(default_factory=list, max_length=CYCLE_ITEMS_MAX)
+    order_items: list[_text(CYCLE_ITEM_MAX)] = Field(default_factory=list, max_length=CYCLE_ITEMS_MAX)
+    order_criterion: _opt_text(CYCLE_ITEM_MAX) = ""
+    match_pairs: list[ApiMatchPair] = Field(default_factory=list, max_length=CYCLE_ITEMS_MAX)
+
+
+class ApiStepPrediction(BaseModel):
+    """Prédiction posée avant la manipulation (jamais notée). `choice` : options déjà mélangées par le
+    serveur, `correct_index` suit cet ordre. `value` : `tolerance` absolue, bornée à 10 % de la valeur."""
+
+    kind: Literal["choice", "value"]
+    question: _text(CYCLE_QUESTION_MAX)
+    options: list[_text(CYCLE_OPTION_MAX)] = Field(default_factory=list, max_length=4)
+    correct_index: int | None = Field(default=None, ge=0, le=3)
+    expected_value: float | None = None
+    tolerance: float | None = Field(default=None, ge=0)
+    unit: _opt_text(CYCLE_UNIT_MAX) | None = None
+    outcome: _text(CYCLE_OUTCOME_MAX)
+
+    @model_validator(mode="after")
+    def _check_kind(self) -> "ApiStepPrediction":
+        if self.kind == "choice":
+            if len(self.options) < 2 or self.correct_index is None or self.correct_index >= len(self.options):
+                raise ValueError("prédiction choice : 2 à 4 options et un correct_index valide")
+        elif self.expected_value is None or not math.isfinite(self.expected_value):
+            raise ValueError("prédiction value : expected_value fini obligatoire")
+        return self
+
+
+class ApiCycleStep(BaseModel):
+    """Mini-étape de « Sous le capot ». `widget` : visuel simulable de la section, attaché à l'étape que
+    `widget_brief` désigne (au plus une étape par section) ; absent si la génération n'en a pas produit."""
+
+    text: _text(CYCLE_STEP_TEXT_MAX)
+    action: _opt_text(CYCLE_ACTION_MAX) = ""
+    support: ApiStepSupport
+    prediction: ApiStepPrediction | None = None
+    widget: ApiWidget | None = None
+
+    @field_validator("widget", mode="wrap")
+    @classmethod
+    def _tolerant_widget(cls, value: Any, handler: Any) -> Any:
+        """Un widget invalide (HTML refusé à la relecture, par exemple) est ignoré : il ne doit pas faire
+        tomber tout le cycle, le repli de reconstruction de l'étape suffit."""
+        try:
+            return handler(value)
+        except ValidationError:
+            logger.warning("course_cycle_widget_dropped", extra={"reason": "validation"})
+            return None
+
+
+class ApiVocabTerm(BaseModel):
+    term: _text(CYCLE_TERM_MAX)
+    plain: _text(CYCLE_PLAIN_MAX)
+    formula_latex: _opt_text(CYCLE_FORMULA_MAX) | None = None
+
+
+class ApiTrapEntry(BaseModel):
+    """Piège classique. `cards` : `claim` + `explanation`. `spot` : `statements` (une seule fausse, `wrong_index`,
+    ordre déjà mélangé par le serveur). `spot_rewrite` : en plus `rewrite_options` / `correct_rewrite_index`."""
+
+    claim: _opt_text(CYCLE_CLAIM_MAX) = ""
+    statements: list[_text(CYCLE_CLAIM_MAX)] = Field(default_factory=list, max_length=5)
+    wrong_index: int | None = Field(default=None, ge=0, le=4)
+    explanation: _text(CYCLE_EXPLANATION_MAX)
+    rewrite_options: list[_text(CYCLE_CLAIM_MAX)] = Field(default_factory=list, max_length=4)
+    correct_rewrite_index: int | None = Field(default=None, ge=0, le=3)
+
+
+class ApiCycleTraps(BaseModel):
+    mode: Literal["cards", "spot", "spot_rewrite"]
+    entries: list[ApiTrapEntry] = Field(default_factory=list, max_length=CYCLE_TRAP_ENTRIES_MAX)
+
+
+class ApiExerciseCard(BaseModel):
+    """Carte-exercice : énoncé, indice sur demande, correction pas à pas après la tentative. Pas de valeur attendue."""
+
+    statement: _text(CYCLE_CARD_STATEMENT_MAX)
+    hint: _opt_text(CYCLE_CARD_LINE_MAX) = ""
+    steps: list[_text(CYCLE_CARD_LINE_MAX)] = Field(..., min_length=1, max_length=CYCLE_CARD_STEPS_MAX)
+    result: _opt_text(CYCLE_CARD_LINE_MAX) = ""
+
+
+class ApiTrialQuestion(QuizQuestion):
+    """Question de l'épreuve : une `QuizQuestion` (choix ou valeur numérique, jamais d'association) dont le texte
+    du modèle est borné, comme tout le reste du cycle. Se sérialise comme une `QuizQuestion`."""
+
+    kind: Literal["choice", "numeric"] = "choice"
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> "ApiTrialQuestion":
+        texts = {
+            "question": (self.question, CYCLE_QUESTION_MAX),
+            "explanation": (self.explanation, CYCLE_EXPLANATION_MAX),
+            **{f"options[{i}]": (o, CYCLE_OPTION_MAX) for i, o in enumerate(self.options)},
+            **{f"explanation_per_choice[{i}]": (e, CYCLE_EXPLANATION_MAX) for i, e in enumerate(self.explanation_per_choice)},
+            "unit": (self.unit or "", CYCLE_UNIT_MAX),
+        }
+        too_long = [name for name, (text, limit) in texts.items() if len(text) > limit]
+        if too_long:
+            raise ValueError(f"épreuve : texte trop long ({', '.join(too_long)})")
+        if not self.question.strip():
+            raise ValueError("épreuve : question vide")
+        if len(self.options) > CYCLE_TRIAL_OPTIONS_MAX or len(self.explanation_per_choice) > CYCLE_TRIAL_OPTIONS_MAX:
+            raise ValueError(f"épreuve : plus de {CYCLE_TRIAL_OPTIONS_MAX} options")
+        return self
+
+
+class ApiCycleTrial(BaseModel):
+    kind: Literal["qcm", "exercise_card"]
+    questions: list[ApiTrialQuestion] = Field(default_factory=list, max_length=CYCLE_TRIAL_QUESTIONS_MAX)
+    card: ApiExerciseCard | None = None
+
+
+class ApiWidgetBrief(BaseModel):
+    """Intention du visuel simulable de la section (consommée côté serveur par la génération des widgets)."""
+
+    step_number: int = Field(..., ge=1, le=CYCLE_STEPS_MAX)
+    brief: _text(WIDGET_BRIEF_MAX)
+
+
+class ApiSectionCycle(BaseModel):
+    """Les cinq temps d'une section de développement, dans l'ordre : `challenge` (Défi), `steps` (Sous le capot),
+    `vocabulary` (Le mot juste), `traps` (Les pièges classiques), `trial` (Épreuve). Les titres sont constants
+    côté client. Absent des anciens cours, de l'introduction et du résumé."""
+
+    thread: _opt_text(CYCLE_THREAD_MAX) = ""
+    challenge: ApiCycleChallenge
+    steps: list[ApiCycleStep] = Field(..., min_length=1, max_length=CYCLE_STEPS_MAX)
+    vocabulary: list[ApiVocabTerm] = Field(default_factory=list, max_length=CYCLE_VOCABULARY_MAX)
+    traps: ApiCycleTraps | None = None
+    trial: ApiCycleTrial | None = None
+    minutes_min: int | None = Field(
+        None, ge=1, le=30,
+        description="Durée estimée minimale en minutes, calculée côté serveur ; absente des anciennes sections.",
+    )
+    minutes_max: int | None = Field(
+        None, ge=1, le=30, description="Durée estimée maximale en minutes (>= `minutes_min`), calculée côté serveur."
+    )
+
+
+CourseSection.model_rebuild()
 
 
 class CourseMeta(BaseModel):

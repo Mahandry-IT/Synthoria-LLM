@@ -35,30 +35,63 @@ def resolve_variant_no(stored: int, available: set[int]) -> int:
     return max((n for n in available | {0} if n <= max(stored, 0)), default=0)
 
 
+def _card(
+    section: dict[str, Any], index: int, question: str, options: list[str], correct: list[int], explanation: str
+) -> dict[str, Any] | None:
+    """Carte à choix d'une section (None sans bonne réponse valide). `card_id` = « <id de section>-<n°> »."""
+    valid = [i for i in correct if isinstance(i, int) and 0 <= i < len(options)]
+    if not valid:
+        return None
+    return {
+        "card_id": f"{section.get('id')}-{index}",
+        "front": question,
+        "back": card_back(options, valid, explanation),
+        "section_ref": section.get("id"),
+        "choices": options,
+        "correct_indices": valid,
+        "explanation": explanation,
+    }
+
+
+def _cycle_questions(cycle: dict[str, Any]) -> list[tuple[str, list[str], list[int], str]]:
+    """Questions à choix d'un `cycle` : le défi, puis les questions de l'épreuve QCM (jamais les numériques ni
+    les associations : une carte attend un recto et des choix). `(question, options, bonnes réponses, explication)`."""
+    challenge = cycle.get("challenge") or {}
+    found = [(
+        challenge.get("question", ""), challenge.get("options") or [], challenge.get("correct_indices") or [],
+        challenge.get("feedback") or "",
+    )]
+    trial = cycle.get("trial") or {}
+    if trial.get("kind") == "qcm":
+        found.extend(
+            (q.get("question", ""), q.get("options") or [], q.get("correct_option_indices") or [], q.get("explanation") or "")
+            for q in trial.get("questions") or []
+            if q.get("kind", "choice") == "choice"
+        )
+    return found
+
+
 def flashcards_from_course(course: dict[str, Any]) -> list[dict[str, Any]]:
     """Cartes dérivées des questions « Vérifie » de chaque section d'un cours (dict de session).
 
     `card_id` = « <id de section>-<n° de question> » : stable tant que le cours ne change pas.
     Recto = la question ; verso = la (ou les) bonne(s) réponse(s) suivie(s) de l'explication.
     `choices`, `correct_indices` et `explanation` servent au mode QCM de la révision (variante 0).
+
+    Une section au format « cycle » n'a pas de `check_questions` : ses cartes viennent de son défi (n° 0, case à
+    cocher : plusieurs bonnes réponses possibles) puis des questions à choix de son épreuve QCM. Pour les
+    sections sans cycle, rien ne change.
     """
     cards: list[dict[str, Any]] = []
     for section in course.get("sections") or []:
-        for index, q in enumerate(section.get("check_questions") or []):
-            options = q.get("options") or []
-            correct = [i for i in q.get("correct_option_indices", []) if 0 <= i < len(options)]
-            if not correct:
-                continue
-            explanation = q.get("explanation") or ""
-            cards.append(
-                {
-                    "card_id": f"{section.get('id')}-{index}",
-                    "front": q.get("question", ""),
-                    "back": card_back(options, correct, explanation),
-                    "section_ref": section.get("id"),
-                    "choices": options,
-                    "correct_indices": correct,
-                    "explanation": explanation,
-                }
-            )
+        checks = section.get("check_questions") or []
+        questions = [
+            (q.get("question", ""), q.get("options") or [], q.get("correct_option_indices", []), q.get("explanation") or "")
+            for q in checks
+        ]
+        if isinstance(section.get("cycle"), dict):
+            questions += _cycle_questions(section["cycle"])
+        for index, (question, options, correct, explanation) in enumerate(questions):
+            if card := _card(section, index, question, options, correct, explanation):
+                cards.append(card)
     return cards

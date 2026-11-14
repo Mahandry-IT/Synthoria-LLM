@@ -83,7 +83,7 @@ from app.repositories import (
 )
 from app.schemas.course_generation import CoursePlanSchema, SectionType
 from app.services.challenge_evaluator import evaluate_challenge
-from app.services.course_depth import depth_of_plan
+from app.services.course_depth import depth_of_plan, depth_of_session
 from app.services.course_generator import (
     _map_quiz_question,
     _map_sections_to_course_sections,
@@ -1216,7 +1216,8 @@ async def _regenerate_and_save_section(
     session_factory: async_sessionmaker = request.app.state.db_session_factory
     section_id = str(section.get("id"))
     regenerated = await regenerate_section(row, section["title"], gemini_client, request.app.state.vector_store, settings)
-    mapped = _map_sections_to_course_sections([regenerated])
+    depth = depth_of_session(getattr(row, "gemini_response", None))
+    mapped = _map_sections_to_course_sections([regenerated], depth=depth)
     if not mapped:
         raise GeminiInvalidResponseError("Section régénérée vide")
     mapped = await resolve_visuals_in_sections(
@@ -1434,7 +1435,9 @@ async def add_course_content(
             row, body.instructions or "", gemini_client, vector_store, settings
         )
     start_index = len(row.gemini_response.get("sections") or [])
-    mapped = _map_sections_to_course_sections(new_sections, start_index=start_index)
+    mapped = _map_sections_to_course_sections(
+        new_sections, start_index=start_index, depth=depth_of_session(row.gemini_response)
+    )
     if not mapped:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Aucune section générée")
     mapped = await resolve_visuals_in_sections(

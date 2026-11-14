@@ -11,14 +11,43 @@ l'apprenant doit savoir si sa demande n'a pas abouti plutôt que de se voir renv
 
 from pydantic import ValidationError
 
+from app.api.schemas import ApiPlannedSection
 from app.core.config import Settings
 from app.core.exceptions import GeminiInvalidResponseError
 from app.db.models import CourseSession
-from app.schemas.course_generation import Section, SectionType, SectionsBatchSchema
-from app.services.course_depth import depth_of_session, get_profile, render_rules
+from app.schemas.course_generation import Section, SectionType
+from app.services.course_depth import CYCLE_CONTENT_DEMAND, DepthProfile, depth_of_session, get_profile
 from app.services.course_generator import _get_teacher_instructions, session_context_block
+from app.services.course_plan_generator import (
+    _finalize_incomplete,
+    _repair_incomplete_sections,
+    batch_rules,
+    batch_schema,
+)
 from app.services.gemini_client import GeminiClient
 from app.services.vector_store import NumpyVectorStore
+
+
+async def _validated_cycle_sections(
+    sections: list[Section],
+    row: CourseSession,
+    context_block: str,
+    gemini_client: GeminiClient,
+    profile: DepthProfile,
+    max_repairs: int,
+) -> list[Section]:
+    """Sections du format cycle : même validation de structure que la génération par lots, réparation bornée
+    (`max_repairs` appels), puis repli « incomplète » (régénérable) pour toute section encore invalide, jamais une
+    section au cycle vide ou absent livrée telle quelle."""
+    batch = [
+        ApiPlannedSection(type="development", title=s.title, order=i) for i, s in enumerate(sections, start=1)
+    ]
+    outline = "\n".join(f"- {s.title}" for s in sections)
+    repaired = await _repair_incomplete_sections(
+        sections, batch, question=row.question, mode=row.mode, context_block=context_block, outline=outline,
+        gemini_client=gemini_client, profile=profile, max_attempts=max_repairs,
+    )
+    return _finalize_incomplete(repaired, batch, profile)
 
 
 def _topic_clause(row: CourseSession, instructions: str) -> tuple[str, bool]:
@@ -61,7 +90,17 @@ async def add_course_sections(
     existing_titles = [s.get("title", "") for s in (row.gemini_response.get("sections") or [])]
     topic_clause, consumes_next_steps = _topic_clause(row, instructions)
     # Les nouvelles sections suivent le mode du cours (`meta.depth`, absent = approfondi).
-    rules = render_rules(get_profile(depth_of_session(row.gemini_response)))
+    profile = get_profile(depth_of_session(row.gemini_response))
+    schema = batch_schema(profile)
+    # Mode standard : sections au format cycle (objet `cycle`) ; sinon Pourquoi / Quoi / Comment.
+    content = (
+        f"chacune avec un titre thématique précis (jamais générique) et {CYCLE_CONTENT_DEMAND}"
+        if profile.use_cycle
+        else "chacune avec un titre thématique précis (jamais générique), ses sous-sections Pourquoi/Quoi/Comment "
+        "(toutes obligatoires, avec un exemple travaillé complet dans Comment), un défi (`challenge`), un exemple "
+        "à trous (`faded_example`), les `check_questions`, un `recall_prompt`, les `key_takeaways` et les "
+        "`pitfalls_to_avoid`"
+    )
 
     prompt = (
         f"Question d'origine du cours : {row.question}\n\n"
@@ -69,23 +108,23 @@ async def add_course_sections(
         "--- Sections déjà présentes dans ce cours (ne PAS les répéter) ---\n"
         + ("\n".join(f"- {t}" for t in existing_titles) or "(aucune)")
         + f"\n\n{topic_clause}\n\n"
-        f"{rules}\n\n"
-        "Génère une ou plusieurs sections DEVELOPMENT complètes, chacune avec un titre thématique "
-        "précis (jamais générique), ses sous-sections Pourquoi/Quoi/Comment (toutes obligatoires, "
-        "avec un exemple travaillé complet dans Comment), un défi (`challenge`), un exemple à trous "
-        "(`faded_example`), les `check_questions`, un `recall_prompt`, les `key_takeaways` et les "
-        "`pitfalls_to_avoid`. Retourne le JSON selon le schéma fourni."
+        f"{batch_rules(profile)}\n\n"
+        f"Génère une ou plusieurs sections DEVELOPMENT complètes, {content}. Retourne le JSON selon le schéma fourni."
     )
     structured = await gemini_client.format_structured(
-        raw_answer=prompt, system_instruction=_get_teacher_instructions(), response_schema=SectionsBatchSchema,
+        raw_answer=prompt, system_instruction=_get_teacher_instructions(), response_schema=schema,
     )
     try:
-        parsed = SectionsBatchSchema.model_validate(structured)
+        parsed = schema.model_validate(structured)
     except ValidationError as exc:
         raise GeminiInvalidResponseError(f"Nouvelles sections invalides: {exc}") from exc
     if not parsed.sections:
         raise GeminiInvalidResponseError("Aucune nouvelle section n'a été générée")
 
     sections = [s.model_copy(update={"type": SectionType.DEVELOPMENT}) for s in parsed.sections]
+    if profile.use_cycle:
+        sections = await _validated_cycle_sections(
+            sections, row, context_block, gemini_client, profile, max(0, settings.section_regenerate_max_repairs)
+        )
     next_steps = [] if consumes_next_steps else list(row.gemini_response.get("next_steps") or [])
     return sections, next_steps

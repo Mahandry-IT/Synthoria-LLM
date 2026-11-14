@@ -1,5 +1,6 @@
 import logging
 import math
+import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,16 +28,21 @@ from app.core.exceptions import (
 from app.schemas.course_generation import (
     COURSE_GENERATION_GEMINI_SCHEMA,
     BlockType,
+    ContentBlock,
     CoverageCompletionSchema,
     CourseGenerationSchema,
     DirectAnswer,
     QuizDifficulty,
     Section,
+    SectionType,
+    Subsection,
     quiz_question_issue,
 )
 from app.services.course_widgets import attach_widgets
 from app.services.course_depth import LEGACY_DEPTH, PROFILES, get_profile, render_course_rules
 from app.services.course_videos import _search_videos, attach_verified_videos  # noqa: F401 — rétrocompat (imports historiques)
+from app.services.cycle_mapping import cycle_legacy_text, map_section_cycle, with_cycle_minutes
+from app.services.cycle_mapping import truncate_text as _truncate
 from app.services.gemini_client import GeminiClient
 from app.services.leitner import flashcards_from_course
 from app.services.media.visual_resolver import resolve_visuals
@@ -94,8 +100,12 @@ def _get_plan_instructions() -> str:
 
 def with_depth(response: CourseGenerationResponse, depth: str) -> CourseGenerationResponse:
     """Inscrit le mode du cours dans `meta.depth` (persisté avec la session, relu par la
-    régénération et l'ajout de sections) — jamais confié au modèle."""
-    return response.model_copy(update={"meta": response.meta.model_copy(update={"depth": depth})})
+    régénération et l'ajout de sections) — jamais confié au modèle. Les sections au format cycle reçoivent
+    en même temps leur durée estimée, qui dépend du mode."""
+    update: dict[str, Any] = {"meta": response.meta.model_copy(update={"depth": depth})}
+    if any(s.cycle is not None for s in response.sections or []):
+        update["sections"] = [with_cycle_minutes(s, depth) for s in response.sections or []]
+    return response.model_copy(update=update)
 
 
 def _build_context_block(chunks: list[dict[str, Any]]) -> str:
@@ -370,6 +380,11 @@ def is_incomplete_section_dict(section: dict[str, Any]) -> bool:
     blocks = [b for sub in section.get("subsections") or [] for b in sub.get("blocks") or []]
     if any(b.get("text") == INCOMPLETE_SECTION_NOTICE for b in blocks):
         return True
+    # Format « cycle » : pas de sous-sections Pourquoi / Quoi / Comment, la section est complète si son cycle
+    # porte un défi et au moins une mini-étape. Un cycle vide est un trou, comme une sous-section vide.
+    cycle = section.get("cycle")
+    if isinstance(cycle, dict):
+        return not (cycle.get("challenge") and cycle.get("steps"))
     # Sous-section Pourquoi/Quoi/Comment sans aucun bloc exploitable (ex. `table` sans tableau) : un trou
     # visible pour l'apprenant, que seule une régénération comble.
     for sub in section.get("subsections") or []:
@@ -386,17 +401,6 @@ _PITFALL_MAX_CHARS = 300
 # Bornes alignées sur le plus grand maximum des modes (`course_depth.PROFILES`).
 _MAX_TAKEAWAYS = max(p.takeaways_max for p in PROFILES.values())
 _MAX_PITFALLS = max(p.pitfalls_max for p in PROFILES.values())
-
-
-def _truncate(text: str, limit: int) -> str:
-    """Tronque à la limite de mot avec « … » ; un texte dans la limite est rendu tel quel."""
-    if len(text) <= limit:
-        return text
-    cut = text[: limit - 1]
-    if text[limit - 1].isspace():  # coupe déjà tombée sur une fin de mot
-        return cut.rstrip() + "…"
-    head, sep, _ = cut.rpartition(" ")
-    return (head if sep and head else cut).rstrip() + "…"
 
 
 def _clean_takeaways(items: list[str]) -> list[str]:
@@ -417,9 +421,27 @@ def _clean_pitfalls(items: list[Any]) -> list[dict[str, str]]:
     return cleaned[:_MAX_PITFALLS]
 
 
+def _cycle_fallback(section: Section) -> Section:
+    """Section de repli (marquée incomplète, voir `is_incomplete_section`) d'une section au format cycle dont le
+    cycle est inexploitable : son titre en « Quoi », l'avis d'incomplétude en « Comment »."""
+    def text(value: str) -> list[ContentBlock]:
+        return [ContentBlock(type=BlockType.TEXT, text=value)]
+
+    return Section(
+        type=SectionType.DEVELOPMENT,
+        title=section.title,
+        subsections=[
+            Subsection(title="Quoi", blocks=text(section.title)),
+            Subsection(title="Comment", blocks=text(INCOMPLETE_SECTION_NOTICE)),
+        ],
+    )
+
+
 def _map_sections_to_course_sections(
     sections: list[Section],
     start_index: int = 0,
+    rng: random.Random | None = None,
+    depth: str | None = None,
 ) -> list["CourseSection"]:
     """Convertit des sections block-based (Gemini schema) en CourseSection (API).
 
@@ -430,6 +452,9 @@ def _map_sections_to_course_sections(
         sections: sections block-based depuis CourseGenerationSchema.
         start_index: index de départ pour les IDs (défaut 0, utile pour
             la complétion qui ajoute après les sections existantes).
+        rng: générateur du mélange des options du format « cycle » (fixé par les tests).
+        depth: mode du cours ; s'il est connu (régénération, ajout de sections), les sections au format
+            « cycle » reçoivent leur durée estimée. À la génération complète, `with_depth` s'en charge.
 
     Retour: liste de CourseSection au format API.
     """
@@ -490,8 +515,22 @@ def _map_sections_to_course_sections(
 
         tables = _tables_of(_all_blocks(section))
 
+        # Format « cycle » : seules les sections de développement en ont un (RG-1). Options et affirmations y sont
+        # mélangées, les éléments invalides écartés ; le texte à plat nourrit les champs historiques.
+        cycle = widget_brief = None
+        if section.cycle is not None and section.type.value == "development":
+            cycle, widget_brief = map_section_cycle(section, map_question=_map_quiz_question, rng=rng)
+            if cycle is not None:
+                pourquoi_text, quoi_text, comment_text = cycle_legacy_text(cycle)
+            else:
+                # Cycle inexploitable après nettoyage (la validation de structure l'attrape en amont ; ceci est le
+                # dernier filet) : jamais une section qui disparaît, un repli « incomplète » que l'apprenant régénère.
+                logger.warning("course_cycle_section_incomplete", extra={"section": section.title})
+                section = _cycle_fallback(section)
+                quoi_text, pourquoi_text, comment_text, tables = section.title, "", INCOMPLETE_SECTION_NOTICE, []
+
         subsections = _map_subsections(section)
-        if quoi_text or pourquoi_text or comment_text or tables or subsections or section.challenge:
+        if quoi_text or pourquoi_text or comment_text or tables or subsections or section.challenge or cycle:
             api_sections.append(CourseSection(
                 id=str(start_index + i),
                 title=section.title,
@@ -513,8 +552,12 @@ def _map_sections_to_course_sections(
                 pitfalls_to_avoid=_clean_pitfalls(section.pitfalls_to_avoid),
                 recall_prompt=section.recall_prompt.model_dump(mode="json") if section.recall_prompt else None,
                 incomplete=is_incomplete_section(section),
+                cycle=cycle,
+                widget_brief=widget_brief,
             ))
 
+    if depth is not None:
+        api_sections = [with_cycle_minutes(section, depth) for section in api_sections]
     return api_sections
 
 

@@ -15,6 +15,7 @@ from app.schemas.course_generation import (
     CourseGenerationSchema,
     MoreSectionsSchema,
     PlannedSection,
+    CycleSectionsBatchSchema,
     SectionsBatchSchema,
 )
 from app.services.course_plan_generator import (
@@ -27,6 +28,9 @@ from app.services.course_plan_generator import (
 )
 
 CHUNK = {"content": "extrait", "metadata": {"filename": "doc.pdf", "page": 2}, "distance": 0.1}
+
+# Les lots d'un mode au format cycle (standard) passent par `CycleSectionsBatchSchema`.
+BATCH_SCHEMAS = (SectionsBatchSchema, CycleSectionsBatchSchema)
 
 
 def _planned(order: int, type_: str, title: str, subtopics: list[str] | None = None) -> dict:
@@ -235,7 +239,7 @@ def _fake_gemini(fail_batches: set[int] | None = None, fail_wrap_up: bool = Fals
     state = {"batch": 0}
 
     async def format_structured(raw_answer, system_instruction, *, response_schema=None):
-        if response_schema is SectionsBatchSchema:
+        if response_schema in BATCH_SCHEMAS:
             state["batch"] += 1
             if state["batch"] in fail_batches:
                 raise GeminiUnavailableError("indisponible")
@@ -252,7 +256,7 @@ def _fake_gemini(fail_batches: set[int] | None = None, fail_wrap_up: bool = Fals
 
 
 def _batch_calls(client: AsyncMock) -> list:
-    return [c for c in client.format_structured.call_args_list if c.kwargs["response_schema"] is SectionsBatchSchema]
+    return [c for c in client.format_structured.call_args_list if c.kwargs["response_schema"] in BATCH_SCHEMAS]
 
 
 @pytest.mark.asyncio
@@ -357,7 +361,7 @@ def _gemini_with_wrap_ups(*wrap_ups) -> AsyncMock:
     pending = list(wrap_ups)
 
     async def format_structured(raw_answer, system_instruction, *, response_schema=None):
-        if response_schema is SectionsBatchSchema:
+        if response_schema in BATCH_SCHEMAS:
             count = int(re.search(r"Génère exactement (\d+)", raw_answer).group(1))
             return {"sections": [_dev_section(f"brut-{i}") for i in range(count)]}
         outcome = pending.pop(0)
@@ -435,7 +439,7 @@ async def test_from_plan_regenerates_section_with_uncovered_subtopics(settings):
     batch_prompts: list[str] = []
 
     async def format_structured(raw_answer, system_instruction, *, response_schema=None):
-        if response_schema is not SectionsBatchSchema:
+        if response_schema not in BATCH_SCHEMAS:
             return await base.format_structured(
                 raw_answer=raw_answer, system_instruction=system_instruction, response_schema=response_schema
             )
@@ -472,7 +476,7 @@ async def test_from_plan_marks_section_incomplete_when_repair_fails_and_gap_rema
     calls = {"batch": 0}
 
     async def format_structured(raw_answer, system_instruction, *, response_schema=None):
-        if response_schema is not SectionsBatchSchema:
+        if response_schema not in BATCH_SCHEMAS:
             return await base.format_structured(
                 raw_answer=raw_answer, system_instruction=system_instruction, response_schema=response_schema
             )

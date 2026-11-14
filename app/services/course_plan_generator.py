@@ -37,6 +37,7 @@ from app.schemas.course_generation import (
     COURSE_GENERATION_GEMINI_SCHEMA,
     CourseGenerationSchema,
     CoursePlanSchema,
+    CycleSectionsBatchSchema,
     MoreSectionsSchema,
     NextStepsSchema,
     PlannedSection,
@@ -53,6 +54,7 @@ from app.services.course_depth import (
     DepthProfile,
     depth_of_plan,
     get_profile,
+    render_cycle_rules,
     render_plan_rules,
     render_quiz_rules,
     render_rules,
@@ -67,6 +69,7 @@ from app.services.course_generator import (
     _get_plan_instructions,
     _get_teacher_instructions,
     _is_quiz_difficulty_error,
+    _map_quiz_question,
     valid_quiz_questions,
     _rebalance_quiz_difficulty,
     _retrieve_chunks,
@@ -75,6 +78,12 @@ from app.services.course_generator import (
     with_depth,
 )
 from app.services.course_videos import attach_verified_videos
+from app.services.cycle_mapping import cycle_gaps
+from app.services.cycle_validation import (
+    cycle_has_content,
+    cycle_text,
+    prediction_reveal_issues,
+)
 from app.services.gemini_client import GeminiClient
 from app.services.media.visual_resolver import resolve_visuals
 from app.services.vector_store import NumpyVectorStore
@@ -234,11 +243,16 @@ async def generate_course_plan(
 # ─── Étape 2 : cours complet à partir du plan ────────────────
 
 
-def _format_section(section: ApiPlannedSection, *, detailed: bool) -> str:
+def _format_section(section: ApiPlannedSection, *, detailed: bool, cycle: bool = False) -> str:
     line = f"{section.order}. [{section.type}] {section.title}"
     if not detailed:
         return line
-    if section.mastery == "known":
+    if section.mastery == "known" and cycle:
+        line += (
+            "\n   ⚑ Déjà maîtrisée par l'apprenant (pré-test réussi) : version CONDENSÉE — les cinq temps du cycle "
+            "restent présents, mais avec le nombre minimal de mini-étapes et des textes très courts."
+        )
+    elif section.mastery == "known":
         line += (
             "\n   ⚑ Déjà maîtrisée par l'apprenant (pré-test réussi) : version CONDENSÉE — un rappel court, "
             "sans défi ni exemple à trous ; garde tout de même un bloc visuel et une consigne de reformulation."
@@ -250,8 +264,8 @@ def _format_section(section: ApiPlannedSection, *, detailed: bool) -> str:
     return line
 
 
-def _format_sections(sections: list[ApiPlannedSection], *, detailed: bool) -> str:
-    return "\n".join(_format_section(s, detailed=detailed) for s in sections)
+def _format_sections(sections: list[ApiPlannedSection], *, detailed: bool, cycle: bool = False) -> str:
+    return "\n".join(_format_section(s, detailed=detailed, cycle=cycle) for s in sections)
 
 
 def _chunked(items: list[ApiPlannedSection], size: int) -> list[list[ApiPlannedSection]]:
@@ -260,8 +274,10 @@ def _chunked(items: list[ApiPlannedSection], size: int) -> list[list[ApiPlannedS
 
 
 def _has_content(section: Section) -> bool:
-    return any(b.has_payload() for b in section.blocks) or any(
-        b.has_payload() for sub in section.subsections for b in sub.blocks
+    return (
+        any(b.has_payload() for b in section.blocks)
+        or any(b.has_payload() for sub in section.subsections for b in sub.blocks)
+        or cycle_has_content(section)
     )
 
 
@@ -339,23 +355,24 @@ async def _generate_batch(
     profile: DepthProfile | None = None,
 ) -> list[Section]:
     profile = profile or get_profile(LEGACY_DEPTH)
+    schema = batch_schema(profile)
     prompt = (
         f'mode="{mode}"\n'
         f"Question de l'utilisateur : {question}\n\n"
         f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
         f"--- Plan complet validé (pour éviter les doublons et garder la cohérence ; ne développe PAS les sections hors lot) ---\n{outline}\n\n"
-        f"--- Sections à générer dans CE lot, et seulement celles-ci ---\n{_format_sections(batch, detailed=True)}\n\n"
-        f"{render_rules(profile)}\n\n"
-        f"Génère exactement {len(batch)} section(s) DEVELOPMENT, dans cet ordre et avec ces titres, "
-        "en JSON selon le schéma fourni. Chaque sous-thème listé doit être EXPLIQUÉ (pas seulement cité) ; "
-        "renseigne `covered_subtopics` avec les sous-thèmes réellement développés, recopiés à l'identique."
+        f"--- Sections à générer dans CE lot, et seulement celles-ci ---\n{_format_sections(batch, detailed=True, cycle=profile.use_cycle)}\n\n"
+        f"{batch_rules(profile)}\n\n"
+        f"Génère exactement {len(batch)} section(s) DEVELOPMENT{batch_format_clause(profile)}, dans cet ordre et "
+        "avec ces titres, en JSON selon le schéma fourni. Chaque sous-thème listé doit être EXPLIQUÉ (pas seulement "
+        "cité) ; renseigne `covered_subtopics` avec les sous-thèmes réellement développés, recopiés à l'identique."
     )
     structured = await gemini_client.format_structured(
         raw_answer=prompt,
         system_instruction=_get_teacher_instructions(),
-        response_schema=SectionsBatchSchema,
+        response_schema=schema,
     )
-    aligned = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, batch)
+    aligned = _align_batch_sections(schema.model_validate(structured).sections, batch)
     repaired = await _repair_incomplete_sections(
         aligned, batch, question=question, mode=mode, context_block=context_block,
         outline=outline, gemini_client=gemini_client, profile=profile,
@@ -363,13 +380,37 @@ async def _generate_batch(
     return _finalize_incomplete(repaired, batch, profile)
 
 
+def batch_schema(profile: DepthProfile) -> type[SectionsBatchSchema]:
+    """Schéma Gemini des lots du mode : format « cycle » si le mode l'utilise (`DepthProfile.use_cycle`),
+    sinon ancien format Pourquoi / Quoi / Comment. Les deux se valident avec la même classe `Section`."""
+    return CycleSectionsBatchSchema if profile.use_cycle else SectionsBatchSchema
+
+
+def batch_rules(profile: DepthProfile) -> str:
+    return render_cycle_rules(profile) if profile.use_cycle else render_rules(profile)
+
+
+def batch_format_clause(profile: DepthProfile) -> str:
+    return " au format cycle (objet `cycle`)" if profile.use_cycle else ""
+
+
 _DEVELOPMENT_SUBSECTIONS = ("Pourquoi", "Quoi", "Comment")
+_MISSING_CYCLE_GAP = "objet `cycle` absent : les cinq temps (Défi, Sous le capot, Le mot juste, pièges, Épreuve) sont attendus"
 
 
-def _structural_gaps(section: Section) -> list[str]:
-    """Sous-sections Pourquoi/Quoi/Comment sans aucun bloc — jamais détecté avant : `_has_content`
+def _structural_gaps(section: Section, profile: DepthProfile | None = None) -> list[str]:
+    """Trous de structure d'une section, qui la rendent « incomplète » s'ils persistent après réparation.
+
+    Ancien format : sous-sections Pourquoi/Quoi/Comment sans aucun bloc — jamais détecté avant : `_has_content`
     n'exige qu'un bloc *quelque part* dans la section, pas dans chacune des trois sous-sections
-    exigées par les instructions."""
+    exigées par les instructions.
+
+    Format « cycle » (`section.cycle`) : à la place des titres, les cinq temps (défi, mini-étapes dans la plage du
+    mode, vocabulaire, pièges, épreuve), la validité de leurs supports et de leurs index, puis ce que le mapping
+    vers l'API écarte (`cycle_mapping.cycle_gaps`) : une section ne doit jamais perdre son cycle à la livraison.
+    Une section sans `cycle` garde le contrôle par titres, même dans un lot du format cycle."""
+    if section.cycle is not None:
+        return cycle_gaps(section, profile, _map_quiz_question)
     with_blocks = {sub.title for sub in section.subsections if any(b.has_payload() for b in sub.blocks)}
     return [name for name in _DEVELOPMENT_SUBSECTIONS if name not in with_blocks]
 
@@ -379,11 +420,15 @@ def _box_gaps(section: Section) -> list[str]:
 
     Non bloquant : voir `SectionIssues.boxes`. Ne s'applique qu'aux sections que l'on vient de générer (`section_issues`) : les cours déjà
     enregistrés n'ont pas ces champs et ne passent jamais par ce contrôle (`is_incomplete_section_dict`
-    ne les teste pas)."""
+    ne les teste pas). Au format « cycle », « Ce qu'il faut éviter » est remplacé par les pièges classiques :
+    seuls `key_takeaways` et `recall_prompt` sont attendus."""
     gaps = []
     if not any(t.strip() for t in section.key_takeaways):
         gaps.append("`key_takeaways`")
-    if not any(p.mistake.strip() and p.how_to_avoid.strip() for p in section.pitfalls_to_avoid):
+    if section.cycle is not None:
+        if section.recall_prompt is None or not section.recall_prompt.prompt.strip():
+            gaps.append("`recall_prompt`")
+    elif not any(p.mistake.strip() and p.how_to_avoid.strip() for p in section.pitfalls_to_avoid):
         gaps.append("`pitfalls_to_avoid`")
     return gaps
 
@@ -413,6 +458,7 @@ def _section_text(section: Section) -> str:
             if b.chart:
                 parts.append(b.chart.caption)
                 parts.extend(b.chart.labels)
+    parts.append(cycle_text(section))
     return " ".join(parts)
 
 
@@ -467,6 +513,11 @@ class SectionIssues:
       d'un appel Gemini (absents de `__bool__`) ; listés dans `all` pour qu'une réparation déclenchée
       par un autre problème les réclame aussi. Une section sinon valide, sans encadrés, est gardée.
 
+    - `form` (forme du format « cycle » : RG-3 alternance, RG-4 longueurs, prédiction déjà répondue...) : comme
+      `boxes`, jamais bloquant et jamais à lui seul cause d'un appel Gemini (absent de `__bool__`) ; listé dans
+      `all` pour qu'une réparation déclenchée par un problème bloquant le réclame aussi, et compté dans `score`.
+      Une section du cycle n'a donc jamais de problème `soft` : sa forme ne coûte aucun appel de plus (RG-14).
+
     Arbitrage : si la couverture des sous-thèmes et le budget entrent en conflit, la couverture
     gagne (poids `_BLOCKING_WEIGHT` dans `score`, et seuls les problèmes bloquants rendent une
     section incomplète).
@@ -475,19 +526,20 @@ class SectionIssues:
     blocking: tuple[str, ...] = ()
     soft: tuple[str, ...] = ()
     boxes: tuple[str, ...] = ()
-    blocking_count: int = 0  # une unité par sous-section vide et par sous-thème manquant
+    blocking_count: int = 0  # une unité par sous-section vide / trou du cycle et par sous-thème manquant
+    form: tuple[str, ...] = ()
 
     @property
     def all(self) -> list[str]:
-        return [*self.blocking, *self.soft, *self.boxes]
+        return [*self.blocking, *self.soft, *self.boxes, *self.form]
 
     @property
     def score(self) -> int:
         """Score pondéré (plus bas = meilleur) qui départage une section et son remplaçant."""
-        return _BLOCKING_WEIGHT * self.blocking_count + len(self.soft) + len(self.boxes)
+        return _BLOCKING_WEIGHT * self.blocking_count + len(self.soft) + len(self.boxes) + len(self.form)
 
     def __bool__(self) -> bool:
-        # Les encadrés manquants ne déclenchent jamais de réparation à eux seuls.
+        # Les encadrés manquants et la forme du cycle ne déclenchent jamais de réparation à eux seuls.
         return bool(self.blocking or self.soft)
 
 
@@ -502,10 +554,21 @@ def section_issues(
     """
     if is_incomplete_section(section):
         return SectionIssues()
-    gaps = _structural_gaps(section)
+    gaps = _structural_gaps(section, profile)
     box_gaps = _box_gaps(section)
     missing_topics = _missing_subtopics(section, planned) if planned is not None else []
-    blocking = [f"sous-section « {name} » vide, à écrire" for name in gaps]
+    if section.cycle is not None:
+        blocking = [f"cycle : {gap}" for gap in gaps]
+        soft: tuple[str, ...] = ()
+        form = (*visual_issues(section, profile), *prediction_reveal_issues(section))
+    else:
+        soft, form = tuple(visual_issues(section, profile)), ()
+        if gaps and profile is not None and profile.use_cycle:
+            # Lot du format cycle : « sous-section vide » serait hors sujet dans le prompt de réparation, qui
+            # demande un `cycle`. Le trou de l'ancien format (sous-sections vides) est dit en termes de cycle.
+            blocking = [_MISSING_CYCLE_GAP]
+        else:
+            blocking = [f"sous-section « {name} » vide, à écrire" for name in gaps]
     if missing_topics:
         blocking.append("sous-thèmes non traités : " + " ; ".join(missing_topics))
     boxes = (
@@ -513,9 +576,10 @@ def section_issues(
     )
     return SectionIssues(
         blocking=tuple(blocking),
-        soft=tuple(visual_issues(section, profile)),
+        soft=soft,
         boxes=boxes,
         blocking_count=len(gaps) + len(missing_topics),
+        form=form,
     )
 
 
@@ -535,6 +599,23 @@ def is_better_replacement(new: Section, current: SectionIssues, new_issues: Sect
 _MAX_REPAIR_ATTEMPTS = 2
 
 
+def repair_demand(profile: DepthProfile) -> str:
+    """Fin du prompt de réparation : ce que la section régénérée doit remplir."""
+    if profile.use_cycle:
+        return (
+            "remplis TOUS les temps du cycle, chacun complet et exploitable (Défi, Sous le capot dans la plage de "
+            "mini-étapes, Le mot juste, Les pièges classiques, Épreuve), des index de bonnes réponses valides, "
+            "au moins une mini-étape de reconstruction (classer, ordonner, compléter un tableau, relier), "
+            "couvre en détail tous les sous-thèmes listés, renseigne `covered_subtopics`, ainsi que `widget_brief`, "
+            "`recall_prompt` et `key_takeaways` s'ils manquent."
+        )
+    return (
+        "remplis TOUTES les sous-sections Pourquoi/Quoi/Comment (jamais vide), "
+        "couvre en détail tous les sous-thèmes listés, renseigne `covered_subtopics`, ainsi que `key_takeaways` "
+        "et `pitfalls_to_avoid` s'ils manquent."
+    )
+
+
 async def _repair_incomplete_sections(
     sections: list[Section],
     batch: list[ApiPlannedSection],
@@ -545,9 +626,11 @@ async def _repair_incomplete_sections(
     outline: str,
     gemini_client: GeminiClient,
     profile: DepthProfile | None = None,
+    max_attempts: int = _MAX_REPAIR_ATTEMPTS,
 ) -> list[Section]:
     """Répare les sections du lot ayant des problèmes (`section_issues`, bloquants ou soft), dans
-    la limite de `_MAX_REPAIR_ATTEMPTS` appels Gemini (jamais une boucle illimitée — quota borné).
+    la limite de `max_attempts` appels Gemini (`_MAX_REPAIR_ATTEMPTS` par défaut : jamais une boucle illimitée,
+    quota borné).
 
     Le prompt de réparation liste les problèmes réels (messages chiffrés) et les règles du mode.
     S'arrête dès que le lot est conforme. Un remplaçant n'est retenu que s'il a un score pondéré
@@ -556,8 +639,12 @@ async def _repair_incomplete_sections(
     après la dernière tentative est décidé par `_finalize_incomplete`.
     """
     current = list(sections)
-    rules = render_rules(profile or get_profile(LEGACY_DEPTH))
-    for attempt in range(_MAX_REPAIR_ATTEMPTS):
+    # `profile` reste tel que reçu pour les contrôles (None : règles de forme historiques seulement) ;
+    # les consignes de réparation, elles, suivent toujours un mode (défaut : approfondi).
+    rules_profile = profile or get_profile(LEGACY_DEPTH)
+    rules = batch_rules(rules_profile)
+    schema = batch_schema(rules_profile)
+    for attempt in range(max_attempts):
         flagged = {
             i: issues
             for i, (s, planned) in enumerate(zip(current, batch))
@@ -577,22 +664,20 @@ async def _repair_incomplete_sections(
             f"Question de l'utilisateur : {question}\n\n"
             f"Contexte source (figé lors de la planification) :\n{context_block}\n\n"
             f"--- Plan complet validé (ne développe PAS les sections hors lot) ---\n{outline}\n\n"
-            f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True)}\n\n"
+            f"--- Sections à RÉGÉNÉRER intégralement ---\n{_format_sections(targets, detailed=True, cycle=rules_profile.use_cycle)}\n\n"
             "Une première version de ces sections avait les problèmes suivants, à corriger :\n"
             f"{requirements}\n\n"
             f"{rules}\n\n"
-            f"Génère exactement {len(targets)} section(s) DEVELOPMENT, mêmes titres et même ordre, en corrigeant "
-            "chacun de ces problèmes : remplis TOUTES les sous-sections Pourquoi/Quoi/Comment (jamais vide), "
-            "couvre en détail tous les sous-thèmes listés, renseigne `covered_subtopics`, ainsi que `key_takeaways` "
-            "et `pitfalls_to_avoid` s'ils manquent."
+            f"Génère exactement {len(targets)} section(s) DEVELOPMENT{batch_format_clause(rules_profile)}, mêmes titres "
+            f"et même ordre, en corrigeant chacun de ces problèmes : {repair_demand(rules_profile)}"
         )
         try:
             structured = await gemini_client.format_structured(
                 raw_answer=prompt,
                 system_instruction=_get_teacher_instructions(),
-                response_schema=SectionsBatchSchema,
+                response_schema=schema,
             )
-            replacements = _align_batch_sections(SectionsBatchSchema.model_validate(structured).sections, targets)
+            replacements = _align_batch_sections(schema.model_validate(structured).sections, targets)
         except (GeminiServiceError, ValidationError) as exc:
             logger.warning("course_section_repair_failed", extra={"attempt": attempt + 1, "error": str(exc)})
             break
@@ -623,10 +708,13 @@ def _finalize_incomplete(
         if issues.blocking:
             finalized.append(_incomplete_section(planned))
             continue
-        if issues.soft:
+        if issues.soft or issues.form:
             logger.warning(
                 "course_section_budget_exceeded",
-                extra={"section": planned.title, "depth": profile.name if profile else None, "issues": list(issues.soft)},
+                extra={
+                    "section": planned.title, "depth": profile.name if profile else None,
+                    "issues": [*issues.soft, *issues.form],
+                },
             )
         finalized.append(section)
     return finalized
@@ -829,6 +917,9 @@ async def generate_course_from_validated_plan(
                 )
             )
         except (GeminiServiceError, ValidationError) as exc:
+            # Gemini en échec, ou JSON hors schéma (section sans `type` ni `title`, mauvais type de champ). Un champ de
+            # cycle omis ou un `kind` inconnu n'arrive jamais ici : le schéma les tolère et la validation les signale
+            # (réparation ciblée), sans perdre le lot.
             last_error = exc
             failed_batches += 1
             logger.warning(

@@ -129,12 +129,58 @@ def _legacy_section_body(section: dict) -> list[str]:
     return parts
 
 
+def _cycle_lines(cycle: dict) -> list[str]:
+    """Contenu lisible d'une section au format « cycle » : défi, mini-étapes (texte, prédiction, titre du
+    widget), vocabulaire, pièges classiques et épreuve. Les options mélangées ne sont pas répétées : le texte et
+    les corrections suffisent à répondre à l'apprenant."""
+    lines: list[str] = []
+    if _s(cycle.get("thread")):
+        lines.append(f"Fil rouge : {_s(cycle['thread'])}")
+    challenge = _dict(cycle.get("challenge"))
+    if _s(challenge.get("question")):
+        lines.append(f"Défi : {_s(challenge['question'])}")
+        lines.extend(
+            f"  - {_s(o)}{' (bonne réponse)' if i in _items(challenge.get('correct_indices')) else ''}"
+            for i, o in enumerate(_items(challenge.get("options")))
+        )
+        if _s(challenge.get("feedback")):
+            lines.append(f"  Correction : {_s(challenge['feedback'])}")
+    for number, step in enumerate(_items(cycle.get("steps")), start=1):
+        step = _dict(step)
+        lines.append(f"Étape {number} : {_s(step.get('text'))}")
+        support = _dict(step.get("support"))
+        if _s(support.get("caption")):
+            lines.append(f"  Support : {_s(support['caption'])}")
+        prediction = _dict(step.get("prediction"))
+        if _s(prediction.get("outcome")):
+            lines.append(f"  Prédiction : {_s(prediction.get('question'))} → {_s(prediction['outcome'])}")
+        if step.get("widget"):
+            lines.append("  " + block_text({"widget": step["widget"]}))
+    vocabulary = [f"{_s(_dict(v).get('term'))} : {_s(_dict(v).get('plain'))}" for v in _items(cycle.get("vocabulary"))]
+    if vocabulary:
+        lines.append("Le mot juste :\n" + "\n".join(f"- {v}" for v in vocabulary))
+    traps = _items(_dict(cycle.get("traps")).get("entries"))
+    for entry in traps:
+        entry = _dict(entry)
+        claim = _s(entry.get("claim"))
+        lines.append(f"Piège classique : {claim + ' — ' if claim else ''}{_s(entry.get('explanation'))}")
+    trial = _dict(cycle.get("trial"))
+    lines.extend(_question_text(_dict(q)) for q in _items(trial.get("questions")))
+    card = _dict(trial.get("card"))
+    if _s(card.get("statement")):
+        lines.append(f"Exercice : {_s(card['statement'])}")
+        lines.extend(f"  {i}. {_s(st)}" for i, st in enumerate(_items(card.get("steps")), start=1))
+    return lines
+
+
 def _section_text(index: int, section: dict) -> str:
     lines = [f"## Section {index} — {_s(section.get('title'))}"]
     if _s(section.get("challenge")):
         lines.append(f"Défi : {_s(section.get('challenge'))}")
     subsections = _items(section.get("subsections"))
-    if subsections:
+    if isinstance(section.get("cycle"), dict):
+        lines.extend(_cycle_lines(section["cycle"]))
+    elif subsections:
         for sub in subsections:
             sub = _dict(sub)
             if _s(sub.get("title")):
