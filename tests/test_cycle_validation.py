@@ -87,12 +87,12 @@ def test_steps_range_follows_the_course_mode_and_is_wide_without_profile():
         del _steps(section)[3:]
 
     assert _gaps(three_steps) == []  # 3 est accepté en standard (3 à 5)
-    assert _has(_gaps(three_steps, get_profile("approfondi")), "pour 5 à 7")  # profil non activé, mais défini
+    assert _has(_gaps(three_steps, get_profile("approfondi")), "pour 5 à 6")
     assert _gaps(three_steps, None) == []  # sans profil : plage de tous les modes
 
 
-def test_every_mode_has_a_cycle_profile_but_only_standard_uses_it():
-    assert {name: p.use_cycle for name, p in PROFILES.items()} == {"express": False, "standard": True, "approfondi": False}
+def test_every_mode_has_a_cycle_profile_but_express_does_not_use_it():
+    assert {name: p.use_cycle for name, p in PROFILES.items()} == {"express": False, "standard": True, "approfondi": True}
     assert all(p.cycle is not None for p in PROFILES.values())
 
 
@@ -400,4 +400,4 @@ def test_render_cycle_rules_states_the_standard_numbers_from_the_profile():
 
 def test_render_cycle_rules_adapts_to_each_mode():
     assert "3 mini-étapes" in render_cycle_rules(get_profile("express")) and "`cards`" in render_cycle_rules(get_profile("express"))
-    assert "5 à 7 (vise 5)" in render_cycle_rules(get_profile("approfondi")) and "`spot_rewrite`" in render_cycle_rules(get_profile("approfondi"))
+    assert "5 à 6 (vise 5)" in render_cycle_rules(get_profile("approfondi")) and "`spot_rewrite`" in render_cycle_rules(get_profile("approfondi"))

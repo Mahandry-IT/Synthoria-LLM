@@ -92,7 +92,7 @@ async def add_course_sections(
     # Les nouvelles sections suivent le mode du cours (`meta.depth`, absent = approfondi).
     profile = get_profile(depth_of_session(row.gemini_response))
     schema = batch_schema(profile)
-    # Mode standard : sections au format cycle (objet `cycle`) ; sinon Pourquoi / Quoi / Comment.
+    # Modes standard et approfondi : sections au format cycle (objet `cycle`) ; sinon Pourquoi / Quoi / Comment.
     content = (
         f"chacune avec un titre thématique précis (jamais générique) et {CYCLE_CONTENT_DEMAND}"
         if profile.use_cycle

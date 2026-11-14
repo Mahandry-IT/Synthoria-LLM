@@ -137,3 +137,23 @@ def old_format_section(title: str = "Ancien") -> dict[str, Any]:
             {"title": "Comment", "blocks": [{"type": "text", "text": "mécanisme"}]},
         ],
     }
+
+
+def approfondi_cycle_section(title: str = "Sous-réseaux", steps: int = 5) -> dict[str, Any]:
+    """Section du cycle conforme au mode approfondi : 5 à 6 mini-étapes, 2 prédictions, pièges `spot_rewrite`."""
+    section = cycle_section(title)
+    cycle = section["cycle"]
+    base = cycle["steps"]
+    # Pas deux supports consécutifs du même type : classify, chart, fill_table, order, classify, chart.
+    cycle["steps"] = (base + [copy.deepcopy(base[0]), copy.deepcopy(base[1])])[:steps]
+    for extra in cycle["steps"][4:]:
+        extra["prediction"] = None
+    cycle["steps"][3]["prediction"] = {
+        "kind": "choice", "question": "Quel est le début du réseau C ?", "options": ["96", "128", "160"],
+        "correct_index": 1, "outcome": "Le réseau C commence à 128.",
+    }
+    cycle["traps"]["mode"] = "spot_rewrite"
+    for entry in cycle["traps"]["entries"]:
+        entry["rewrite_options"] = ["Mauvaise", "Bonne", "Autre"]
+        entry["correct_rewrite_index"] = 1
+    return section

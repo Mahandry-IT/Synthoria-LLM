@@ -548,7 +548,7 @@
               "mode": "raw",
               "raw": "{\n  \"question\": \"Qu'est-ce que la régression linéaire ?\",\n  \"depth\": \"standard\"\n}"
             },
-            "description": "Mode 3 : pas de filename → question_only. Gemini utilise la recherche web. Codes: 200, 429, 500/502/503. depth (facultatif) : express | standard | approfondi — défaut DEFAULT_COURSE_DEPTH (approfondi) ; 422 si inconnu. Profils (sections, ratio ≥ 50 % de blocs non textuels, budget de mots/blocs, quiz) : app/services/course_depth.py. Le mode est renvoyé dans meta.depth. Génération directe : même avec depth=standard, les sections gardent l'ancien format Pourquoi/Quoi/Comment (pas de `cycle`) ; le cycle ne s'applique que via POST /courses/plan puis POST /courses/generate/from-plan, la régénération et l'ajout de section."
+            "description": "Mode 3 : pas de filename → question_only. Gemini utilise la recherche web. Codes: 200, 429, 500/502/503. depth (facultatif) : express | standard | approfondi — défaut DEFAULT_COURSE_DEPTH (approfondi) ; 422 si inconnu. Profils (sections, ratio ≥ 50 % de blocs non textuels, budget de mots/blocs, quiz) : app/services/course_depth.py. Le mode est renvoyé dans meta.depth. Génération directe : même avec depth=standard ou approfondi, les sections gardent l'ancien format Pourquoi/Quoi/Comment (pas de `cycle`) ; le cycle ne s'applique que via POST /courses/plan puis POST /courses/generate/from-plan, la régénération et l'ajout de section."
           },
           "response": []
         },
@@ -633,7 +633,7 @@
               "mode": "raw",
               "raw": "{\n  \"plan_id\": \"{{planId}}\",\n  \"sections\": [\n    {\n      \"type\": \"introduction\",\n      \"title\": \"Introduction aux transformateurs\",\n      \"objective\": \"Situer le transformateur et ses prérequis.\",\n      \"subtopics\": [\n        \"Rôle\",\n        \"Prérequis\"\n      ],\n      \"order\": 1\n    },\n    {\n      \"type\": \"development\",\n      \"title\": \"Principe de fonctionnement\",\n      \"objective\": \"Comprendre l'induction mutuelle entre primaire et secondaire.\",\n      \"subtopics\": [\n        \"Flux magnétique\",\n        \"Rapport de transformation\"\n      ],\n      \"order\": 2\n    },\n    {\n      \"type\": \"summary\",\n      \"title\": \"Résumé\",\n      \"objective\": \"Retenir l'essentiel.\",\n      \"subtopics\": [],\n      \"order\": 3\n    }\n  ]\n}"
             },
-            "description": "Étape 2 : génère le cours complet à partir du plan validé ou édité (sections renvoyées en entier, revalidées côté serveur). Question, mode et contexte viennent du plan persisté. Réponse identique à POST /courses/generate. Codes: 200 ok, 404 plan inconnu, 410 plan expiré, 422 plan invalide (1 à 80 sections, au moins une 'development', title non vide, order ≥ 1), 429 quota Gemini, 502 tous les lots en échec, 503 Gemini indisponible. Cours en mode standard : chaque section de développement porte un objet `cycle` (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve ; durée estimée `minutes_min`/`minutes_max` calculée côté serveur, visuel simulable éventuel dans `cycle.steps[n].widget`) au lieu des sous-sections Pourquoi/Quoi/Comment ; `cycle` est absent (null) pour l'introduction, le résumé et les cours des autres modes ou antérieurs, qui gardent l'ancien format. Le cycle ne s'applique que par cette route (après POST /courses/plan), par la régénération d'une section ou du cours et par l'ajout de section ; POST /courses/generate (génération directe) reste à l'ancien format même avec depth=standard. Une section dont le cycle serait inexploitable est livrée `incomplete` (régénérable), jamais absente."
+            "description": "Étape 2 : génère le cours complet à partir du plan validé ou édité (sections renvoyées en entier, revalidées côté serveur). Question, mode et contexte viennent du plan persisté. Réponse identique à POST /courses/generate. Codes: 200 ok, 404 plan inconnu, 410 plan expiré, 422 plan invalide (1 à 80 sections, au moins une 'development', title non vide, order ≥ 1), 429 quota Gemini, 502 tous les lots en échec, 503 Gemini indisponible. Cours en mode standard ou approfondi : chaque section de développement porte un objet `cycle` (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve ; durée estimée `minutes_min`/`minutes_max` calculée côté serveur, visuel simulable éventuel dans `cycle.steps[n].widget`) au lieu des sous-sections Pourquoi/Quoi/Comment ; `cycle` est absent (null) pour l'introduction, le résumé et les cours en mode express ou antérieurs au cycle, qui gardent l'ancien format. Le cycle ne s'applique que par cette route (après POST /courses/plan), par la régénération d'une section ou du cours et par l'ajout de section ; POST /courses/generate (génération directe) reste à l'ancien format même avec depth=standard ou approfondi. Une section dont le cycle serait inexploitable est livrée `incomplete` (régénérable), jamais absente."
           },
           "response": []
         },
@@ -684,7 +684,7 @@
                 "{{sessionId}}"
               ]
             },
-            "description": "Détail d'une session avec la réponse Gemini complète. Codes: 200, 404, 422. Les sections d'un cours standard portent `cycle` ; les anciennes sections, non (ancien format, lu comme avant)."
+            "description": "Détail d'une session avec la réponse Gemini complète. Codes: 200, 404, 422. Les sections d'un cours standard ou approfondi portent `cycle` ; les anciennes sections, non (ancien format, lu comme avant)."
           },
           "response": []
         }
@@ -1004,7 +1004,7 @@
                 "regenerate"
               ]
             },
-            "description": "Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération précédente), sans relancer tout le cours. Réponse : CourseSection mis à jour. 404 session/section inconnue, 409 la section n'est pas incomplète, 429 (6/min), 502/503 échec Gemini. La section régénérée suit le mode du cours (meta.depth, absent = approfondi) et passe la même validation (sous-sections, ratio, budget) avec réparation bornée. Cours standard : la section régénérée est au format cycle (objet `cycle`, durée `minutes_min`/`minutes_max`), la réparation redemandant les éléments manquants du cycle."
+            "description": "Régénère le contenu d'une section marquée `incomplete` (échec temporaire à la génération précédente), sans relancer tout le cours. Réponse : CourseSection mis à jour. 404 session/section inconnue, 409 la section n'est pas incomplète, 429 (6/min), 502/503 échec Gemini. La section régénérée suit le mode du cours (meta.depth, absent = approfondi) et passe la même validation (sous-sections, ratio, budget) avec réparation bornée. Cours standard ou approfondi : la section régénérée est au format cycle (objet `cycle`, durée `minutes_min`/`minutes_max`), la réparation redemandant les éléments manquants du cycle."
           },
           "response": []
         },

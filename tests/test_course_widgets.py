@@ -331,7 +331,7 @@ def _client(calls: list) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-async def test_course_from_plan_gets_one_widget_call_per_section():
+async def test_course_from_plan_gets_one_widget_call_per_section(approfondi_old_format):
     calls: list = []
 
     result = await generate_course_from_validated_plan(
@@ -343,7 +343,7 @@ async def test_course_from_plan_gets_one_widget_call_per_section():
 
 
 @pytest.mark.asyncio
-async def test_course_from_plan_makes_no_extra_call_when_disabled():
+async def test_course_from_plan_makes_no_extra_call_when_disabled(approfondi_old_format):
     calls: list = []
 
     result = await generate_course_from_validated_plan(

@@ -82,6 +82,7 @@ def _fake_gemini() -> AsyncMock:
     return client
 
 
+
 def _plan_row(**extra) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(), question="Q", mode="file_question", filenames=[],
@@ -184,7 +185,7 @@ async def test_from_plan_applies_mode_rules_and_writes_meta_depth():
 
 
 @pytest.mark.asyncio
-async def test_from_plan_without_depth_is_approfondi():
+async def test_from_plan_without_depth_is_approfondi(approfondi_old_format):
     client = _fake_gemini()
     settings = Settings(gemini_api_key="k", course_plan_batch_size=4)
 
@@ -232,10 +233,10 @@ async def test_regenerate_section_reads_meta_depth_and_returns_conform_section_w
 
 
 @pytest.mark.asyncio
-async def test_regenerate_section_repairs_non_conform_section_and_keeps_the_best():
+async def test_regenerate_section_repairs_non_conform_section_and_keeps_the_best(approfondi_old_format):
     gemini = _regen_gemini(_text_only_section("x"), _conform_section("y"))
 
-    # Mode approfondi : le mode standard régénère au format cycle (voir test_cycle_regeneration.py).
+    # Ancien format forcé sur approfondi (fixture) : le cycle est couvert par test_cycle_regeneration.py.
     result = await regenerate_section(_session_row("approfondi"), "Notion", gemini, _store(), Settings(gemini_api_key="k"))
 
     assert gemini.format_structured.await_count == 2
@@ -246,7 +247,7 @@ async def test_regenerate_section_repairs_non_conform_section_and_keeps_the_best
 
 
 @pytest.mark.asyncio
-async def test_regenerate_section_repair_is_bounded_and_keeps_original_when_never_better():
+async def test_regenerate_section_repair_is_bounded_and_keeps_original_when_never_better(approfondi_old_format):
     still_bad = _text_only_section("x")
     gemini = _regen_gemini(still_bad, still_bad, still_bad, still_bad)
 

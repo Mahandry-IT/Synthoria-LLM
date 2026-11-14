@@ -24,8 +24,7 @@ class CycleProfile:
     """Règles du « cycle » (Défi, Sous le capot, Le mot juste, Les pièges classiques, Épreuve) d'un mode.
 
     Un profil existe pour chaque mode, mais il n'est utilisé que si `DepthProfile.use_cycle` est vrai :
-    seul le mode standard a été validé par l'essai Gemini (express et approfondi : profils posés d'après
-    le cahier des charges, jamais essayés)."""
+    standard et approfondi (express : profil posé d'après le cahier des charges, jamais activé)."""
 
     steps_min: int  # mini-étapes de « Sous le capot » acceptées par la validation
     steps_max: int
@@ -101,8 +100,9 @@ PROFILES: dict[str, DepthProfile] = {
         max_prose_words=500, max_blocks=12, check_questions_min=2, check_questions_max=3,
         quiz_min=10, quiz_max=12, quiz_open_ended=True,
         takeaways_min=3, takeaways_max=4, pitfalls_min=2, pitfalls_max=2,
+        use_cycle=True,
         cycle=CycleProfile(
-            steps_min=5, steps_max=7, steps_target=5, steps_ref=5, predictions_min=2, predictions_max=2,
+            steps_min=5, steps_max=6, steps_target=5, steps_ref=5, predictions_min=2, predictions_max=2,
             traps_mode="spot_rewrite", traps_min=2, traps_max=3, vocab_min=3, vocab_max=8,
             minutes_min=8, minutes_max=10, takeaways=3,
         ),
